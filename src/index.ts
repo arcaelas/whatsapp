@@ -8,26 +8,37 @@ import Message from './model/message';
 import Store, { Engine } from './static/Store';
 import useCache from './static/useCache';
 
-interface IWhatsApp<T extends 'qr' | 'code'> {
+/**
+ * @description Estructura de configuración para iniciar sesión con WhatsApp.
+ */
+interface IWhatsAppBase {
     phone: string;
     store?: Engine;
-    loginType: T;
-    qr: T extends 'qr' ? Noop<[QR: string]> : never;
-    code: T extends 'code' ? Noop<[code: string]> : never;
 }
 
+/**
+ * @description Configuración condicional según tipo de login.
+ */
+// prettier-ignore
+type IWhatsApp<T extends 'qr' | 'code'> = IWhatsAppBase & {
+    loginType: T } & (
+        T extends 'qr'
+        ? { qr: Noop<[qr: string]> }
+        : { code: Noop<[code: string]> }
+    );
+
 interface EventMap {
-    error: [error: Error]
-    open: []
-    close: []
-    qr: [qr: string]
-    code: [code: string]
-    'chat:created': [chat: Chat]
-    'chat:updated': [chat: Chat]
-    'chat:deleted': [id: string]
-    'message:created': [message: Message]
-    'message:updated': [message: Message]
-    'message:deleted': [id: string]
+    error: [error: Error];
+    open: [];
+    close: [];
+    qr: [qr: string];
+    code: [code: string];
+    'chat:created': [chat: Chat];
+    'chat:updated': [chat: Chat];
+    'chat:deleted': [id: string];
+    'message:created': [message: Message];
+    'message:updated': [message: Message];
+    'message:deleted': [id: string];
 }
 
 /**
@@ -64,7 +75,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                 console.error(error);
             }
         });
-        this.store = new Store(this.options.store ?? new Map() as any);
+        this.store = new Store(this.options.store ?? (new Map() as any));
         this.connect();
     }
 
@@ -80,7 +91,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
 
     async documents(): Promise<Record<string, any>> {
         return await this.tick(async (_, store) => {
-            const documents: Record<string, any> = {}
+            const documents: Record<string, any> = {};
             for await (const document of store.document.values()) {
                 documents[document.key] = document.value;
             }
@@ -139,7 +150,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                 if (connection === 'open') promise.resolve(this.socket);
                 else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
                     promise.resolve(await this.connect());
-                    return
+                    return;
                 }
             }
             // prettier-ignore
@@ -191,7 +202,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                     })
             );
             // TODO: Handle messages.delete
-        })
+        });
 
         await this.socket.waitForSocketOpen();
         await sleep(3000);
@@ -199,9 +210,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
         if (this.socket.authState.creds.registered) {
             promise.resolve(this.socket);
         } else if (this.options.loginType === 'code') {
-            await this.options.code(
-                await this.socket.requestPairingCode(this.options.phone)
-            );
+            await this.options['code'](await this.socket.requestPairingCode(this.options.phone));
         } else if (this.options.loginType === 'qr') {
             const _qr = promify<string>();
             const timeout = setTimeout(() => _qr.reject('QR Timeout'), 60000);
@@ -209,7 +218,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                 if (qr) {
                     clearTimeout(timeout);
                     try {
-                        await this.options.qr(qr);
+                        await this.options['qr'](qr);
                         _qr.resolve(qr);
                     } catch (error) {
                         _qr.reject(error);
