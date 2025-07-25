@@ -13,7 +13,7 @@ import useCache from './static/useCache';
  */
 interface IWhatsAppBase {
     phone: string;
-    store?: Engine;
+    store: Engine;
 }
 
 /**
@@ -51,7 +51,13 @@ interface EventMap {
  *  qr: (code) => console.log(code),
  * });
  */
-export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
+class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
+    /**
+     * @description
+     * Store for WhatsApp Web.
+     */
+    protected store: Store;
+    protected options: IWhatsApp<T>;
     /**
      * @description
      * Socket for WhatsApp Web.
@@ -59,23 +65,22 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
     protected socket: Baileys.WASocket;
     /**
      * @description
-     * Store for WhatsApp Web.
-     */
-    protected store: Store = new Map() as any;
-    /**
-     * @description
      * Mutex, used to prevent concurrent access to the socket.
      */
     protected readonly mutex = new Mutex();
 
-    constructor(protected readonly options: IWhatsApp<T>) {
+    constructor(options: IWhatsApp<T>) {
         super({ captureRejections: true });
         this.on('error', (error) => {
             if (this.listenerCount('error') === 1) {
                 console.error(error);
             }
         });
-        this.store = new Store(this.options.store ?? (new Map() as any));
+        this.options = {
+            ...options,
+            phone: options.phone.replace(/\D/g, ''),
+        };
+        this.store = new Store(this.options.store);
         this.connect();
     }
 
@@ -87,6 +92,18 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
      */
     async tick<T extends Noop<[socket: Baileys.WASocket, store: Store], any>>(func: T): Promise<Awaited<ReturnType<T>>> {
         return this.mutex.acquire().then(() => func(this.socket, this.store));
+    }
+
+    /**
+     * @description
+     * Process events from the socket.
+     * @param func Function to execute.
+     * @returns Handler to remove the event listener.
+     */
+    process(func: Noop<[event: Partial<Baileys.BaileysEventMap>, socket: Baileys.WASocket, store: Store]>) {
+        return this.socket.ev.process((event) => {
+            func(event, this.socket, this.store);
+        });
     }
 
     async documents(): Promise<Record<string, any>> {
@@ -150,7 +167,6 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                 if (connection === 'open') promise.resolve(this.socket);
                 else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
                     promise.resolve(await this.connect());
-                    return;
                 }
             }
             // prettier-ignore
@@ -176,7 +192,7 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
                     })
             );
             for (const key of (event['chats.delete'] ?? []) as string[]) {
-                await this.store.chat.delete(key);
+                await this.store.chat.unset(key);
                 this.emit('chat:deleted', key);
             }
             // prettier-ignore
@@ -230,3 +246,13 @@ export default class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<Even
         return promise;
     }
 }
+
+export default WhatsApp;
+export * from './static/Store';
+export { default as Store } from './static/Store';
+
+export * from './model/chat';
+export { default as Chat } from './model/chat';
+
+export * from './model/message';
+export { default as Message } from './model/message';
