@@ -2,8 +2,27 @@ import * as Baileys from 'baileys';
 import Base from './base';
 import Message, { MessageOptions } from './message';
 
+/**
+ * @module Chat
+ * @description
+ * Represents a chat in WhatsApp.
+ */
 export default class Chat extends Base<Baileys.Chat> {
+    /**
+     * @description
+     * Sends a text message to this chat.
+     * @param text The text to send.
+     * @param options Additional options for the message.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async send(text: string, options?: { once: boolean }): Promise<boolean>;
+    /**
+     * @description
+     * Sends a media message to this chat.
+     * @param media The media to send.
+     * @param options Additional options for the message.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async send(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
     async send(content: string | Baileys.WAMediaUpload, options?: any): Promise<boolean> {
         return this.$.tick(async (socket) => {
@@ -31,6 +50,11 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Returns the messages in this chat.
+     * @returns Promise that resolves to an array of messages.
+     */
     async messages(): Promise<Message[]> {
         return await this.$.tick(async (_, store) => {
             const messages: Message[] = [];
@@ -43,6 +67,11 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Pins this chat.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async pin(): Promise<boolean> {
         return await this.$.tick(async (socket) => {
             // prettier-ignore
@@ -54,6 +83,11 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Marks this chat as seen.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async seen(): Promise<boolean> {
         return await this.$.tick(async (socket) => {
             // prettier-ignore
@@ -65,6 +99,12 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Mutes this chat.
+     * @param time The time to mute for.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async mute(time: number = 0): Promise<boolean> {
         return await this.$.tick(async (socket) => {
             // prettier-ignore
@@ -76,6 +116,12 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Updates the presence of this chat.
+     * @param status The status to update to.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async presence(status: Baileys.WAPresence): Promise<boolean> {
         return await this.$.tick(async (socket) => {
             await socket.sendPresenceUpdate(status, this._.id);
@@ -83,6 +129,11 @@ export default class Chat extends Base<Baileys.Chat> {
         });
     }
 
+    /**
+     * @description
+     * Deletes this chat.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async delete(): Promise<boolean> {
         return this.$.tick(async (socket) => {
             await socket.chatModify(
