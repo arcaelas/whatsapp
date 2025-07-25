@@ -3,7 +3,6 @@ import Base from './base';
 import Message, { MessageOptions } from './message';
 
 export default class Chat extends Base<Baileys.Chat> {
-
     async send(text: string, options?: { once: boolean }): Promise<boolean>;
     async send(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
     async send(content: string | Baileys.WAMediaUpload, options?: any): Promise<boolean> {
@@ -27,7 +26,7 @@ export default class Chat extends Base<Baileys.Chat> {
                     });
                     return true;
                 }
-            } catch { }
+            } catch {}
             return false;
         });
     }
@@ -35,18 +34,10 @@ export default class Chat extends Base<Baileys.Chat> {
     async messages(): Promise<Message[]> {
         return await this.$.tick(async (_, store) => {
             const messages: Message[] = [];
-            if (store.engine.scan!) {
-                for (const key of await store.engine.scan!(`chat/${this._.id}/message/*`)) {
-                    const id = key.slice(`chat/${this._.id}/message/`.length);
-                    messages.push(new Message(this.$, (await store.message.get(id))!));
-                }
-            } else {
-                for await (const key of store.engine.keys()) {
-                    if (key.startsWith(`chat/${this._.id}/message/`)) {
-                        const id = key.slice(`chat/${this._.id}/message/`.length);
-                        messages.push(new Message(this.$, (await store.message.get(id))!));
-                    }
-                }
+            const keys = await store.engine.match(`chat/${this._.id}/message/*/index`);
+            for (const key of keys) {
+                const [, , id] = key.match(/chat\/[^/]+\/message\/([^/]+)/)!;
+                messages.push(new Message(this.$, (await store.message.get(id))!));
             }
             return messages;
         });
@@ -94,10 +85,13 @@ export default class Chat extends Base<Baileys.Chat> {
 
     async delete(): Promise<boolean> {
         return this.$.tick(async (socket) => {
-            await socket.chatModify({
-                delete: true,
-                lastMessages: [this._.messages![this._.messages!.length - 1].message!],
-            }, this._.id);
+            await socket.chatModify(
+                {
+                    delete: true,
+                    lastMessages: [this._.messages![this._.messages!.length - 1].message!],
+                },
+                this._.id
+            );
             return true;
         });
     }
