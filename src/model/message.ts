@@ -3,14 +3,45 @@ import Base from './base';
 import Chat from './chat';
 
 export interface MessageOptions {
+    /**
+     * @description
+     * The type of the message.
+     * @default 'text'
+     */
     type?: 'audio' | 'video' | 'image' | 'location';
+    /**
+     * @description
+     * The caption for the image.
+     */
     caption?: string; // images
+    /**
+     * @description
+     * Whether the audio is a voice note.
+     */
     ptt?: boolean; // audio
+    /**
+     * @description
+     * Whether the video is a video note.
+     */
     ptv?: boolean; // video‑note
+    /**
+     * @description
+     * Whether the message is a view once message.
+     */
     once?: boolean; // view‑once
 }
 
+/**
+ * @module Message
+ * @description
+ * Represents a message in WhatsApp.
+ */
 export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
+    /**
+     * @description
+     * Returns the chat associated with this message.
+     * @returns Promise that resolves to the chat.
+     */
     async chat() {
         // prettier-ignore
         return this.$.tick(async (_, store) => {
@@ -21,6 +52,13 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         });
     }
 
+    /**
+     * @description
+     * Replies to this message.
+     * @param content The content to reply with.
+     * @param options Additional options for the reply.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async reply(text: string, options?: { once: boolean }): Promise<boolean>;
     async reply(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
     async reply(content: any, options?: any): Promise<boolean> {
@@ -56,6 +94,11 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         });
     }
 
+    /**
+     * @description
+     * Marks this message as seen.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async seen(): Promise<boolean> {
         return this.$.tick(async (socket) => {
             // prettier-ignore
@@ -67,6 +110,12 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         });
     }
 
+    /**
+     * @description
+     * Deletes this message.
+     * @param forall Whether to delete for all participants.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async delete(forall: boolean = false): Promise<boolean> {
         return this.$.tick(async (socket) => {
             if (forall) {
@@ -87,6 +136,12 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         });
     }
 
+    /**
+     * @description
+     * Likes this message.
+     * @param emoji The emoji to use for the like.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async like(emoji: string): Promise<boolean> {
         return this.$.tick(async (socket) => {
             await socket.sendMessage(this._.key.remoteJid!, {
@@ -96,6 +151,12 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         });
     }
 
+    /**
+     * @description
+     * Forwards this message to another chat.
+     * @param chat_id The ID of the chat to forward the message to.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
     async forward(chat_id: string): Promise<boolean> {
         return this.$.tick(async (socket) => {
             await socket.sendMessage(chat_id!, {
