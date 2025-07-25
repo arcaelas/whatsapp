@@ -55,10 +55,6 @@
 ```bash
 # core package
 yarn add @arcaelas/whatsapp
-
-# peer dependency (Baileys – WhatsApp MD layer)
-yarn add @whiskeysockets/baileys
-# plus any media codecs you wish (ffmpeg, sharp, etc.)
 ```
 
 > Node 18+ required. Works in ESM & TypeScript projects out of the box.
