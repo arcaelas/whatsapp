@@ -1,9 +1,9 @@
 import * as Baileys from 'baileys';
 import Base from './base';
-
+import Chat from './chat';
 
 export interface MessageOptions {
-    type?: "audio" | "video" | "image" | "location";
+    type?: 'audio' | 'video' | 'image' | 'location';
     caption?: string; // images
     ptt?: boolean; // audio
     ptv?: boolean; // video‑note
@@ -11,6 +11,15 @@ export interface MessageOptions {
 }
 
 export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
+    async chat() {
+        // prettier-ignore
+        return this.$.tick(async (_, store) => {
+            return new Chat(
+                this.$,
+                (await store.chat.get(this._.key.remoteJid!))!
+            )
+        });
+    }
 
     async reply(text: string, options?: { once: boolean }): Promise<boolean>;
     async reply(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
@@ -19,20 +28,28 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
             // prettier-ignore
             const _options: MessageOptions = { type: 'text', ...options } as any;
             if (typeof content === 'string') {
-                await socket.sendMessage(this._.key.remoteJid!, {
-                    text: content,
-                    viewOnce: _options.once || false,
-                }, { quoted: this._ });
+                await socket.sendMessage(
+                    this._.key.remoteJid!,
+                    {
+                        text: content,
+                        viewOnce: _options.once || false,
+                    },
+                    { quoted: this._ }
+                );
                 return true;
             } else if (Buffer.isBuffer(content)) {
-                await socket.sendMessage(this._.key.remoteJid!, {
-                    viewOnce: _options.once || false,
-                    ptv: !!(_options.type === 'video' && _options.ptv),
-                    ptt: !!(_options.type === 'audio' && _options.ptt),
-                    image: _options.type === 'image' ? content : undefined!,
-                    audio: _options.type === 'audio' ? content : undefined!,
-                    video: _options.type === 'video' ? content : undefined!,
-                }, { quoted: this._ });
+                await socket.sendMessage(
+                    this._.key.remoteJid!,
+                    {
+                        viewOnce: _options.once || false,
+                        ptv: !!(_options.type === 'video' && _options.ptv),
+                        ptt: !!(_options.type === 'audio' && _options.ptt),
+                        image: _options.type === 'image' ? content : undefined!,
+                        audio: _options.type === 'audio' ? content : undefined!,
+                        video: _options.type === 'video' ? content : undefined!,
+                    },
+                    { quoted: this._ }
+                );
                 return true;
             }
             return false;
@@ -73,7 +90,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     async like(emoji: string): Promise<boolean> {
         return this.$.tick(async (socket) => {
             await socket.sendMessage(this._.key.remoteJid!, {
-                react: { text: emoji, key: this._.key, },
+                react: { text: emoji, key: this._.key },
             });
             return true;
         });
