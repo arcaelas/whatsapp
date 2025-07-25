@@ -3,6 +3,7 @@ import { initAuthCreds, proto } from 'baileys';
 import Store from './Store';
 
 export default async function useCache(store: Store) {
+    // prettier-ignore
     const creds = await store
         .document.get<Baileys.AuthenticationCreds>('creds.json')
         .then((e) => e ?? initAuthCreds());
@@ -30,7 +31,7 @@ export default async function useCache(store: Store) {
                             const value = data[category][id];
                             tasks.push(value
                                 ? store.document.set(`${category}/${id}.json`, value)
-                                : store.document.delete(`${category}/${id}.json`)
+                                : store.document.unset(`${category}/${id}.json`)
                             );
                         }
                     }
