@@ -1,6 +1,6 @@
 {
   "license": "ISC",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "name": "@arcaelas/whatsapp",
   "homepage": "https://github.com/arcaelas/whatsapp",
   "description": "A small box of tools, which are implemented in different factions of the library.",
