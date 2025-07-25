@@ -27,6 +27,10 @@ type IWhatsApp<T extends 'qr' | 'code'> = IWhatsAppBase & {
         : { code: Noop<[code: string]> }
     );
 
+/**
+ * @description
+ * Event map for WhatsApp.
+ */
 interface EventMap {
     error: [error: Error];
     open: [];
@@ -57,6 +61,10 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
      * Store for WhatsApp Web.
      */
     protected store: Store;
+    /**
+     * @description
+     * Options for WhatsApp Web.
+     */
     protected options: IWhatsApp<T>;
     /**
      * @description
@@ -106,6 +114,11 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         });
     }
 
+    /**
+     * @description
+     * Returns all documents in the store.
+     * @returns Promise that resolves to an object containing all documents.
+     */
     async documents(): Promise<Record<string, any>> {
         return await this.tick(async (_, store) => {
             const documents: Record<string, any> = {};
@@ -116,6 +129,11 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         });
     }
 
+    /**
+     * @description
+     * Returns all chats in the store.
+     * @returns Promise that resolves to an array of chats.
+     */
     async chats(): Promise<Chat[]> {
         return await this.tick(async (_, store) => {
             const chats: Chat[] = [];
@@ -126,6 +144,11 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         });
     }
 
+    /**
+     * @description
+     * Returns all messages in the store.
+     * @returns Promise that resolves to an array of messages.
+     */
     async messages(): Promise<Message[]> {
         return await this.tick(async (_, store) => {
             const messages: Message[] = [];
