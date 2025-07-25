@@ -56,107 +56,59 @@ export interface Engine {
     /**
      * Remove a key.
      *
-     * @param key Key to delete.
+     * @param key Key to unset.
      * @returns `true` if removed; `false` if it did not exist.
      *
      * @example
-     * await store.delete('cache:config');
+     * await store.unset('cache:config');
      */
-    delete(key: string): Promise<boolean>;
+    unset(key: string): Promise<boolean>;
 
     /**
-     * Iterate over all keys.
-     *
-     * @returns `AsyncGenerator` yielding each key.
-     *
-     * @example
-     * for await (const key of store.keys()) console.log(key);
-     */
-    keys(): AsyncGenerator<string>;
-
-    /**
-     * Iterate over all values (`string | null`).
-     *
-     * @returns `AsyncGenerator` yielding each value.
-     *
-     * @example
-     * for await (const value of store.values()) console.log(value);
-     */
-    values(): AsyncGenerator<string | null>;
-
-    /**
-     * Iterate over `[key, value]` pairs.
-     *
-     * @returns `AsyncGenerator<[string, string | null]>`.
-     *
-     * @example
-     * for await (const [k, v] of store.entries()) console.log(k, v);
-     */
-    entries(): AsyncGenerator<[string, string | null]>;
-
-    /**
-     * Remove **all** keys.
-     *
-     * @returns `true` when the store is empty; `false` if an error occurred.
-     *
-     * @example
-     * await store.clear();
-     */
-    clear(): Promise<boolean>;
-
-    /**
-     * (Optional) Filter keys using a **glob pattern** (`*` as wildcard).
-     *
+     * @description
+     * Filter keys using a **glob pattern** (`*` as wildcard).
      * - `user:*`        → everything starting with `user:`
      * - `log:*:error`   → simultaneous prefix and suffix
-     *
      * @param pattern Glob pattern.
      * @returns Array of matching keys.
-     *
      * @example
-     * const keys = await store.scan?.('user:*:active');
+     * const keys = await store.match('user:*:active');
      */
-    scan?(pattern: string): Promise<string[]>;
+    match(pattern: string): Promise<string[]>;
 }
 
 export default class Store {
-    constructor(readonly engine: Engine) { }
+    constructor(readonly engine: Engine) {}
 
     document = {
-        set: async (filename: string, content: any): Promise<boolean> => {
+        set: async (pathname: string, content: any): Promise<boolean> => {
             // prettier-ignore
             return await this.engine.set(
-                `document/${filename}`,
+                `document/${pathname}`,
                 JSON.stringify(content, Baileys.BufferJSON.replacer)
             );
         },
-        get: async <T>(filename: string): Promise<T | null> => {
+        get: async <T>(pathname: string): Promise<T | null> => {
             // prettier-ignore
             return JSON.parse(
-                await this.engine.get(`document/${filename}`) ?? 'null',
+                await this.engine.get(`document/${pathname}`) ?? 'null',
                 Baileys.BufferJSON.reviver
             );
         },
-        has: async (filename: string): Promise<boolean> => {
-            return this.engine.has(`document/${filename}`);
+        has: async (pathname: string): Promise<boolean> => {
+            return await this.engine.has(`document/${pathname}`);
         },
-        delete: async (filename: string): Promise<boolean> => {
-            return this.engine.delete(`document/${filename}`);
+        unset: async (pathname: string): Promise<boolean> => {
+            return await this.engine.unset(`document/${pathname}`);
         },
         keys: () => {
             const _this = this;
             return {
                 async *[Symbol.asyncIterator]() {
-                    if (_this.engine.scan) {
-                        for (const key of await _this.engine.scan!('document/*')) {
-                            yield key.slice('document/'.length);
-                        }
-                    } else
-                        for await (const key of _this.engine.keys()) {
-                            if (key.startsWith('document/')) {
-                                yield key.slice('document/'.length);
-                            }
-                        }
+                    for (const key of await _this.engine.match('document/*')) {
+                        const [, _key] = key.match(/document\/(.*)/) ?? [];
+                        yield _key;
+                    }
                 },
             };
         },
@@ -190,51 +142,36 @@ export default class Store {
                 JSON.stringify(chat, Baileys.BufferJSON.replacer)
             );
         },
-        get: async (id: string): Promise<Baileys.Chat | null> => {
+        get: async (id: Baileys.Chat['id']): Promise<Baileys.Chat | null> => {
             // prettier-ignore
             return JSON.parse(
                 await this.engine.get(`chat/${id}/index`) ?? 'null',
                 Baileys.BufferJSON.reviver
             );
         },
-        has: async (id: string): Promise<boolean> => {
-            return this.engine.has(`chat/${id}/index`)
+        has: async (id: Baileys.Chat['id']): Promise<boolean> => {
+            return await this.engine.has(`chat/${id}/index`);
         },
-        delete: async (id: string): Promise<boolean> => {
-            if (this.engine.scan)
-                for (const key of await this.engine.scan!(`chat/${id}/*`)) {
-                    await this.engine.delete(key);
-                }
-            else
-                for await (const key of this.engine.keys()) {
-                    if (key.startsWith(`chat/${id}/`))
-                        await this.engine.delete(key);
-                }
+        unset: async (id: Baileys.Chat['id']): Promise<boolean> => {
+            for (const key of await this.engine.match(`chat/${id}/*`)) {
+                await this.engine.unset(key);
+            }
             return true;
         },
         keys: () => {
             const _this = this;
             return {
                 async *[Symbol.asyncIterator]() {
-                    if (_this.engine.scan) {
-                        for (const key of await _this.engine.scan!('chat/*/index')) {
-                            const [, id] = key.split('/');
-                            yield id;
-                        }
-                    } else
-                        for await (const key of _this.engine.keys()) {
-                            if (key.startsWith('chat/')) {
-                                const [, id] = key.split('/');
-                                yield id;
-                            }
-                        }
+                    for await (const key of await _this.engine.match('chat/*/index')) {
+                        const [, id] = key.match(/chat\/([^/]+)\/index/) ?? [];
+                        yield id as Baileys.Chat['id'];
+                    }
                 },
             };
         },
         values: () => {
             const _this = this;
             return {
-                // prettier-ignore
                 async *[Symbol.asyncIterator]() {
                     for await (const id of _this.chat.keys()) {
                         yield (await _this.chat.get(id))!;
@@ -245,10 +182,9 @@ export default class Store {
         entries: () => {
             const _this = this;
             return {
-                // prettier-ignore
                 async *[Symbol.asyncIterator]() {
                     for await (const id of _this.chat.keys()) {
-                        yield [id as string, (await _this.chat.get(id))!] as const;
+                        yield [id as Baileys.Chat['id'], (await _this.chat.get(id))!] as const;
                     }
                 },
             };
@@ -264,74 +200,36 @@ export default class Store {
             );
         },
         get: async (id: string): Promise<Baileys.WAProto.IWebMessageInfo | null> => {
+            const [key] = await this.engine.match(`chat/*/${id}/index`);
             // prettier-ignore
-            if (this.engine.scan) {
-                const [key] = await this.engine.scan!(`chat/*/${id}/index`);
-                return JSON.parse(
-                    (await this.engine.get(key))!,
-                    Baileys.BufferJSON.reviver
-                );
-            } else {
-                for await (const key of this.engine.keys()) {
-                    const [chat, mid] = key.match(/chat\/([^/]+)\/message\/([^/]+)\/index/) ?? []
-                    if (chat && mid === id) {
-                        return JSON.parse(
-                            (await this.engine.get(`chat/${chat}/message/${id}/index`))!,
-                            Baileys.BufferJSON.reviver
-                        );
-                    }
-                }
-            }
-            return null;
+            return JSON.parse(
+                (await this.engine.get(key))!,
+                Baileys.BufferJSON.reviver
+            );
         },
         has: async (id: string): Promise<boolean> => {
-            if (this.engine.scan) {
-                const [key] = await this.engine.scan!(`chat/*/message/${id}/index`);
-                return !!key
-            }
-            for await (const key of this.engine.keys()) {
-                const [chat, mid] = key.match(/chat\/([^/]+)\/message\/([^/]+)\/index/) ?? []
-                if (chat && mid === id) return true;
-            }
-            return false;
+            const [key] = await this.engine.match(`chat/*/${id}/index`);
+            return !!key;
         },
-        delete: async (id: string): Promise<boolean> => {
-            if (this.engine.scan) {
-                for (const key of await this.engine.scan!(`chat/*/message/${id}/*`)) {
-                    await this.engine.delete(key);
-                }
-                return true;
-            } else {
-                for await (const key of this.engine.keys()) {
-                    const [chat, mid] = key.match(/chat\/([^/]+)\/message\/([^/]+)\/index/) ?? [];
-                    if (chat && mid === id) await this.engine.delete(key);
-                }
-                return true;
-            }
+        unset: async (id: string): Promise<boolean> => {
+            const [key] = await this.engine.match(`chat/*/${id}/index`);
+            return await this.engine.unset(key);
         },
         keys: () => {
             const _this = this;
             return {
                 async *[Symbol.asyncIterator]() {
-                    if (_this.engine.scan) {
-                        for (const key of await _this.engine.scan!('chat/*/message/*')) {
-                            const [, , , m] = key.split('/');
-                            yield m;
-                        }
-                    } else
-                        for await (const key of _this.engine.keys()) {
-                            if (key.startsWith('chat/')) {
-                                const [, , , m] = key.split('/');
-                                yield m;
-                            }
-                        }
+                    const keys = await _this.engine.match('chat/*/message/*/index');
+                    for (const key of keys) {
+                        const [, , id] = key.match(/chat\/([^/]+)\/message\/([^/]+)\/index/) ?? [];
+                        yield id;
+                    }
                 },
             };
         },
         values: () => {
             const _this = this;
             return {
-                // prettier-ignore
                 async *[Symbol.asyncIterator]() {
                     for await (const key of _this.message.keys()) {
                         yield (await _this.message.get(key))!;
@@ -342,7 +240,6 @@ export default class Store {
         entries: () => {
             const _this = this;
             return {
-                // prettier-ignore
                 async *[Symbol.asyncIterator]() {
                     for await (const key of _this.message.keys()) {
                         yield [key, (await _this.message.get(key))!] as const;
