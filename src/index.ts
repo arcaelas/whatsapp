@@ -43,6 +43,7 @@ interface EventMap {
     'message:created': [message: Message];
     'message:updated': [message: Message];
     'message:deleted': [id: string];
+    process: [event: Partial<Baileys.BaileysEventMap>, socket: Baileys.WASocket, store: Store];
 }
 
 /**
@@ -109,7 +110,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
      * @returns Handler to remove the event listener.
      */
     process(func: Noop<[event: Partial<Baileys.BaileysEventMap>, socket: Baileys.WASocket, store: Store]>) {
-        return this.socket.ev.process((event) => {
+        return this.on('process', (event) => {
             func(event, this.socket, this.store);
         });
     }
@@ -194,17 +195,23 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
             }
             // prettier-ignore
             await Promise.allSettled(
-                ([] as Baileys.Chat[])
-                    .concat(event['messaging-history.set']?.chats || [], event['chats.upsert'] || [])
-                    .map(async chat => {
-                        await this.store.chat.set(chat);
-                        this.emit('chat:created', new Chat(this, chat));
-                    })
+                [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
+                .map(async chat => {
+                    await this.store.chat.set(chat);
+                    this.emit('chat:created', new Chat(this, chat));
+                })
             );
             // prettier-ignore
             await Promise.allSettled(
-                ([] as Baileys.ChatUpdate[])
-                    .concat(event['chats.update'] || [])
+                [...event['messaging-history.set']?.messages || [], ...event['messages.upsert']?.messages || []]
+                .map(async message=> {
+                    await this.store.message.set(message);
+                    this.emit('message:created', new Message(this, message));
+                })
+            )
+            // prettier-ignore
+            await Promise.allSettled(
+                (event['chats.update'] || [])
                     .map(async update => {
                         const payload = await this.store.chat.get(update.id!);
                         if (payload !== null) {
@@ -214,23 +221,9 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
                         }
                     })
             );
-            for (const key of (event['chats.delete'] ?? []) as string[]) {
-                await this.store.chat.unset(key);
-                this.emit('chat:deleted', key);
-            }
             // prettier-ignore
             await Promise.allSettled(
-                ([] as Baileys.WAMessage[])
-                    .concat(event['messages.upsert']?.messages || [])
-                    .map(async message => {
-                        await this.store.message.set(message);
-                        this.emit('message:created', new Message(this, message));
-                    })
-            );
-            // prettier-ignore
-            await Promise.allSettled(
-                ([] as Baileys.WAMessageUpdate[])
-                    .concat(event['messages.update'] || [])
+                (event['messages.update'] || [])
                     .map(async message => {
                         const payload = await this.store.message.get(message.key.id!);
                         if (payload !== null) {
@@ -240,7 +233,17 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
                         }
                     })
             );
-            // TODO: Handle messages.delete
+
+            for (const { id } of event['messages.delete']?.['keys'] || []) {
+                await this.store.message.unset(id);
+                this.emit('message:deleted', id);
+            }
+            for (const key of event['chats.delete'] || []) {
+                await this.store.chat.unset(key);
+                this.emit('chat:deleted', key);
+            }
+
+            this.emit('process', event, this.socket, this.store);
         });
 
         await this.socket.waitForSocketOpen();
@@ -253,18 +256,21 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         } else if (this.options.loginType === 'qr') {
             const _qr = promify<string>();
             const timeout = setTimeout(() => _qr.reject('QR Timeout'), 60000);
-            this.socket.ev.on('connection.update', async ({ qr }) => {
+            const QR = async ({ qr }) => {
                 if (qr) {
-                    clearTimeout(timeout);
                     try {
+                        clearTimeout(timeout);
                         await this.options['qr'](qr);
                         _qr.resolve(qr);
                     } catch (error) {
                         _qr.reject(error);
                     }
                 }
+            };
+            this.socket.ev.on('connection.update', QR as any);
+            await _qr.finally(() => {
+                this.socket.ev.off('connection.update', QR as any);
             });
-            await _qr;
         }
         return promise;
     }
