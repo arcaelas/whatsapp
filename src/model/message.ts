@@ -145,28 +145,19 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
 
     /**
      * @description
-     * Deletes this message.
-     * @param forall Whether to delete for all participants.
+     * Marks this message as read.
      * @returns Promise that resolves to a boolean indicating success.
      */
-    async delete(forall: boolean = false): Promise<boolean> {
+    async seen() {
         return this.$.tick(async (release, socket) => {
-            if (forall) {
-                await socket.sendMessage(this.raw.key.remoteJid!, {
-                    delete: this.raw.key,
-                });
-            } else {
-                // prettier-ignore
-                await socket.chatModify({
-                    deleteForMe: {
-                        key: this.raw.key,
-                        deleteMedia: this.type !== 'text',
-                        timestamp: this.raw.messageTimestamp! as number,
-                    },
-                }, this.raw.key.remoteJid!);
+            try {
+                await socket.readMessages([this.raw.key]);
+                return true;
+            } catch {
+                return false;
+            } finally {
+                release();
             }
-            release();
-            return true;
         });
     }
 
@@ -187,6 +178,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     }
 
     /**
+     * @deprecated
      * @description
      * Forwards this message to another chat.
      * @param chat_id The ID of the chat to forward the message to.
@@ -197,6 +189,34 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
             await socket.sendMessage(chat_id!, {
                 forward: { key: this.raw.key },
             });
+            release();
+            return true;
+        });
+    }
+
+    /**
+     * @deprecated
+     * @description
+     * Deletes this message.
+     * @param forall Whether to delete for all participants.
+     * @returns Promise that resolves to a boolean indicating success.
+     */
+    async delete(forall: boolean = false): Promise<boolean> {
+        return this.$.tick(async (release, socket) => {
+            if (forall) {
+                await socket.sendMessage(this.raw.key.remoteJid!, {
+                    delete: this.raw.key,
+                });
+            } else {
+                // prettier-ignore
+                await socket.chatModify({
+                    deleteForMe: {
+                        key: this.raw.key,
+                        deleteMedia: this.type !== 'text',
+                        timestamp: this.raw.messageTimestamp! as number,
+                    },
+                }, this.raw.key.remoteJid!);
+            }
             release();
             return true;
         });
