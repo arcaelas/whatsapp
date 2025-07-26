@@ -37,6 +37,41 @@ export interface MessageOptions {
  * Represents a message in WhatsApp.
  */
 export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
+    get isMe() {
+        return !!this._.key.fromMe;
+    }
+
+    get role() {
+        return this.isMe ? 'assistant' : 'user';
+    }
+
+    get type() {
+        switch (Baileys.getContentType(this._.message!)) {
+            case 'extendedTextMessage':
+                return 'text';
+            case 'imageMessage':
+                return 'image';
+            case 'audioMessage':
+                return 'audio';
+            case 'videoMessage':
+                return 'video';
+            case 'locationMessage':
+                return 'location';
+            default:
+                return 'unknown';
+        }
+    }
+
+    async content(): Promise<string | Buffer> {
+        // prettier-ignore
+        return this.type === 'text' ? this._.message!.extendedTextMessage!.text! : this.$.tick(async (socket)=>{
+            return await Baileys.downloadMediaMessage(this._, 'buffer', {}, {
+                logger: socket.logger,
+                reuploadRequest: socket.updateMediaMessage,
+            })
+        });
+    }
+
     /**
      * @description
      * Returns the chat associated with this message.
