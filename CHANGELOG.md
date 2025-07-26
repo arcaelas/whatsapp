@@ -4,6 +4,21 @@
 
 ### Features
 
+-   Implementar modelo de contactos y mejorar gestión de eventos de mensajería (07272cd)
+-   Modificar método reply() de mensajes para retornar instancia Message en lugar de boolean (07272cd)
+
+### Refactor
+
+-   Separar manejo de eventos de socket en handlers específicos para mejor organización (07272cd)
+-   Optimizar gestión de eliminación de mensajes con deleteMedia condicional según tipo (07272cd)
+-   Simplificar métodos de mensaje eliminando funcionalidad redundante (07272cd)
+
+---
+
+## Historial anterior
+
+### Features
+
 -   Permitir descripción personalizada del navegador en la inicialización del cliente WhatsApp (4ccad93)
 -   Emitir eventos de socket al middleware de proceso con contexto de store (9f8a033)
 -   Configurar agente de navegador macOS y agregar manejador de recuperación de mensajes (5f82eff)
