@@ -1,4 +1,4 @@
-import { merge, Noop, promify, sleep } from '@arcaelas/utils';
+import { merge, Noop, promify } from '@arcaelas/utils';
 import { type Boom } from '@hapi/boom';
 import { Mutex } from 'async-mutex';
 import * as Baileys from 'baileys';
@@ -55,11 +55,6 @@ class WhatsApp extends EventEmitter<EventMap> {
     protected store: Store;
     /**
      * @description
-     * Options for WhatsApp Web.
-     */
-    protected options: IWhatsApp;
-    /**
-     * @description
      * Socket for WhatsApp Web.
      */
     protected socket: Baileys.WASocket;
@@ -69,12 +64,8 @@ class WhatsApp extends EventEmitter<EventMap> {
      */
     protected readonly mutex = new Mutex();
 
-    constructor(options: IWhatsApp) {
+    constructor(protected readonly options: IWhatsApp) {
         super({ captureRejections: true });
-        this.options = {
-            ...options,
-            phone: options.phone.replace(/\D/g, ''),
-        };
         this.store = new Store(this.options.store);
         this.connect();
     }
@@ -164,27 +155,20 @@ class WhatsApp extends EventEmitter<EventMap> {
                     keys: Baileys.makeCacheableSignalKeyStore(state.keys),
                 },
             });
-            await socket.waitForSocketOpen();
-            await sleep(3000);
-            if (socket.authState.creds.registered) {
-                promise.resolve(socket);
-            } else {
-                // prettier-ignore
-                this.options.onCode(
-                    await socket.requestPairingCode(this.options.phone)
-                );
-            }
-
+            socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+                if (connection === 'open') promise.resolve(socket);
+                else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
+                    promise.resolve(await this.connect());
+                } else if (connection === 'connecting' || !!qr) {
+                    // prettier-ignore
+                    this.options.onCode(
+                        await socket.requestPairingCode(this.options.phone)
+                    );
+                }
+            });
             socket.ev.process(async (event) => {
                 if (event['creds.update']) {
                     await save();
-                }
-                if (event['connection.update']) {
-                    const { connection, lastDisconnect } = event['connection.update'];
-                    if (connection === 'open') promise.resolve(socket);
-                    else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
-                        promise.resolve(await this.connect());
-                    }
                 }
                 // prettier-ignore
                 await Promise.allSettled(
