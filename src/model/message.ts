@@ -37,8 +37,12 @@ export interface MessageOptions {
  * Represents a message in WhatsApp.
  */
 export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
+    get raw() {
+        return this._;
+    }
+
     get isMe() {
-        return !!this._.key.fromMe;
+        return !!this.raw.key.fromMe;
     }
 
     get role() {
@@ -46,7 +50,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     }
 
     get type() {
-        switch (Baileys.getContentType(this._.message!)) {
+        switch (Baileys.getContentType(this.raw.message!)) {
             case 'extendedTextMessage':
                 return 'text';
             case 'imageMessage':
@@ -64,8 +68,8 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
 
     async content(): Promise<string | Buffer> {
         // prettier-ignore
-        return this.type === 'text' ? this._.message!.extendedTextMessage!.text! : this.$.tick(async (socket)=>{
-            return await Baileys.downloadMediaMessage(this._, 'buffer', {}, {
+        return this.type === 'text' ? this.raw.message!.extendedTextMessage!.text! : this.$.tick(async (socket)=>{
+            return await Baileys.downloadMediaMessage(this.raw, 'buffer', {}, {
                 logger: socket.logger,
                 reuploadRequest: socket.updateMediaMessage,
             })
@@ -82,7 +86,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
         return this.$.tick(async (_, store) => {
             return new Chat(
                 this.$,
-                (await store.chat.get(this._.key.remoteJid!))!
+                (await store.chat.get(this.raw.key.remoteJid!))!
             )
         });
     }
@@ -102,17 +106,17 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
             const _options: MessageOptions = { type: 'text', ...options } as any;
             if (typeof content === 'string') {
                 await socket.sendMessage(
-                    this._.key.remoteJid!,
+                    this.raw.key.remoteJid!,
                     {
                         text: content,
                         viewOnce: _options.once || false,
                     },
-                    { quoted: this._ }
+                    { quoted: this.raw }
                 );
                 return true;
             } else if (Buffer.isBuffer(content)) {
                 await socket.sendMessage(
-                    this._.key.remoteJid!,
+                    this.raw.key.remoteJid!,
                     {
                         viewOnce: _options.once || false,
                         ptv: !!(_options.type === 'video' && _options.ptv),
@@ -121,7 +125,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                         audio: _options.type === 'audio' ? content : undefined!,
                         video: _options.type === 'video' ? content : undefined!,
                     },
-                    { quoted: this._ }
+                    { quoted: this.raw }
                 );
                 return true;
             }
@@ -139,8 +143,8 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
             // prettier-ignore
             await socket.chatModify({
                 markRead: true,
-                lastMessages: [this._],
-            }, this._.key.remoteJid!);
+                lastMessages: [this.raw],
+            }, this.raw.key.remoteJid!);
             return true;
         });
     }
@@ -154,18 +158,18 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     async delete(forall: boolean = false): Promise<boolean> {
         return this.$.tick(async (socket) => {
             if (forall) {
-                await socket.sendMessage(this._.key.remoteJid!, {
-                    delete: this._.key,
+                await socket.sendMessage(this.raw.key.remoteJid!, {
+                    delete: this.raw.key,
                 });
             } else {
                 // prettier-ignore
                 await socket.chatModify({
                     deleteForMe: {
-                        key: this._.key,
+                        key: this.raw.key,
                         deleteMedia: true,
-                        timestamp: this._.messageTimestamp! as number,
+                        timestamp: this.raw.messageTimestamp! as number,
                     },
-                }, this._.key.remoteJid!);
+                }, this.raw.key.remoteJid!);
             }
             return true;
         });
@@ -179,8 +183,8 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      */
     async like(emoji: string): Promise<boolean> {
         return this.$.tick(async (socket) => {
-            await socket.sendMessage(this._.key.remoteJid!, {
-                react: { text: emoji, key: this._.key },
+            await socket.sendMessage(this.raw.key.remoteJid!, {
+                react: { text: emoji, key: this.raw.key },
             });
             return true;
         });
@@ -195,7 +199,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     async forward(chat_id: string): Promise<boolean> {
         return this.$.tick(async (socket) => {
             await socket.sendMessage(chat_id!, {
-                forward: { key: this._.key },
+                forward: { key: this.raw.key },
             });
             return true;
         });
