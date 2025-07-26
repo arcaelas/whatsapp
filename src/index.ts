@@ -71,16 +71,11 @@ class WhatsApp extends EventEmitter<EventMap> {
 
     constructor(options: IWhatsApp) {
         super({ captureRejections: true });
-        this.on('error', (error) => {
-            if (this.listenerCount('error') === 1) {
-                console.error(error);
-            }
-        });
+        this.store = new Store(this.options.store);
         this.options = {
             ...options,
             phone: options.phone.replace(/\D/g, ''),
         };
-        this.store = new Store(this.options.store);
         this.connect();
     }
 
@@ -157,91 +152,93 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @returns Promise that resolves to the socket.
      */
     protected async connect() {
-        const promise = promify<Baileys.WASocket>();
-        const { state, save } = await useCache(this.store);
-        const { version } = await Baileys.fetchLatestBaileysVersion();
-        this.socket = Baileys.makeWASocket({
-            version,
-            syncFullHistory: true,
-            ...(this.options.browser ? { browser: this.options.browser } : {}),
-            auth: {
-                creds: state.creds,
-                keys: Baileys.makeCacheableSignalKeyStore(state.keys),
-            },
-        });
-
-        await sleep(5000);
-        await this.socket.waitForSocketOpen();
-        if (this.socket.authState.creds.registered) {
-            promise.resolve(this.socket);
-        } else {
-            await this.options.onCode(await this.socket.requestPairingCode(this.options.phone));
-        }
-
-        this.socket.ev.process(async (event) => {
-            if (event['creds.update']) {
-                await save();
+        const promise = promify();
+        try {
+            const { state, save } = await useCache(this.store);
+            const { version } = await Baileys.fetchLatestBaileysVersion();
+            const socket = Baileys.makeWASocket({
+                version,
+                syncFullHistory: true,
+                auth: {
+                    creds: state.creds,
+                    keys: Baileys.makeCacheableSignalKeyStore(state.keys),
+                },
+            });
+            await socket.waitForSocketOpen();
+            await sleep(3000);
+            if (socket.authState.creds.registered) {
+                promise.resolve(socket);
+            } else {
+                // prettier-ignore
+                this.options.onCode(
+                    await socket.requestPairingCode(this.options.phone)
+                );
             }
-            if (event['connection.update']) {
-                const { connection, lastDisconnect } = event['connection.update'];
-                if (connection === 'open') promise.resolve(this.socket);
-                else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
-                    promise.resolve(await this.connect());
+
+            socket.ev.process(async (event) => {
+                if (event['creds.update']) {
+                    await save();
                 }
-            }
-            // prettier-ignore
-            await Promise.allSettled(
-                [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
-                .map(async chat => {
-                    await this.store.chat.set(chat);
-                    this.emit('chat:created', new Chat(this, chat));
-                })
-            );
-            // prettier-ignore
-            await Promise.allSettled(
-                [...event['messaging-history.set']?.messages || [], ...event['messages.upsert']?.messages || []]
-                .map(async message=> {
-                    await this.store.message.set(message);
-                    this.emit('message:created', new Message(this, message));
-                })
-            )
-            // prettier-ignore
-            await Promise.allSettled(
-                (event['chats.update'] || [])
-                    .map(async update => {
-                        const payload = await this.store.chat.get(update.id!);
-                        if (payload !== null) {
-                            const chat = merge(payload, update) as Baileys.Chat;
-                            await this.store.chat.set(chat);
-                            this.emit('chat:updated', new Chat(this, chat));
-                        }
+                if (event['connection.update']) {
+                    const { connection, lastDisconnect } = event['connection.update'];
+                    if (connection === 'open') promise.resolve(socket);
+                    else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
+                        promise.resolve(await this.connect());
+                    }
+                }
+                // prettier-ignore
+                await Promise.allSettled(
+                    [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
+                    .map(async chat => {
+                        await this.store.chat.set(chat);
+                        this.emit('chat:created', new Chat(this, chat));
                     })
-            );
-            // prettier-ignore
-            await Promise.allSettled(
-                (event['messages.update'] || [])
-                    .map(async message => {
-                        const payload = await this.store.message.get(message.key.id!);
-                        if (payload !== null) {
-                            const chat = merge(payload, message) as Baileys.WAProto.WebMessageInfo;
-                            await this.store.message.set(chat);
-                            this.emit('message:updated', new Message(this, chat));
-                        }
+                );
+                // prettier-ignore
+                await Promise.allSettled(
+                    [...event['messaging-history.set']?.messages || [], ...event['messages.upsert']?.messages || []]
+                    .map(async message=> {
+                        await this.store.message.set(message);
+                        this.emit('message:created', new Message(this, message));
                     })
-            );
-
-            for (const { id } of event['messages.delete']?.['keys'] || []) {
-                await this.store.message.unset(id);
-                this.emit('message:deleted', id);
-            }
-            for (const key of event['chats.delete'] || []) {
-                await this.store.chat.unset(key);
-                this.emit('chat:deleted', key);
-            }
-
-            this.emit('process', event, this.socket, this.store);
-        });
-        return promise;
+                )
+                // prettier-ignore
+                await Promise.allSettled(
+                    (event['chats.update'] || [])
+                        .map(async update => {
+                            const payload = await this.store.chat.get(update.id!);
+                            if (payload) {
+                                const chat = merge(payload, update) as Baileys.Chat;
+                                await this.store.chat.set(chat);
+                                this.emit('chat:updated', new Chat(this, chat));
+                            }
+                        })
+                );
+                // prettier-ignore
+                await Promise.allSettled(
+                    (event['messages.update'] || [])
+                        .map(async update => {
+                            const payload = await this.store.message.get(update.key.id!);
+                            if (payload) {
+                                const message = merge(payload, update) as Baileys.WAProto.WebMessageInfo;
+                                await this.store.message.set(message);
+                                this.emit('message:updated', new Message(this, message));
+                            }
+                        })
+                );
+                for (const { id } of event['messages.delete']?.['keys'] || []) {
+                    await this.store.message.unset(id);
+                }
+                for (const key of event['chats.delete'] || []) {
+                    await this.store.chat.unset(key);
+                }
+            });
+        } catch (error) {
+            promise.reject(error);
+        }
+        // prettier-ignore
+        return promise
+            .then((socket) => (this.socket = socket));
     }
 }
 
