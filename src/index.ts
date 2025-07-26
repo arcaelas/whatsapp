@@ -14,6 +14,7 @@ import useCache from './static/useCache';
 interface IWhatsAppBase {
     phone: string;
     store: Engine;
+    browser?: Baileys.WABrowserDescription | undefined;
 }
 
 /**
@@ -172,7 +173,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         this.socket = Baileys.makeWASocket({
             version,
             syncFullHistory: true,
-            browser: Baileys.Browsers.macOS('Descktop'),
+            browser: this.options.browser,
             auth: {
                 creds: state.creds,
                 keys: Baileys.makeCacheableSignalKeyStore(state.keys),
