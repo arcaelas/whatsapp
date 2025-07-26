@@ -10,7 +10,7 @@ type Serialize<T> = { [K in keyof T as T[K] extends Noop ? never : K]: T[K] };
  * Base class for WhatsApp entities.
  */
 export default class Base<T> {
-    constructor(protected readonly $: WhatsApp<'code' | 'qr'>, protected readonly _: Serialize<T>) {}
+    constructor(protected readonly $: WhatsApp, protected readonly _: Serialize<T>) {}
     /**
      * @description
      * Returns a JSON representation of this entity.

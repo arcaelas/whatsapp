@@ -11,22 +11,12 @@ import useCache from './static/useCache';
 /**
  * @description Estructura de configuración para iniciar sesión con WhatsApp.
  */
-interface IWhatsAppBase {
+interface IWhatsApp {
     phone: string;
     store: Engine;
+    onCode(code: string): void | Promise<void>;
     browser?: Baileys.WABrowserDescription | undefined;
 }
-
-/**
- * @description Configuración condicional según tipo de login.
- */
-// prettier-ignore
-type IWhatsApp<T extends 'qr' | 'code'> = IWhatsAppBase & {
-    loginType: T } & (
-        T extends 'qr'
-        ? { qr: Noop<[qr: string]> }
-        : { code: Noop<[code: string]> }
-    );
 
 /**
  * @description
@@ -57,7 +47,7 @@ interface EventMap {
  *  qr: (code) => console.log(code),
  * });
  */
-class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
+class WhatsApp extends EventEmitter<EventMap> {
     /**
      * @description
      * Store for WhatsApp Web.
@@ -67,7 +57,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
      * @description
      * Options for WhatsApp Web.
      */
-    protected options: IWhatsApp<T>;
+    protected options: IWhatsApp;
     /**
      * @description
      * Socket for WhatsApp Web.
@@ -79,7 +69,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
      */
     protected readonly mutex = new Mutex();
 
-    constructor(options: IWhatsApp<T>) {
+    constructor(options: IWhatsApp) {
         super({ captureRejections: true });
         this.on('error', (error) => {
             if (this.listenerCount('error') === 1) {
@@ -178,11 +168,15 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
                 creds: state.creds,
                 keys: Baileys.makeCacheableSignalKeyStore(state.keys),
             },
-            getMessage: async (key) => {
-                const message = await this.store.message.get(key.id!);
-                return message ? message.message! : undefined;
-            },
         });
+
+        await sleep(5000);
+        if (this.socket.authState.creds.registered) {
+            promise.resolve(this.socket);
+        } else {
+            await this.options['code'](await this.socket.requestPairingCode(this.options.phone));
+        }
+
         this.socket.ev.process(async (event) => {
             if (event['creds.update']) {
                 await save();
@@ -246,35 +240,6 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
 
             this.emit('process', event, this.socket, this.store);
         });
-
-        await this.socket.waitForConnectionUpdate(async (u) => {
-            return u.connection === 'open';
-        });
-        await sleep(5000);
-
-        if (this.socket.authState.creds.registered) {
-            promise.resolve(this.socket);
-        } else if (this.options.loginType === 'code') {
-            await this.options['code'](await this.socket.requestPairingCode(this.options.phone));
-        } else if (this.options.loginType === 'qr') {
-            const _qr = promify<string>();
-            const timeout = setTimeout(() => _qr.reject('QR Timeout'), 60000);
-            const QR = async ({ qr }) => {
-                if (qr) {
-                    try {
-                        clearTimeout(timeout);
-                        await this.options['qr'](qr);
-                        _qr.resolve(qr);
-                    } catch (error) {
-                        _qr.reject(error);
-                    }
-                }
-            };
-            this.socket.ev.on('connection.update', QR as any);
-            await _qr.finally(() => {
-                this.socket.ev.off('connection.update', QR as any);
-            });
-        }
         return promise;
     }
 }
