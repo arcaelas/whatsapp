@@ -25,7 +25,7 @@ export default class Chat extends Base<Baileys.Chat> {
      */
     async send(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
     async send(content: string | Baileys.WAMediaUpload, options?: any): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+        return this.$.tick(async (release, socket) => {
             try {
                 const _options: MessageOptions = { type: 'text', ...options } as any;
                 if (typeof content === 'string') {
@@ -45,7 +45,9 @@ export default class Chat extends Base<Baileys.Chat> {
                     });
                     return true;
                 }
-            } catch {}
+            } finally {
+                release();
+            }
             return false;
         });
     }
@@ -56,13 +58,14 @@ export default class Chat extends Base<Baileys.Chat> {
      * @returns Promise that resolves to an array of messages.
      */
     async messages(): Promise<Message[]> {
-        return await this.$.tick(async (_, store) => {
+        return await this.$.tick(async (release, _, store) => {
             const messages: Message[] = [];
             const keys = await store.engine.match(`chat/${this._.id}/message/*/index`);
             for (const key of keys) {
                 const [, , id] = key.match(/chat\/[^/]+\/message\/([^/]+)/)!;
                 messages.push(new Message(this.$, (await store.message.get(id))!));
             }
+            release();
             return messages;
         });
     }
@@ -73,45 +76,47 @@ export default class Chat extends Base<Baileys.Chat> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async pin(): Promise<boolean> {
-        return await this.$.tick(async (socket) => {
+        return await this.$.tick(async (release, socket) => {
             // prettier-ignore
             await socket.chatModify({
                 pin: true,
                 lastMessages: [this._.messages![this._.messages!.length - 1].message!],
-            }, this._.id);
+            }, this._.id).finally(() => release());
             return true;
         });
     }
 
     /**
+     * @deprecated
      * @description
      * Marks this chat as seen.
      * @returns Promise that resolves to a boolean indicating success.
      */
     async seen(): Promise<boolean> {
-        return await this.$.tick(async (socket) => {
+        return await this.$.tick(async (release, socket) => {
             // prettier-ignore
             await socket.chatModify({
                 markRead: true,
                 lastMessages: [this._.messages![this._.messages!.length - 1].message!],
-            }, this._.id);
+            }, this._.id).finally(() => release());
             return true;
         });
     }
 
     /**
+     * @deprecated
      * @description
      * Mutes this chat.
      * @param time The time to mute for.
      * @returns Promise that resolves to a boolean indicating success.
      */
     async mute(time: number = 0): Promise<boolean> {
-        return await this.$.tick(async (socket) => {
+        return await this.$.tick(async (release, socket) => {
             // prettier-ignore
             await socket.chatModify({
                 mute: time || null,
                 lastMessages: [this._.messages![this._.messages!.length - 1].message!],
-            }, this._.id);
+            }, this._.id).finally(() => release());
             return true;
         });
     }
@@ -123,8 +128,9 @@ export default class Chat extends Base<Baileys.Chat> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async presence(status: Baileys.WAPresence): Promise<boolean> {
-        return await this.$.tick(async (socket) => {
+        return await this.$.tick(async (release, socket) => {
             await socket.sendPresenceUpdate(status, this._.id);
+            release();
             return true;
         });
     }
@@ -135,14 +141,16 @@ export default class Chat extends Base<Baileys.Chat> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async delete(): Promise<boolean> {
-        return this.$.tick(async (socket) => {
-            await socket.chatModify(
-                {
-                    delete: true,
-                    lastMessages: [this._.messages![this._.messages!.length - 1].message!],
-                },
-                this._.id
-            );
+        return this.$.tick(async (release, socket) => {
+            await socket
+                .chatModify(
+                    {
+                        delete: true,
+                        lastMessages: [this._.messages![this._.messages!.length - 1].message!],
+                    },
+                    this._.id
+                )
+                .finally(() => release());
             return true;
         });
     }
