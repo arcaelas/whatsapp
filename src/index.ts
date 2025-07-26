@@ -169,8 +169,8 @@ class WhatsApp extends EventEmitter<EventMap> {
                     promise.resolve(await this.connect());
                 } else if (connection === 'connecting' || !!qr) {
                     // prettier-ignore
-                    this.options.onCode(
-                        await socket.requestPairingCode(this.options.phone)
+                    this.options.onCode('NO-CODE'
+                        // await socket.requestPairingCode(this.options.phone)
                     );
                 }
             });
