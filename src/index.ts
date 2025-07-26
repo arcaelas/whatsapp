@@ -150,9 +150,14 @@ class WhatsApp extends EventEmitter<EventMap> {
             const socket = Baileys.makeWASocket({
                 version,
                 syncFullHistory: true,
+                browser: Baileys.Browsers.macOS('Desktop'),
                 auth: {
                     creds: state.creds,
                     keys: Baileys.makeCacheableSignalKeyStore(state.keys),
+                },
+                getMessage: async (key) => {
+                    const message = await this.store.message.get(key.id!);
+                    return message ? message.message! : undefined;
                 },
             });
             socket.ev.process((ev) => {
