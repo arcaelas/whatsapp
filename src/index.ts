@@ -1,5 +1,5 @@
 import { merge, Noop, promify, sleep } from '@arcaelas/utils';
-import { Mutex } from 'async-mutex';
+import { Mutex, type MutexInterface } from 'async-mutex';
 import * as Baileys from 'baileys';
 import NodeCache from 'node-cache';
 import EventEmitter from 'node:events';
@@ -8,8 +8,6 @@ import Chat from './model/chat';
 import Message from './model/message';
 import Store, { Engine } from './static/Store';
 import useCache from './static/useCache';
-const logger = P({ level: 'fatal' });
-const msgRetryCounterCache = new NodeCache();
 
 /**
  * @description Estructura de configuración para iniciar sesión con WhatsApp.
@@ -60,7 +58,7 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @description
      * Socket for WhatsApp Web.
      */
-    protected socket: Baileys.WASocket;
+    protected socket: Baileys.WASocket | null = null;
     /**
      * @description
      * Mutex, used to prevent concurrent access to the socket.
@@ -79,8 +77,8 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @param func Function to execute.
      * @returns Result of the function.
      */
-    async tick<T extends Noop<[socket: Baileys.WASocket, store: Store], any>>(func: T): Promise<Awaited<ReturnType<T>>> {
-        return this.mutex.acquire().then(() => func(this.socket, this.store));
+    async tick<T extends Noop<[release: MutexInterface.Releaser, socket: Baileys.WASocket, store: Store], any>>(func: T): Promise<Awaited<ReturnType<T>>> {
+        return this.mutex.acquire(5).then((release) => func(release, this.socket!, this.store));
     }
 
     /**
@@ -91,7 +89,7 @@ class WhatsApp extends EventEmitter<EventMap> {
      */
     process(func: Noop<[event: Partial<Baileys.BaileysEventMap>, socket: Baileys.WASocket, store: Store]>) {
         return this.on('process', (event) => {
-            func(event, this.socket, this.store);
+            func(event, this.socket!, this.store);
         });
     }
 
@@ -101,13 +99,11 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @returns Promise that resolves to an object containing all documents.
      */
     async documents(): Promise<Record<string, any>> {
-        return await this.tick(async (_, store) => {
-            const documents: Record<string, any> = {};
-            for await (const document of store.document.values()) {
-                documents[document.key] = document.value;
-            }
-            return documents;
-        });
+        const documents: Record<string, any> = {};
+        for await (const document of this.store.document.values()) {
+            documents[document.key] = document.value;
+        }
+        return documents;
     }
 
     /**
@@ -116,13 +112,11 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @returns Promise that resolves to an array of chats.
      */
     async chats(): Promise<Chat[]> {
-        return await this.tick(async (_, store) => {
-            const chats: Chat[] = [];
-            for await (const chat of store.chat.values()) {
-                chats.push(new Chat(this, chat));
-            }
-            return chats;
-        });
+        const chats: Chat[] = [];
+        for await (const chat of this.store.chat.values()) {
+            chats.push(new Chat(this, chat));
+        }
+        return chats;
     }
 
     /**
@@ -131,13 +125,11 @@ class WhatsApp extends EventEmitter<EventMap> {
      * @returns Promise that resolves to an array of messages.
      */
     async messages(): Promise<Message[]> {
-        return await this.tick(async (_, store) => {
-            const messages: Message[] = [];
-            for await (const message of store.message.values()) {
-                messages.push(new Message(this, message));
-            }
-            return messages;
-        });
+        const messages: Message[] = [];
+        for await (const message of this.store.message.values()) {
+            messages.push(new Message(this, message));
+        }
+        return messages;
     }
 
     /**
@@ -148,21 +140,21 @@ class WhatsApp extends EventEmitter<EventMap> {
     protected async connect() {
         const promise = promify();
         try {
+            const logger = P({ level: 'fatal' });
             const { state, save } = await useCache(this.store);
-            const { version } = await Baileys.fetchLatestBaileysVersion();
             const socket = Baileys.makeWASocket({
-                version,
                 logger: logger,
                 maxMsgRetryCount: 4,
-                msgRetryCounterCache,
                 syncFullHistory: false,
                 printQRInTerminal: false,
                 connectTimeoutMs: 20_000,
                 retryRequestDelayMs: 350,
                 markOnlineOnConnect: false,
                 keepAliveIntervalMs: 30_000,
+                version: [2, 3000, 1023223821],
                 generateHighQualityLinkPreview: true,
-                browser: Baileys.Browsers.windows('Chrome'),
+                msgRetryCounterCache: new NodeCache(),
+                browser: ['Windows', 'Chrome', 'Chrome 114.0.5735.198'],
                 auth: {
                     creds: state.creds,
                     keys: Baileys.makeCacheableSignalKeyStore(state.keys, logger),
@@ -172,47 +164,42 @@ class WhatsApp extends EventEmitter<EventMap> {
                     return message ? message.message! : undefined;
                 },
             });
-            if (!socket.authState.creds.registered) {
-                await sleep(2000);
-                await this.store.document.unset('creds.json');
-                const code = await socket.requestPairingCode(this.options.phone);
-                await this.options.onCode(code);
-            }
-            socket.ev.process((ev) => {
-                this.emit('process', ev, socket, this.store);
-            });
-            socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-                const statusCode = lastDisconnect?.error?.['output']?.statusCode;
-                if (connection === 'open') {
-                    promise.resolve(socket);
-                } else if (connection === 'close') {
-                    if (statusCode !== Baileys.DisconnectReason.loggedOut) {
-                        promise.resolve(await this.connect());
-                    } else if (statusCode === Baileys.DisconnectReason.loggedOut) {
-                        promise.resolve(await this.connect());
-                    }
-                }
-            });
             socket.ev.process(async (event) => {
+                this.emit('process', event, socket, this.store);
                 if (event['creds.update']) {
                     await save();
                 }
+                if (event['connection.update']) {
+                    const { connection, lastDisconnect } = event['connection.update'];
+                    const statusCode = lastDisconnect?.error?.['output']?.statusCode;
+                    if (connection === 'open') {
+                        promise.resolve(socket);
+                    } else if (connection === 'close') {
+                        if (statusCode !== Baileys.DisconnectReason.loggedOut) {
+                            promise.resolve(await this.connect());
+                        } else if (statusCode === Baileys.DisconnectReason.loggedOut) {
+                            promise.resolve(await this.connect());
+                        }
+                    }
+                }
                 // prettier-ignore
                 await Promise.allSettled(
-                    [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
-                    .map(async chat => {
-                        await this.store.chat.set(chat);
-                        this.emit('chat:created', new Chat(this, chat));
-                    })
-                );
+                        [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
+                        .map(async chat => {
+                            await this.store.chat.set(chat);
+                            this.emit('chat:created', new Chat(this, chat));
+                        })
+                    );
                 // prettier-ignore
                 await Promise.allSettled(
                     [...event['messaging-history.set']?.messages || [], ...event['messages.upsert']?.messages || []]
-                    .map(async message=> {
-                        await this.store.message.set(message);
-                        this.emit('message:created', new Message(this, message));
-                    })
-                )
+                        .map(async message=> {
+                            await this.store.message.set(message);
+                            if(message.message?.extendedTextMessage || message.message?.imageMessage || message.message?.videoMessage || message.message?.audioMessage || message.message?.locationMessage){
+                                this.emit('message:created', new Message(this, message));
+                            }
+                        })
+                    );
                 // prettier-ignore
                 await Promise.allSettled(
                     (event['chats.update'] || [])
@@ -224,7 +211,7 @@ class WhatsApp extends EventEmitter<EventMap> {
                                 this.emit('chat:updated', new Chat(this, chat));
                             }
                         })
-                );
+                    );
                 // prettier-ignore
                 await Promise.allSettled(
                     (event['messages.update'] || [])
@@ -233,10 +220,11 @@ class WhatsApp extends EventEmitter<EventMap> {
                             if (payload) {
                                 const message = merge(payload, update) as Baileys.WAProto.WebMessageInfo;
                                 await this.store.message.set(message);
-                                this.emit('message:updated', new Message(this, message));
+                                if(message.message?.extendedTextMessage || message.message?.imageMessage || message.message?.videoMessage || message.message?.audioMessage || message.message?.locationMessage)
+                                    this.emit('message:updated', new Message(this, message));
                             }
                         })
-                );
+                    );
                 for (const { id } of event['messages.delete']?.['keys'] || []) {
                     await this.store.message.unset(id);
                 }
@@ -244,6 +232,12 @@ class WhatsApp extends EventEmitter<EventMap> {
                     await this.store.chat.unset(key);
                 }
             });
+            if (!socket.authState.creds.registered) {
+                await sleep(2000);
+                await this.store.document.unset('creds.json');
+                const code = await socket.requestPairingCode(this.options.phone);
+                await this.options.onCode(code);
+            }
         } catch (error) {
             promise.reject(error);
         }
