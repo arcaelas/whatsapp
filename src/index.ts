@@ -1,4 +1,4 @@
-import { merge, Noop, promify } from '@arcaelas/utils';
+import { merge, Noop, promify, sleep } from '@arcaelas/utils';
 import { type Boom } from '@hapi/boom';
 import { Mutex } from 'async-mutex';
 import * as Baileys from 'baileys';
@@ -168,6 +168,7 @@ class WhatsApp extends EventEmitter<EventMap> {
                 else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
                     promise.resolve(await this.connect());
                 } else if (connection === 'connecting' || !!qr) {
+                    await sleep(5000);
                     // prettier-ignore
                     this.options.onCode('NO-CODE'
                         // await socket.requestPairingCode(this.options.phone)
