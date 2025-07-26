@@ -1,6 +1,6 @@
 import { Noop } from '@arcaelas/utils';
 import * as Baileys from 'baileys';
-import WhatsApp from 'src';
+import WhatsApp from '..';
 
 type Serialize<T> = { [K in keyof T as T[K] extends Noop ? never : K]: T[K] };
 
@@ -17,12 +17,7 @@ export default class Base<T> {
      * @returns A JSON representation of this entity.
      */
     toJSON() {
-        const o: any = {};
-        for (const k in this) {
-            if (typeof this[k] === 'function') continue;
-            o[k] = this[k];
-        }
-        return o;
+        return this._;
     }
     /**
      * @description
