@@ -171,10 +171,11 @@ class WhatsApp extends EventEmitter<EventMap> {
         });
 
         await sleep(5000);
+        await this.socket.waitForSocketOpen();
         if (this.socket.authState.creds.registered) {
             promise.resolve(this.socket);
         } else {
-            await this.options['code'](await this.socket.requestPairingCode(this.options.phone));
+            await this.options.onCode(await this.socket.requestPairingCode(this.options.phone));
         }
 
         this.socket.ev.process(async (event) => {
