@@ -108,14 +108,15 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      * @param options Additional options for the reply.
      * @returns Promise that resolves to a boolean indicating success.
      */
-    async reply(text: string, options?: { once: boolean }): Promise<boolean>;
-    async reply(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
-    async reply(content: any, options?: any): Promise<boolean> {
+    async reply(text: string, options?: { once: boolean }): Promise<Message | null>;
+    async reply(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<Message | null>;
+    async reply(content: any, options?: any): Promise<Message | null> {
         return this.$.tick(async (release, socket) => {
-            // prettier-ignore
+            let m: Baileys.WAProto.IWebMessageInfo | undefined;
             const _options: MessageOptions = { type: 'text', ...options } as any;
+            // prettier-ignore
             if (typeof content === 'string') {
-                await socket.sendMessage(
+                m = await socket.sendMessage(
                     this.raw.key.remoteJid!,
                     {
                         text: content,
@@ -123,10 +124,8 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                     },
                     { quoted: this.raw }
                 );
-                release();
-                return true;
             } else if (Buffer.isBuffer(content)) {
-                await socket.sendMessage(
+                m = await socket.sendMessage(
                     this.raw.key.remoteJid!,
                     {
                         viewOnce: _options.once || false,
@@ -138,27 +137,9 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                     },
                     { quoted: this.raw }
                 );
-                release();
-                return true;
             }
             release();
-            return false;
-        });
-    }
-
-    /**
-     * @description
-     * Marks this message as seen.
-     * @returns Promise that resolves to a boolean indicating success.
-     */
-    async seen(): Promise<boolean> {
-        return this.$.tick(async (release, socket) => {
-            // prettier-ignore
-            await socket.chatModify({
-                markRead: true,
-                lastMessages: [this.raw],
-            }, this.raw.key.remoteJid!).finally(() => release());
-            return true;
+            return m ? new Message(this.$, m!) : null;
         });
     }
 
@@ -179,7 +160,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                 await socket.chatModify({
                     deleteForMe: {
                         key: this.raw.key,
-                        deleteMedia: true,
+                        deleteMedia: this.type !== 'text',
                         timestamp: this.raw.messageTimestamp! as number,
                     },
                 }, this.raw.key.remoteJid!);

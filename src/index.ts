@@ -175,61 +175,104 @@ class WhatsApp extends EventEmitter<EventMap> {
                     if (connection === 'open') {
                         promise.resolve(socket);
                     } else if (connection === 'close') {
-                        if (statusCode !== Baileys.DisconnectReason.loggedOut) {
+                        if (statusCode === Baileys.DisconnectReason.loggedOut) {
                             promise.resolve(await this.connect());
-                        } else if (statusCode === Baileys.DisconnectReason.loggedOut) {
+                        } else if (statusCode === Baileys.DisconnectReason.restartRequired) {
                             promise.resolve(await this.connect());
+                        } else {
+                            promise.reject(lastDisconnect);
                         }
                     }
                 }
+            });
+            socket.ev.on('messaging-history.set', ({ contacts = [], chats = [], messages = [] }) => {
                 // prettier-ignore
-                await Promise.allSettled(
-                        [...event['messaging-history.set']?.chats || [], ...event['chats.upsert'] || []]
-                        .map(async chat => {
-                            await this.store.chat.set(chat);
-                            this.emit('chat:created', new Chat(this, chat));
-                        })
-                    );
+                Promise.allSettled(
+                    contacts.map(async c=>{
+                        await this.store.contact.set(c);
+                    })
+                );
                 // prettier-ignore
-                await Promise.allSettled(
-                    [...event['messaging-history.set']?.messages || [], ...event['messages.upsert']?.messages || []]
-                        .map(async message=> {
-                            await this.store.message.set(message);
-                            if(message.message?.extendedTextMessage || message.message?.imageMessage || message.message?.videoMessage || message.message?.audioMessage || message.message?.locationMessage){
-                                this.emit('message:created', new Message(this, message));
+                Promise.allSettled(
+                    chats.map(async c=>{
+                        await this.store.chat.set(c);
+                        this.emit('chat:created', new Chat(this, c));
+                    })
+                );
+                // prettier-ignore
+                Promise.allSettled(
+                    messages.map(async m=>{
+                        await this.store.message.set(m);
+                        const message = new Message(this, m);
+                        if(['text', 'image', 'audio', 'video', 'location'].includes(message.type)){
+                            this.emit('message:created', message);
+                        }
+                    })
+                );
+            });
+            socket.ev.on('chats.upsert', (chats) => {
+                // prettier-ignore
+                Promise.allSettled(
+                    chats.map(async c=>{
+                        await this.store.chat.set(c);
+                        this.emit('chat:created', new Chat(this, c));
+                    })
+                )
+            });
+            socket.ev.on('chats.update', (chats) => {
+                // prettier-ignore
+                Promise.allSettled(
+                    chats.map(async c=>{
+                        const mem = await this.store.chat.get(c.id!)
+                        const payload = merge({}, mem, c);
+                        await this.store.chat.set(payload);
+                        this.emit('chat:updated', new Chat(this, payload));
+                    })
+                )
+            });
+            socket.ev.on('chats.delete', (ids) => {
+                // prettier-ignore
+                Promise.allSettled(
+                    ids.map(async id=>{
+                        await this.store.chat.unset(id);
+                        this.emit('chat:deleted', id);
+                    })
+                )
+            });
+            socket.ev.on('messages.upsert', ({ type, messages }) => {
+                if (type === 'notify') {
+                    // prettier-ignore
+                    Promise.allSettled(
+                        messages.map(async m=>{
+                            await this.store.message.set(m);
+                            const message = new Message(this, m);
+                            if(['text', 'image', 'audio', 'video', 'location'].includes(message.type)){
+                                this.emit('message:created', message);
                             }
                         })
-                    );
-                // prettier-ignore
-                await Promise.allSettled(
-                    (event['chats.update'] || [])
-                        .map(async update => {
-                            const payload = await this.store.chat.get(update.id!);
-                            if (payload) {
-                                const chat = merge(payload, update) as Baileys.Chat;
-                                await this.store.chat.set(chat);
-                                this.emit('chat:updated', new Chat(this, chat));
-                            }
-                        })
-                    );
-                // prettier-ignore
-                await Promise.allSettled(
-                    (event['messages.update'] || [])
-                        .map(async update => {
-                            const payload = await this.store.message.get(update.key.id!);
-                            if (payload) {
-                                const message = merge(payload, update) as Baileys.WAProto.WebMessageInfo;
-                                await this.store.message.set(message);
-                                if(message.message?.extendedTextMessage || message.message?.imageMessage || message.message?.videoMessage || message.message?.audioMessage || message.message?.locationMessage)
-                                    this.emit('message:updated', new Message(this, message));
-                            }
-                        })
-                    );
-                for (const { id } of event['messages.delete']?.['keys'] || []) {
-                    await this.store.message.unset(id);
+                    )
                 }
-                for (const key of event['chats.delete'] || []) {
-                    await this.store.chat.unset(key);
+            });
+            socket.ev.on('messages.update', (messages) => {
+                // prettier-ignore
+                Promise.allSettled(
+                    messages.map(async m=>{
+                        const mem = await this.store.message.get(m.key.id!);
+                        const payload = merge({}, mem, m);
+                        await this.store.message.set(payload);
+                        this.emit('message:updated', new Message(this, payload));
+                    })
+                )
+            });
+            socket.ev.on('messages.delete', (e) => {
+                if (e['keys']) {
+                    // prettier-ignore
+                    Promise.allSettled(
+                        e['keys'].map(async k=>{
+                            await this.store.message.unset(k.id!);
+                            this.emit('message:deleted', k.id!);
+                        })
+                    )
                 }
             });
             if (!socket.authState.creds.registered) {

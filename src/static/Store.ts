@@ -134,6 +134,60 @@ export default class Store {
         },
     };
 
+    contact = {
+        set: async (contact: Baileys.Contact): Promise<boolean> => {
+            // prettier-ignore
+            return this.engine.set(
+                `contact/${contact.id}/index`,
+                JSON.stringify(contact, Baileys.BufferJSON.replacer)
+            );
+        },
+        get: async (id: Baileys.Contact['id']): Promise<Baileys.Contact | null> => {
+            // prettier-ignore
+            return JSON.parse(
+                await this.engine.get(`contact/${id}/index`) ?? 'null',
+                Baileys.BufferJSON.reviver
+            );
+        },
+        has: async (id: Baileys.Contact['id']): Promise<boolean> => {
+            return await this.engine.has(`contact/${id}/index`);
+        },
+        unset: async (id: Baileys.Contact['id']): Promise<boolean> => {
+            return await this.engine.unset(`contact/${id}/index`);
+        },
+        keys: () => {
+            const _this = this;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    for await (const key of await _this.engine.match('contact/*/index')) {
+                        const [, id] = key.match(/contact\/([^/]+)\/index/) ?? [];
+                        yield id as Baileys.Contact['id'];
+                    }
+                },
+            };
+        },
+        values: () => {
+            const _this = this;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    for await (const id of _this.contact.keys()) {
+                        yield (await _this.contact.get(id))!;
+                    }
+                },
+            };
+        },
+        entries: () => {
+            const _this = this;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    for await (const id of _this.contact.keys()) {
+                        yield [id as Baileys.Contact['id'], (await _this.contact.get(id))!] as const;
+                    }
+                },
+            };
+        },
+    };
+
     chat = {
         set: async (chat: Baileys.Chat): Promise<boolean> => {
             // prettier-ignore
