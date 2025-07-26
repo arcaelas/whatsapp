@@ -1,12 +1,15 @@
 import { merge, Noop, promify, sleep } from '@arcaelas/utils';
-import { type Boom } from '@hapi/boom';
 import { Mutex } from 'async-mutex';
 import * as Baileys from 'baileys';
+import NodeCache from 'node-cache';
 import EventEmitter from 'node:events';
+import P from 'pino';
 import Chat from './model/chat';
 import Message from './model/message';
 import Store, { Engine } from './static/Store';
 import useCache from './static/useCache';
+const logger = P({ level: 'fatal' });
+const msgRetryCounterCache = new NodeCache();
 
 /**
  * @description Estructura de configuración para iniciar sesión con WhatsApp.
@@ -149,30 +152,45 @@ class WhatsApp extends EventEmitter<EventMap> {
             const { version } = await Baileys.fetchLatestBaileysVersion();
             const socket = Baileys.makeWASocket({
                 version,
-                syncFullHistory: true,
-                browser: Baileys.Browsers.macOS('Desktop'),
+                logger: logger,
+                maxMsgRetryCount: 4,
+                msgRetryCounterCache,
+                syncFullHistory: false,
+                printQRInTerminal: false,
+                connectTimeoutMs: 20_000,
+                retryRequestDelayMs: 350,
+                markOnlineOnConnect: false,
+                keepAliveIntervalMs: 30_000,
+                generateHighQualityLinkPreview: true,
+                browser: Baileys.Browsers.windows('Chrome'),
                 auth: {
                     creds: state.creds,
-                    keys: Baileys.makeCacheableSignalKeyStore(state.keys),
+                    keys: Baileys.makeCacheableSignalKeyStore(state.keys, logger),
                 },
                 getMessage: async (key) => {
                     const message = await this.store.message.get(key.id!);
                     return message ? message.message! : undefined;
                 },
             });
+            if (!socket.authState.creds.registered) {
+                await sleep(2000);
+                await this.store.document.unset('creds.json');
+                const code = await socket.requestPairingCode(this.options.phone);
+                await this.options.onCode(code);
+            }
             socket.ev.process((ev) => {
                 this.emit('process', ev, socket, this.store);
             });
             socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-                if (connection === 'open') promise.resolve(socket);
-                else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
-                    promise.resolve(await this.connect());
-                } else if (connection === 'connecting' || !!qr) {
-                    await sleep(5000);
-                    // prettier-ignore
-                    this.options.onCode('NO-CODE'
-                        // await socket.requestPairingCode(this.options.phone)
-                    );
+                const statusCode = lastDisconnect?.error?.['output']?.statusCode;
+                if (connection === 'open') {
+                    promise.resolve(socket);
+                } else if (connection === 'close') {
+                    if (statusCode !== Baileys.DisconnectReason.loggedOut) {
+                        promise.resolve(await this.connect());
+                    } else if (statusCode === Baileys.DisconnectReason.loggedOut) {
+                        promise.resolve(await this.connect());
+                    }
                 }
             });
             socket.ev.process(async (event) => {
