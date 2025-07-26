@@ -155,6 +155,9 @@ class WhatsApp extends EventEmitter<EventMap> {
                     keys: Baileys.makeCacheableSignalKeyStore(state.keys),
                 },
             });
+            socket.ev.process((ev) => {
+                this.emit('process', ev, socket, this.store);
+            });
             socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
                 if (connection === 'open') promise.resolve(socket);
                 else if (connection === 'close' && (lastDisconnect?.error as Boom)?.output?.statusCode !== Baileys.DisconnectReason.loggedOut) {
