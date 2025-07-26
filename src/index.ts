@@ -279,6 +279,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
 export default WhatsApp;
 export * from './static/Store';
 export { default as Store } from './static/Store';
+export { default as useCache } from './static/useCache';
 
 export * from './model/chat';
 export { default as Chat } from './model/chat';
