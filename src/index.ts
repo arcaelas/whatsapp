@@ -71,11 +71,11 @@ class WhatsApp extends EventEmitter<EventMap> {
 
     constructor(options: IWhatsApp) {
         super({ captureRejections: true });
-        this.store = new Store(this.options.store);
         this.options = {
             ...options,
             phone: options.phone.replace(/\D/g, ''),
         };
+        this.store = new Store(this.options.store);
         this.connect();
     }
 
