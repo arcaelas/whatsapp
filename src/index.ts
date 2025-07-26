@@ -173,7 +173,7 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
         this.socket = Baileys.makeWASocket({
             version,
             syncFullHistory: true,
-            browser: this.options.browser,
+            ...(this.options.browser ? { browser: this.options.browser } : {}),
             auth: {
                 creds: state.creds,
                 keys: Baileys.makeCacheableSignalKeyStore(state.keys),
