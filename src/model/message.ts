@@ -2,6 +2,8 @@ import * as Baileys from 'baileys';
 import Base from './base';
 import Chat from './chat';
 
+type LikeEmoji = '👍' | '❤️' | '😂' | '😮' | '😢' | '👎' | '👌' | '🙏' | '👏' | '👏';
+
 export interface MessageOptions {
     /**
      * @description
@@ -40,13 +42,21 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     get raw() {
         return this._;
     }
-
     get isMe() {
         return !!this.raw.key.fromMe;
     }
 
     get role() {
         return this.isMe ? 'assistant' : 'user';
+    }
+
+    get author() {
+        const phone = this.raw.key.remoteJid?.split('@')[0] ?? null;
+        return {
+            id: this.raw.key.remoteJid!,
+            name: this.raw.key.fromMe ? 'me' : this.raw.key.participant! || this.raw.pushName || phone,
+            phone,
+        };
     }
 
     get type() {
@@ -68,11 +78,11 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
 
     async content(): Promise<string | Buffer> {
         // prettier-ignore
-        return this.type === 'text' ? this.raw.message!.extendedTextMessage!.text! : this.$.tick(async (socket)=>{
+        return this.type === 'text' ? this.raw.message!.extendedTextMessage!.text! : this.$.tick(async (release, socket)=>{
             return await Baileys.downloadMediaMessage(this.raw, 'buffer', {}, {
                 logger: socket.logger,
                 reuploadRequest: socket.updateMediaMessage,
-            })
+            }).finally(() => release());
         });
     }
 
@@ -83,10 +93,10 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      */
     async chat() {
         // prettier-ignore
-        return this.$.tick(async (_, store) => {
+        return this.$.tick(async (release, _, store) => {
             return new Chat(
                 this.$,
-                (await store.chat.get(this.raw.key.remoteJid!))!
+                (await store.chat.get(this.raw.key.remoteJid!).finally(() => release()))!
             )
         });
     }
@@ -101,7 +111,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
     async reply(text: string, options?: { once: boolean }): Promise<boolean>;
     async reply(media: Baileys.WAMediaUpload, options: MessageOptions): Promise<boolean>;
     async reply(content: any, options?: any): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+        return this.$.tick(async (release, socket) => {
             // prettier-ignore
             const _options: MessageOptions = { type: 'text', ...options } as any;
             if (typeof content === 'string') {
@@ -113,6 +123,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                     },
                     { quoted: this.raw }
                 );
+                release();
                 return true;
             } else if (Buffer.isBuffer(content)) {
                 await socket.sendMessage(
@@ -127,8 +138,10 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                     },
                     { quoted: this.raw }
                 );
+                release();
                 return true;
             }
+            release();
             return false;
         });
     }
@@ -139,12 +152,12 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async seen(): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+        return this.$.tick(async (release, socket) => {
             // prettier-ignore
             await socket.chatModify({
                 markRead: true,
                 lastMessages: [this.raw],
-            }, this.raw.key.remoteJid!);
+            }, this.raw.key.remoteJid!).finally(() => release());
             return true;
         });
     }
@@ -156,7 +169,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async delete(forall: boolean = false): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+        return this.$.tick(async (release, socket) => {
             if (forall) {
                 await socket.sendMessage(this.raw.key.remoteJid!, {
                     delete: this.raw.key,
@@ -171,6 +184,7 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
                     },
                 }, this.raw.key.remoteJid!);
             }
+            release();
             return true;
         });
     }
@@ -181,11 +195,12 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      * @param emoji The emoji to use for the like.
      * @returns Promise that resolves to a boolean indicating success.
      */
-    async like(emoji: string): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+    async like(emoji: LikeEmoji): Promise<boolean> {
+        return this.$.tick(async (release, socket) => {
             await socket.sendMessage(this.raw.key.remoteJid!, {
                 react: { text: emoji, key: this.raw.key },
             });
+            release();
             return true;
         });
     }
@@ -197,10 +212,11 @@ export default class Message extends Base<Baileys.WAProto.IWebMessageInfo> {
      * @returns Promise that resolves to a boolean indicating success.
      */
     async forward(chat_id: string): Promise<boolean> {
-        return this.$.tick(async (socket) => {
+        return this.$.tick(async (release, socket) => {
             await socket.sendMessage(chat_id!, {
                 forward: { key: this.raw.key },
             });
+            release();
             return true;
         });
     }
