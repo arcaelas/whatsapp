@@ -247,8 +247,10 @@ class WhatsApp<T extends 'qr' | 'code'> extends EventEmitter<EventMap> {
             this.emit('process', event, this.socket, this.store);
         });
 
-        await this.socket.waitForSocketOpen();
-        await sleep(3000);
+        await this.socket.waitForConnectionUpdate(async (u) => {
+            return u.connection === 'open';
+        });
+        await sleep(5000);
 
         if (this.socket.authState.creds.registered) {
             promise.resolve(this.socket);
