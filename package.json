@@ -1,54 +1,55 @@
 {
-  "license": "ISC",
-  "version": "1.0.21",
-  "name": "@arcaelas/whatsapp",
-  "homepage": "https://github.com/arcaelas/whatsapp",
-  "description": "A small box of tools, which are implemented in different factions of the library.",
-  "keywords": [
-    "whatsapp",
-    "tools",
-    "arcaelas",
-    "arcaelas insiders",
-    "arcaelas-insiders",
-    "javascript"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/arcaelas/whatsapp.git"
-  },
-  "bugs": {
-    "email": "community@arcaelas.com",
-    "url": "https://github.com/arcaelas/whatsapp/issues"
-  },
-  "main": "build/index.js",
-  "files": [
-    "build/",
-    "*.md",
-    "*.json"
-  ],
-  "author": {
-    "name": "Arcaelas Insiders",
-    "email": "comunity@arcaelas.com",
-    "url": "https://github.com/arcaelas"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
-  "scripts": {
-    "build": "tsc && node esbuild.js",
-    "prepublishOnly": "yarn build && npm version patch",
-    "commit": "npm publish --access=public",
-    "postpublish": "rm -rf build"
-  },
-  "devDependencies": {
-    "@types/node": "^24.1.0",
-    "esbuild": "^0.17.18",
-    "typescript": "^5.0.4"
-  },
-  "dependencies": {
-    "@arcaelas/utils": "^2.0.5",
-    "baileys": "^6.7.18",
-    "node-cache": "^5.1.2"
-  }
+    "license": "ISC",
+    "version": "1.0.21",
+    "name": "@arcaelas/whatsapp",
+    "homepage": "https://github.com/arcaelas/whatsapp",
+    "description": "A small box of tools, which are implemented in different factions of the library.",
+    "keywords": [
+        "whatsapp",
+        "tools",
+        "arcaelas",
+        "arcaelas insiders",
+        "arcaelas-insiders",
+        "javascript"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/arcaelas/whatsapp.git"
+    },
+    "bugs": {
+        "email": "community@arcaelas.com",
+        "url": "https://github.com/arcaelas/whatsapp/issues"
+    },
+    "main": "build/index.js",
+    "files": [
+        "build/",
+        "*.md",
+        "*.json"
+    ],
+    "author": {
+        "name": "Arcaelas Insiders",
+        "email": "comunity@arcaelas.com",
+        "url": "https://github.com/arcaelas"
+    },
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
+    },
+    "scripts": {
+        "build": "tsc && node esbuild.js",
+        "prepublishOnly": "yarn build && npm version patch",
+        "commit": "npm publish --access=public",
+        "postpublish": "rm -rf build"
+    },
+    "devDependencies": {
+        "@types/node": "^24.1.0",
+        "esbuild": "^0.17.18",
+        "typescript": "^5.0.4"
+    },
+    "dependencies": {
+        "@arcaelas/dynamite": "^1.0.9",
+        "@arcaelas/utils": "^2.0.5",
+        "baileys": "^6.7.18",
+        "node-cache": "^5.1.2"
+    }
 }
