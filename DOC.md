@@ -66,28 +66,89 @@ await pair((qr) => showQR(qr))
 
 ## Abstract Class Store
 
-Clase abstracta de almacenamiento key-value.
+Capa de persistencia con arquitectura de dos niveles: Store parsea patrones, Proveedor ejecuta operaciones.
 
-##### Metodos
+##### Arquitectura
+
+```
+Store (abstracto)
+  ├── parse(pattern) → string[]    // expande {} en rutas
+  └── delega al Proveedor
+
+Proveedor (implementacion)
+  ├── Recibe rutas parseadas
+  ├── Maneja * y :id como quiera
+  └── Ejecuta operaciones reales
+```
+
+##### Namespaces
+
+| Namespace | Patron | Contenido |
+|-----------|--------|-----------|
+| `session` | `session/{creds,keys/*}` | Credenciales de Baileys |
+| `contacts` | `contacts/:uid` | Datos de contacto |
+| `chats` | `chats/:cid` | Datos de chat |
+| `messages` | `messages/:cid/:mid` | Datos de mensaje |
+
+##### Metodos del Store
 
 | Metodo | Argumentos | Retorno | Descripcion |
 |--------|------------|---------|-------------|
-| `get` | `(key, fallback?)` | `string \| null` | Obtiene valor |
-| `set` | `(key, value)` | `boolean` | Almacena valor |
-| `has` | `(key)` | `boolean` | Verifica existencia |
-| `unset` | `(key)` | `boolean` | Elimina clave |
-| `pattern` | `(glob)` | `string[]` | Busca claves por patron |
+| `get` | `(pattern)` | `Promise<{...}[]>` | Obtiene valores |
+| `set` | `(pattern, value)` | `Promise<{key, success}[]>` | Almacena valores |
+| `has` | `(pattern)` | `Promise<{key, success}[]>` | Verifica existencia |
+| `unset` | `(pattern)` | `Promise<{key, success}[]>` | Elimina claves |
 
-**Patrones:** `*` wildcard, `{a,b}` seleccion multiple
+##### Flujo
+
+```
+store.get('contacts/{:uid1,:uid2}/name')
+→ [{ name: 'Juan' }, { name: 'Pedro' }]
+
+store.set('contacts/:uid/name', 'Juan')
+→ [{ key: 'contacts/:uid/name', success: true }]
+
+store.has('messages/{:mid1,:mid2}')
+→ [{ key: 'messages/:mid1', success: true }, { key: 'messages/:mid2', success: false }]
+
+store.unset('chats/:cid')
+→ [{ key: 'chats/:cid', success: true }]
+```
+
+##### Proveedor
+
+El Store parsea los patterns y envia keys limpios al Proveedor. El Proveedor nunca recibe patterns, solo arrays de rutas literales.
+
+**Entrada:** `['contacts/uid123', 'contacts/uid456']`
+
+**Salida esperada:**
+
+| Metodo | Retorno |
+|--------|---------|
+| `get` | `[{...}]` |
+| `set` | `[{ key, success }]` |
+| `has` | `[{ key, success }]` |
+| `unset` | `[{ key, success }]` |
 
 ```typescript
-class MemoryStore extends Store {
-  private data = new Map<string, string>()
-  get(key: string, fallback: string | null = null) { return this.data.get(key) ?? fallback }
-  set(key: string, value: string | null) { this.data.set(key, value); return true }
-  has(key: string) { return this.data.has(key) }
-  unset(key: string) { return this.data.delete(key) }
-  pattern(glob: string) { /* implementacion */ }
+class RedisProvider extends Store {
+  constructor(private redis: Redis) { super() }
+
+  async get(keys: string[]) {
+    return Promise.all(keys.map(key => this.redis.get(key).then(v => JSON.parse(v))))
+  }
+
+  async set(keys: string[], value: any) {
+    return Promise.all(keys.map(async key => ({ key, success: await this.redis.set(key, JSON.stringify(value)) === 'OK' })))
+  }
+
+  async has(keys: string[]) {
+    return Promise.all(keys.map(async key => ({ key, success: await this.redis.exists(key) === 1 })))
+  }
+
+  async unset(keys: string[]) {
+    return Promise.all(keys.map(async key => ({ key, success: await this.redis.del(key) === 1 })))
+  }
 }
 ```
 
