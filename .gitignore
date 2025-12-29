@@ -1,5 +1,6 @@
 # Credentials
 .env
+.baileys
 .env.*
 !.env.example
 serverless.yml
