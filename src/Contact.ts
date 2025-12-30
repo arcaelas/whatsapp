@@ -35,18 +35,18 @@ export function contact(wa: Context) {
          * @returns Contacto propio o null si no hay conexion.
          */
         static async me(): Promise<_Contact | null> {
-            if (!wa._socket?.user) return null;
-            const jid = jidNormalizedUser(wa._socket.user.id);
+            if (!wa.socket?.user) return null;
+            const jid = jidNormalizedUser(wa.socket.user.id);
             const existing = await _Contact.get(jid);
             if (existing) return existing;
             const data: IContact = {
                 id: jid,
-                name: wa._socket.user.name ?? jid.split('@')[0],
+                name: wa.socket.user.name ?? jid.split('@')[0],
                 phone: jid.split('@')[0],
                 photo: null,
-                custom_name: wa._socket.user.name ?? jid.split('@')[0],
+                custom_name: wa.socket.user.name ?? jid.split('@')[0],
             };
-            await wa._store.contact.set(data);
+            await wa.engine.contact(data.id, data);
             return new _Contact(data);
         }
 
@@ -56,7 +56,7 @@ export function contact(wa: Context) {
          * @returns Contacto o null si no existe.
          */
         static async get(uid: string): Promise<_Contact | null> {
-            const data = await wa._store.contact.get(uid);
+            const data = await wa.engine.contact(uid);
             return data ? new _Contact(data) : null;
         }
 
@@ -67,7 +67,7 @@ export function contact(wa: Context) {
          * @returns Array de contactos.
          */
         static async find(offset: number, limit: number): Promise<_Contact[]> {
-            const items = await wa._store.contact.find(offset, limit);
+            const items = await wa.engine.contacts(offset, limit);
             return items.map((data) => new _Contact(data));
         }
 
@@ -87,7 +87,7 @@ export function contact(wa: Context) {
                 phone: this.phone,
                 type: 'contact' as const,
             };
-            await wa._store.chat.set(data);
+            await wa.engine.chat(data.id, data);
             return new wa.Chat(data);
         }
 
@@ -98,7 +98,7 @@ export function contact(wa: Context) {
          */
         async rename(name: string): Promise<boolean> {
             this.custom_name = name;
-            return await wa._store.contact.set(this as IContact);
+            return await wa.engine.contact(this.id, this as IContact);
         }
     };
 }

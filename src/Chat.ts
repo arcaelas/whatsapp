@@ -32,9 +32,9 @@ export function chat(wa: Context) {
      * @returns true si se envio correctamente.
      */
     async function _send(cid: string, content: AnyMessageContent, mid?: string): Promise<boolean> {
-        if (!wa._socket) return false;
+        if (!wa.socket) return false;
         const options = mid ? { quoted: { key: { remoteJid: cid, id: mid }, message: {} } } : undefined;
-        const result = await wa._socket.sendMessage(cid, content, options as never);
+        const result = await wa.socket.sendMessage(cid, content, options as never);
         return !!result?.key?.id;
     }
     return class _Chat extends Chat {
@@ -49,7 +49,7 @@ export function chat(wa: Context) {
          * @returns Chat o null si no existe.
          */
         static async get(cid: string): Promise<_Chat | null> {
-            const data = await wa._store.chat.get(cid);
+            const data = await wa.engine.chat(cid);
             return data ? new _Chat(data) : null;
         }
 
@@ -60,7 +60,7 @@ export function chat(wa: Context) {
          * @returns Array de chats.
          */
         static async find(offset: number, limit: number): Promise<_Chat[]> {
-            const items = await wa._store.chat.find(offset, limit);
+            const items = await wa.engine.chats(offset, limit);
             return items.map((data) => new _Chat(data));
         }
 
@@ -71,14 +71,14 @@ export function chat(wa: Context) {
          * @returns true si se marco correctamente.
          */
         static async seen(cid: string, mid?: string): Promise<boolean> {
-            if (!wa._socket) return false;
+            if (!wa.socket) return false;
             if (mid) {
-                const msg = await wa._store.message.get(cid, mid);
+                const msg = await wa.engine.message(cid, mid);
                 if (!msg) return false;
-                await wa._socket.readMessages([{ remoteJid: cid, id: mid, participant: msg.uid }]);
+                await wa.socket.readMessages([{ remoteJid: cid, id: mid, participant: msg.uid }]);
                 return true;
             }
-            const messages = await wa._store.message.find(cid, 0, 1);
+            const messages = await wa.engine.messages(cid, 0, 1);
             if (!messages.length) return false;
             return _Chat.seen(cid, messages[0].id);
         }
@@ -91,8 +91,8 @@ export function chat(wa: Context) {
          * @returns Array de contactos (incluye me en grupos).
          */
         static async members(cid: string, offset: number, limit: number) {
-            if (cid.endsWith('@g.us') && wa._socket) {
-                const metadata = await wa._socket.groupMetadata(cid);
+            if (cid.endsWith('@g.us') && wa.socket) {
+                const metadata = await wa.socket.groupMetadata(cid);
                 const participants = metadata.participants.slice(offset, offset + limit);
                 const members: InstanceType<typeof wa.Contact>[] = [];
                 for (const p of participants) {
@@ -127,7 +127,7 @@ export function chat(wa: Context) {
          * @returns Array de mensajes.
          */
         static async messages(cid: string, offset: number, limit: number) {
-            const items = await wa._store.message.find(cid, offset, limit);
+            const items = await wa.engine.messages(cid, offset, limit);
             return items.map((data) => new wa.Message(data));
         }
 
@@ -220,8 +220,8 @@ export function chat(wa: Context) {
          * @returns true si se actualizo correctamente.
          */
         static async typing(cid: string, active: boolean): Promise<boolean> {
-            if (!wa._socket) return false;
-            await wa._socket.sendPresenceUpdate(active ? 'composing' : 'available', cid);
+            if (!wa.socket) return false;
+            await wa.socket.sendPresenceUpdate(active ? 'composing' : 'available', cid);
             return true;
         }
 
@@ -232,8 +232,8 @@ export function chat(wa: Context) {
          * @returns true si se actualizo correctamente.
          */
         static async recording(cid: string, active: boolean): Promise<boolean> {
-            if (!wa._socket) return false;
-            await wa._socket.sendPresenceUpdate(active ? 'recording' : 'available', cid);
+            if (!wa.socket) return false;
+            await wa.socket.sendPresenceUpdate(active ? 'recording' : 'available', cid);
             return true;
         }
 

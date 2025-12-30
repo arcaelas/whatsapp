@@ -44,7 +44,7 @@ export function message(wa: Context) {
          * const msg = await Message.get('5491155555555@s.whatsapp.net', 'ABC123')
          */
         static async get(cid: string, mid: string): Promise<_Message | null> {
-            const data = await wa._store.message.get(cid, mid);
+            const data = await wa.engine.message(cid, mid);
             return data ? new _Message(data) : null;
         }
 
@@ -56,13 +56,13 @@ export function message(wa: Context) {
          * @returns true si se envio la solicitud correctamente.
          */
         static async delete(cid: string, mid: string, all?: boolean): Promise<boolean> {
-            if (!wa._socket) return false;
+            if (!wa.socket) return false;
             const msg = await _Message.get(cid, mid);
             if (!msg) return false;
             if (all && msg.me) {
-                await wa._socket.sendMessage(cid, { delete: { remoteJid: cid, id: mid, fromMe: true } });
+                await wa.socket.sendMessage(cid, { delete: { remoteJid: cid, id: mid, fromMe: true } });
             } else {
-                await wa._socket.chatModify(
+                await wa.socket.chatModify(
                     {
                         deleteForMe: {
                             deleteMedia: true,
@@ -85,29 +85,29 @@ export function message(wa: Context) {
          * @deprecated Usar metodo manual de envío.
          */
         static async forward(cid: string, mid: string, target_cid: string): Promise<boolean> {
-            if (!wa._socket) return false;
+            if (!wa.socket) return false;
             const msg = await _Message.get(cid, mid);
             if (!msg) return false;
             const content = await msg.content();
             if (msg.type === 'text') {
-                const result = await wa._socket.sendMessage(target_cid, { text: content.toString() });
+                const result = await wa.socket.sendMessage(target_cid, { text: content.toString() });
                 return !!result?.key?.id;
             }
             if (msg.type === 'image') {
-                const result = await wa._socket.sendMessage(target_cid, { image: content, caption: msg.caption || undefined });
+                const result = await wa.socket.sendMessage(target_cid, { image: content, caption: msg.caption || undefined });
                 return !!result?.key?.id;
             }
             if (msg.type === 'video') {
-                const result = await wa._socket.sendMessage(target_cid, { video: content, caption: msg.caption || undefined });
+                const result = await wa.socket.sendMessage(target_cid, { video: content, caption: msg.caption || undefined });
                 return !!result?.key?.id;
             }
             if (msg.type === 'audio') {
-                const result = await wa._socket.sendMessage(target_cid, { audio: content, ptt: true });
+                const result = await wa.socket.sendMessage(target_cid, { audio: content, ptt: true });
                 return !!result?.key?.id;
             }
             if (msg.type === 'location') {
                 const location = JSON.parse(content.toString()) as { lat: number; lng: number };
-                const result = await wa._socket.sendMessage(target_cid, {
+                const result = await wa.socket.sendMessage(target_cid, {
                     location: { degreesLatitude: location.lat, degreesLongitude: location.lng },
                 });
                 return !!result?.key?.id;
@@ -123,10 +123,10 @@ export function message(wa: Context) {
          * @returns true si se edito correctamente.
          */
         static async edit(cid: string, mid: string, content: string): Promise<boolean> {
-            if (!wa._socket) return false;
+            if (!wa.socket) return false;
             const msg = await _Message.get(cid, mid);
             if (!msg || !msg.me || msg.type !== 'text') return false;
-            await wa._socket.sendMessage(cid, {
+            await wa.socket.sendMessage(cid, {
                 text: content,
                 edit: { remoteJid: cid, id: mid, fromMe: true },
             } as never);
@@ -142,7 +142,7 @@ export function message(wa: Context) {
         static async votes(cid: string, mid: string): Promise<{ name: string; count: number }[]> {
             const msg = await _Message.get(cid, mid);
             if (!msg || msg.type !== 'poll') return [];
-            const content_buffer = await wa._store.content.get(cid, mid);
+            const content_buffer = await wa.engine.content(cid, mid);
             if (!content_buffer) return [];
             const poll_data = JSON.parse(content_buffer.toString()) as {
                 content: string;
@@ -178,7 +178,7 @@ export function message(wa: Context) {
          * const data = JSON.parse((await msg.content()).toString())
          */
         async content(): Promise<Buffer> {
-            const cached = await wa._store.content.get(this.cid, this.id);
+            const cached = await wa.engine.content(this.cid, this.id);
             return cached ?? Buffer.alloc(0);
         }
 
