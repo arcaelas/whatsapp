@@ -1,21 +1,21 @@
-# Group Management
+# Gestion de Grupos
 
-Examples of working with WhatsApp groups.
+Ejemplos de trabajo con grupos de WhatsApp.
 
 ---
 
-## Get group information
+## Obtener informacion de grupo
 
 ```typescript
 const chat = await wa.Chat.get("123456789@g.us");
 
 if (chat && chat.type === "group") {
-  console.log(`Name: ${chat.name}`);
+  console.log(`Nombre: ${chat.name}`);
   console.log(`ID: ${chat.id}`);
 
-  // Members
+  // Miembros
   const members = await wa.Chat.members(chat.id, 0, 1000);
-  console.log(`Members: ${members.length}`);
+  console.log(`Miembros: ${members.length}`);
 
   for (const member of members) {
     console.log(`  - ${member.name} (${member.phone})`);
@@ -25,80 +25,80 @@ if (chat && chat.type === "group") {
 
 ---
 
-## Detect groups in events
+## Detectar grupos en eventos
 
 ```typescript
 wa.event.on("chat:created", (chat) => {
   if (chat.type === "group") {
-    console.log(`Group created: ${chat.name}`);
+    console.log(`Grupo creado: ${chat.name}`);
   }
 });
 
 wa.event.on("message:created", async (msg) => {
-  // Check if message is from a group
+  // Verificar si el mensaje es de un grupo
   const is_group = msg.cid.endsWith("@g.us");
 
   if (is_group) {
-    console.log(`Message in group: ${msg.cid}`);
+    console.log(`Mensaje en grupo: ${msg.cid}`);
   }
 });
 ```
 
 ---
 
-## Send messages to groups
+## Enviar mensajes a grupos
 
 ```typescript
-// Send text to a group
-await wa.Message.text("123456789@g.us", "Hello group!");
+// Enviar texto a un grupo
+await wa.Message.text("123456789@g.us", "Hola grupo!");
 
-// Send image to a group
+// Enviar imagen a un grupo
 import * as fs from "fs";
-const img = fs.readFileSync("photo.jpg");
-await wa.Message.image("123456789@g.us", img, "Photo for the group");
+const img = fs.readFileSync("foto.jpg");
+await wa.Message.image("123456789@g.us", img, "Foto para el grupo");
 
-// Create poll in group
+// Crear encuesta en grupo
 await wa.Message.poll("123456789@g.us", {
-  content: "Where should we meet?",
+  content: "Donde nos juntamos?",
   options: [
-    { content: "At my place" },
-    { content: "At the park" },
-    { content: "Downtown" }
+    { content: "En mi casa" },
+    { content: "En el parque" },
+    { content: "En el centro" }
   ]
 });
 ```
 
 ---
 
-## Reply in groups
+## Responder en grupos
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
-  // Only process group messages
+  // Solo procesar mensajes de grupos
   if (!msg.cid.endsWith("@g.us")) return;
 
   if (msg.type !== "text") return;
 
   const text = (await msg.content()).toString().toLowerCase();
 
-  // Reply
-  if (text.includes("hello")) {
-    await wa.Message.text(msg.cid, "Hello! Welcome to the group");
+  // Responder
+  if (text.includes("hola")) {
+    await wa.Message.text(msg.cid, "Hola! Bienvenido al grupo");
   }
 });
 ```
 
 ---
 
-## Get group members
+## Obtener miembros de un grupo
 
 ```typescript
 const group_id = "123456789@g.us";
 const members = await wa.Chat.members(group_id, 0, 1000);
 
-console.log(`Group has ${members.length} members:`);
+console.log(`Grupo tiene ${members.length} miembros:`);
 for (const member of members) {
   console.log(`  - ${member.name}: ${member.phone}`);
 }
@@ -106,7 +106,7 @@ for (const member of members) {
 
 ---
 
-## Export members to JSON
+## Exportar miembros a JSON
 
 ```typescript
 import * as fs from "fs";
@@ -114,7 +114,7 @@ import * as fs from "fs";
 async function export_group_members(wa: WhatsApp, group_id: string) {
   const chat = await wa.Chat.get(group_id);
   if (!chat || chat.type !== "group") {
-    throw new Error("Group not found");
+    throw new Error("Grupo no encontrado");
   }
 
   const members = await wa.Chat.members(group_id, 0, 10000);
@@ -132,22 +132,22 @@ async function export_group_members(wa: WhatsApp, group_id: string) {
     })),
   };
 
-  const filename = `group_${chat.name.replace(/[^a-z0-9]/gi, "_")}.json`;
+  const filename = `grupo_${chat.name.replace(/[^a-z0-9]/gi, "_")}.json`;
   fs.writeFileSync(filename, JSON.stringify(data, null, 2));
 
-  console.log(`Exported ${members.length} members to ${filename}`);
+  console.log(`Exportados ${members.length} miembros a ${filename}`);
 }
 ```
 
 ---
 
-## Command bot for groups
+## Bot de comandos para grupos
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
   if (msg.me || msg.type !== "text") return;
 
-  // Only in groups
+  // Solo en grupos
   if (!msg.cid.endsWith("@g.us")) return;
 
   const text = (await msg.content()).toString();
@@ -164,15 +164,15 @@ wa.event.on("message:created", async (msg) => {
           msg.cid,
           `*${chat.name}*\n\n` +
           `ID: ${chat.id}\n` +
-          `Members: ${members.length}`
+          `Miembros: ${members.length}`
         );
       }
       break;
 
-    case "members":
+    case "miembros":
       const group_members = await wa.Chat.members(msg.cid, 0, 50);
       const list = group_members.map(m => `- ${m.name}`).join("\n");
-      await wa.Message.text(msg.cid, `*Members:*\n${list}`);
+      await wa.Message.text(msg.cid, `*Miembros:*\n${list}`);
       break;
   }
 });
@@ -180,10 +180,10 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Notes
+## Notas
 
-!!! info "Group JID"
-    Groups have JID format `{id}@g.us`
+!!! info "JID de grupo"
+    Los grupos tienen JID con formato `{id}@g.us`
 
-!!! tip "Differentiation"
-    Use `chat.type === "group"` or `cid.endsWith("@g.us")` to detect groups
+!!! tip "Diferenciacion"
+    Usa `chat.type === "group"` o `cid.endsWith("@g.us")` para detectar grupos

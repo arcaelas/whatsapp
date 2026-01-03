@@ -1,77 +1,69 @@
-# Eventos
+# Events
 
-Referencia completa de todos los eventos emitidos por WhatsApp.
+Complete list of events emitted by WhatsApp.
 
 ---
 
-## Escuchar eventos
+## Event handling
 
-WhatsApp expone un EventEmitter tipado a traves de `wa.event`:
+Events are accessed through `wa.event`:
 
 ```typescript
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 const wa = new WhatsApp();
 
-// Escuchar evento
-wa.event.on("message:created", (msg) => {
-  // msg esta tipado correctamente
+// Subscribe to event
+wa.event.on("message:created", async (msg) => {
+  console.log("New message:", msg.id);
 });
 
-// Escuchar una sola vez
+// Subscribe once
 wa.event.once("open", () => {
-  console.log("Primera conexion exitosa");
+  console.log("First connection!");
 });
 
-// Remover listener
-const handler = (msg) => console.log(msg);
+// Remove listener
+const handler = (msg: Message) => console.log(msg);
 wa.event.on("message:created", handler);
 wa.event.off("message:created", handler);
 ```
 
 ---
 
-## Eventos de conexion
+## Connection events
 
-### `open`
+### open
 
-Emitido cuando la conexion es exitosa.
+Emitted when connection is established.
 
 ```typescript
 wa.event.on("open", () => {
-  console.log("Conectado a WhatsApp");
-  // Aqui puedes empezar a enviar mensajes
+  console.log("Connected to WhatsApp");
 });
 ```
 
-**Payload:** ninguno
+**Payload:** `void`
 
----
+### close
 
-### `close`
-
-Emitido cuando la conexion se cierra. La reconexion es automatica.
+Emitted when connection is closed.
 
 ```typescript
 wa.event.on("close", () => {
-  console.log("Desconectado, reconectando...");
+  console.log("Disconnected from WhatsApp");
 });
 ```
 
-**Payload:** ninguno
+**Payload:** `void`
 
----
+### error
 
-### `error`
-
-Emitido cuando ocurre un error fatal que no permite reconexion.
+Emitted on connection error.
 
 ```typescript
 wa.event.on("error", (error) => {
-  console.error("Error fatal:", error.message);
-
-  // Error comun:
-  // - "Logged out" - Sesion cerrada desde telefono
+  console.error("Connection error:", error.message);
 });
 ```
 
@@ -79,32 +71,40 @@ wa.event.on("error", (error) => {
 
 ---
 
-## Eventos de contacto
+## Contact events
 
-### `contact:created`
+### contact:created
 
-Emitido cuando se crea un nuevo contacto.
+Emitted when a new contact is added.
 
 ```typescript
 wa.event.on("contact:created", (contact) => {
-  console.log(`Nuevo contacto: ${contact.name}`);
-  console.log(`  ID: ${contact.id}`);
-  console.log(`  Telefono: ${contact.phone}`);
-  console.log(`  Es yo: ${contact.me}`);
+  console.log(`New contact: ${contact.name}`);
+  console.log(`Phone: ${contact.phone}`);
 });
 ```
 
 **Payload:** `Contact`
 
----
+### contact:updated
 
-### `contact:updated`
-
-Emitido cuando se actualiza un contacto existente.
+Emitted when a contact is updated.
 
 ```typescript
 wa.event.on("contact:updated", (contact) => {
-  console.log(`Contacto actualizado: ${contact.name}`);
+  console.log(`Contact updated: ${contact.name}`);
+});
+```
+
+**Payload:** `Contact`
+
+### contact:deleted
+
+Emitted when a contact is deleted.
+
+```typescript
+wa.event.on("contact:deleted", (contact) => {
+  console.log(`Contact deleted: ${contact.id}`);
 });
 ```
 
@@ -112,33 +112,52 @@ wa.event.on("contact:updated", (contact) => {
 
 ---
 
-## Eventos de chat
+## Chat events
 
-### `chat:created`
+### chat:created
 
-Emitido cuando se crea un nuevo chat.
+Emitted when a new chat is created.
 
 ```typescript
 wa.event.on("chat:created", (chat) => {
+  console.log(`New chat: ${chat.name}`);
+  console.log(`Type: ${chat.type}`);
+
   if (chat.type === "group") {
-    console.log(`Nuevo grupo: ${chat.name}`);
-  } else {
-    console.log(`Nuevo chat: ${chat.name}`);
+    console.log("New group!");
   }
 });
 ```
 
 **Payload:** `Chat`
 
----
+### chat:updated
 
-### `chat:updated`
-
-Emitido cuando se actualiza un chat existente.
+Emitted when a chat is updated.
 
 ```typescript
 wa.event.on("chat:updated", (chat) => {
-  console.log(`Chat actualizado: ${chat.name}`);
+  console.log(`Chat updated: ${chat.name}`);
+
+  if (chat.archived) {
+    console.log("Chat was archived");
+  }
+
+  if (chat.muted > 0) {
+    console.log(`Muted until: ${new Date(chat.muted)}`);
+  }
+});
+```
+
+**Payload:** `Chat`
+
+### chat:deleted
+
+Emitted when a chat is deleted.
+
+```typescript
+wa.event.on("chat:deleted", (chat) => {
+  console.log(`Chat deleted: ${chat.id}`);
 });
 ```
 
@@ -146,123 +165,55 @@ wa.event.on("chat:updated", (chat) => {
 
 ---
 
-### `chat:pined`
+## Message events
 
-Emitido cuando se fija o desfija un chat.
+### message:created
 
-```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} fijado en ${new Date(pined)}`);
-  } else {
-    console.log(`Chat ${cid} desfijado`);
-  }
-});
-```
-
-**Payload:** `(cid: string, pined: number | null)`
-
----
-
-### `chat:archived`
-
-Emitido cuando se archiva o desarchiva un chat.
-
-```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
-});
-```
-
-**Payload:** `(cid: string, archived: boolean)`
-
----
-
-### `chat:muted`
-
-Emitido cuando se silencia o desilencia un chat.
-
-```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
-  } else {
-    console.log(`Chat ${cid} desilenciado`);
-  }
-});
-```
-
-**Payload:** `(cid: string, muted: number | null)`
-
----
-
-### `chat:deleted`
-
-Emitido cuando se elimina un chat.
-
-```typescript
-wa.event.on("chat:deleted", (cid) => {
-  console.log(`Chat eliminado: ${cid}`);
-});
-```
-
-**Payload:** `(cid: string)`
-
----
-
-## Eventos de mensaje
-
-### `message:created`
-
-Emitido cuando se recibe un nuevo mensaje.
+Emitted when a new message is received or sent.
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
-  console.log(`Nuevo mensaje:`);
-  console.log(`  ID: ${msg.id}`);
-  console.log(`  Chat: ${msg.cid}`);
-  console.log(`  Tipo: ${msg.type}`);
-  console.log(`  Mio: ${msg.me}`);
-  console.log(`  Caption: ${msg.caption}`);
+  // Ignore own messages
+  if (msg.me) return;
 
-  // Obtener contenido
+  console.log(`New message: ${msg.type}`);
+  console.log(`From: ${msg.cid}`);
+  console.log(`ID: ${msg.id}`);
+
   if (msg.type === "text") {
     const text = (await msg.content()).toString();
-    console.log(`  Texto: ${text}`);
+    console.log(`Text: ${text}`);
   }
 });
 ```
 
 **Payload:** `Message`
 
-**Propiedades disponibles:**
+### message:updated
 
-- `id` - ID del mensaje
-- `cid` - JID del chat
-- `me` - true si es mensaje propio
-- `type` - Tipo de mensaje (text, image, video, audio, location, poll)
-- `mime` - MIME type
-- `caption` - Caption/texto
-- `status` - Estado del mensaje (enum)
-- `starred` - true si esta destacado
-- `forwarded` - true si fue reenviado
-- `edited` - true si fue editado
-
----
-
-### `message:updated`
-
-Emitido cuando se edita un mensaje.
+Emitted when a message is updated (status change, edited, etc.).
 
 ```typescript
-wa.event.on("message:updated", async (msg) => {
-  console.log(`Mensaje editado: ${msg.id}`);
-  console.log(`  edited: ${msg.edited}`); // true
+wa.event.on("message:updated", (msg) => {
+  console.log(`Message updated: ${msg.id}`);
+  console.log(`New status: ${msg.status}`);
 
-  if (msg.type === "text") {
-    const new_text = (await msg.content()).toString();
-    console.log(`  Nuevo texto: ${new_text}`);
+  if (msg.edited) {
+    console.log("Message was edited");
   }
+});
+```
+
+**Payload:** `Message`
+
+### message:deleted
+
+Emitted when a message is deleted.
+
+```typescript
+wa.event.on("message:deleted", (msg) => {
+  console.log(`Message deleted: ${msg.id}`);
+  console.log(`From chat: ${msg.cid}`);
 });
 ```
 
@@ -270,197 +221,105 @@ wa.event.on("message:updated", async (msg) => {
 
 ---
 
-### `message:reacted`
-
-Emitido cuando alguien reacciona a un mensaje.
-
-```typescript
-wa.event.on("message:reacted", (cid, mid, emoji) => {
-  console.log(`Reaccion en mensaje:`);
-  console.log(`  Chat: ${cid}`);
-  console.log(`  Mensaje: ${mid}`);
-  console.log(`  Emoji: ${emoji}`); // "" si se quito la reaccion
-});
-```
-
-**Payload:** `(cid: string, mid: string, emoji: string)`
-
----
-
-### `message:deleted`
-
-Emitido cuando se elimina un mensaje.
-
-```typescript
-wa.event.on("message:deleted", (cid, mid) => {
-  console.log(`Mensaje eliminado:`);
-  console.log(`  Chat: ${cid}`);
-  console.log(`  Mensaje: ${mid}`);
-});
-```
-
-**Payload:** `(cid: string, mid: string)`
-
----
-
-## Patrones de uso
-
-### Logger completo
-
-```typescript
-function setup_logger(wa: WhatsApp) {
-  // Conexion
-  wa.event.on("open", () => console.log("[INFO] Conectado"));
-  wa.event.on("close", () => console.log("[WARN] Desconectado"));
-  wa.event.on("error", (e) => console.error("[ERROR]", e.message));
-
-  // Contactos
-  wa.event.on("contact:created", (c) =>
-    console.log(`[CONTACT:NEW] ${c.name} (${c.phone})`)
-  );
-  wa.event.on("contact:updated", (c) =>
-    console.log(`[CONTACT:UPD] ${c.name}`)
-  );
-
-  // Chats
-  wa.event.on("chat:created", (c) =>
-    console.log(`[CHAT:NEW] ${c.name} (${c.type})`)
-  );
-  wa.event.on("chat:updated", (c) =>
-    console.log(`[CHAT:UPD] ${c.name}`)
-  );
-  wa.event.on("chat:pined", (cid, p) =>
-    console.log(`[CHAT:PIN] ${cid}: ${p ? "fijado" : "desfijado"}`)
-  );
-  wa.event.on("chat:archived", (cid, a) =>
-    console.log(`[CHAT:ARC] ${cid}: ${a ? "archivado" : "desarchivado"}`)
-  );
-  wa.event.on("chat:muted", (cid, m) =>
-    console.log(`[CHAT:MUTE] ${cid}: ${m ? "silenciado" : "desilenciado"}`)
-  );
-  wa.event.on("chat:deleted", (cid) =>
-    console.log(`[CHAT:DEL] ${cid}`)
-  );
-
-  // Mensajes
-  wa.event.on("message:created", (m) =>
-    console.log(`[MSG:NEW] ${m.cid} <- ${m.type}`)
-  );
-  wa.event.on("message:updated", (m) =>
-    console.log(`[MSG:EDIT] ${m.id}`)
-  );
-  wa.event.on("message:reacted", (cid, mid, emoji) =>
-    console.log(`[MSG:REACT] ${mid}: ${emoji}`)
-  );
-  wa.event.on("message:deleted", (cid, mid) =>
-    console.log(`[MSG:DEL] ${mid} from ${cid}`)
-  );
-}
-```
-
-### Filtrar por chat
-
-```typescript
-const MONITORED_CHAT = "5491112345678@s.whatsapp.net";
-
-wa.event.on("message:created", async (msg) => {
-  if (msg.cid !== MONITORED_CHAT) return;
-  // Solo procesar mensajes de este chat
-});
-```
-
-### Filtrar por tipo
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  // Solo imagenes
-  if (msg.type !== "image") return;
-
-  const buffer = await msg.content();
-  console.log(`Imagen recibida: ${buffer.length} bytes`);
-});
-```
-
-### Cola de procesamiento
-
-```typescript
-const queue: Message[] = [];
-let processing = false;
-
-wa.event.on("message:created", (msg) => {
-  queue.push(msg);
-  process_queue();
-});
-
-async function process_queue() {
-  if (processing || queue.length === 0) return;
-
-  processing = true;
-  const msg = queue.shift()!;
-
-  try {
-    await handle_message(msg);
-  } catch (error) {
-    console.error("Error procesando mensaje:", error);
-  }
-
-  processing = false;
-  process_queue();
-}
-
-async function handle_message(msg: Message) {
-  // Procesar mensaje
-}
-```
-
-### Estadisticas en tiempo real
-
-```typescript
-const stats = {
-  messages: 0,
-  text: 0,
-  image: 0,
-  video: 0,
-  audio: 0,
-  location: 0,
-  poll: 0,
-};
-
-wa.event.on("message:created", (msg) => {
-  stats.messages++;
-  stats[msg.type as keyof typeof stats]++;
-
-  console.log("Estadisticas:", stats);
-});
-```
-
----
-
-## Interfaz WhatsAppEventMap
+## WhatsAppEventMap interface
 
 ```typescript
 interface WhatsAppEventMap {
-  // Conexion
-  open: [];
-  close: [];
-  error: [Error];
-
-  // Contactos
-  "contact:created": [Contact];
-  "contact:updated": [Contact];
-
-  // Chats
-  "chat:created": [Chat];
-  "chat:updated": [Chat];
-  "chat:pined": [cid: string, pined: number | null];
-  "chat:archived": [cid: string, archived: boolean];
-  "chat:muted": [cid: string, muted: number | null];
-  "chat:deleted": [cid: string];
-
-  // Mensajes
-  "message:created": [Message];
-  "message:updated": [Message];
-  "message:reacted": [cid: string, mid: string, emoji: string];
-  "message:deleted": [cid: string, mid: string];
+  open: void;
+  close: void;
+  error: Error;
+  "contact:created": Contact;
+  "contact:updated": Contact;
+  "contact:deleted": Contact;
+  "chat:created": Chat;
+  "chat:updated": Chat;
+  "chat:deleted": Chat;
+  "message:created": Message;
+  "message:updated": Message;
+  "message:deleted": Message;
 }
+```
+
+---
+
+## Complete example
+
+```typescript
+import { WhatsApp } from "@arcaelas/whatsapp";
+
+async function main() {
+  const wa = new WhatsApp();
+
+  // Connection events
+  wa.event.on("open", () => {
+    console.log("[CONNECTED]");
+  });
+
+  wa.event.on("close", () => {
+    console.log("[DISCONNECTED]");
+  });
+
+  wa.event.on("error", (error) => {
+    console.error("[ERROR]", error.message);
+  });
+
+  // Contact events
+  wa.event.on("contact:created", (contact) => {
+    console.log(`[CONTACT+] ${contact.name}`);
+  });
+
+  wa.event.on("contact:updated", (contact) => {
+    console.log(`[CONTACT~] ${contact.name}`);
+  });
+
+  // Chat events
+  wa.event.on("chat:created", async (chat) => {
+    console.log(`[CHAT+] ${chat.name} (${chat.type})`);
+
+    if (chat.type === "group") {
+      const members = await wa.Chat.members(chat.id, 0, 100);
+      console.log(`  Members: ${members.length}`);
+    }
+  });
+
+  wa.event.on("chat:updated", (chat) => {
+    const flags = [];
+    if (chat.pined) flags.push("pinned");
+    if (chat.archived) flags.push("archived");
+    if (chat.muted > 0) flags.push("muted");
+
+    console.log(`[CHAT~] ${chat.name} [${flags.join(", ")}]`);
+  });
+
+  // Message events
+  wa.event.on("message:created", async (msg) => {
+    const direction = msg.me ? "→" : "←";
+    console.log(`[MSG${direction}] ${msg.type} in ${msg.cid}`);
+
+    if (!msg.me && msg.type === "text") {
+      const text = (await msg.content()).toString();
+
+      if (text.toLowerCase() === "ping") {
+        await wa.Message.text(msg.cid, "pong!");
+      }
+    }
+  });
+
+  wa.event.on("message:updated", (msg) => {
+    const status_names = ["PENDING", "SENT", "RECEIVED", "READ", "PLAYED"];
+    console.log(`[MSG~] ${msg.id} → ${status_names[msg.status]}`);
+  });
+
+  // Connect
+  await wa.pair(async (data) => {
+    if (Buffer.isBuffer(data)) {
+      require("fs").writeFileSync("qr.png", data);
+      console.log("Scan qr.png");
+    }
+  });
+
+  console.log("Bot ready - listening to events...");
+}
+
+main().catch(console.error);
 ```

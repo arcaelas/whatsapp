@@ -1,5 +1,5 @@
-site_name: Arcaelas WhatsApp
-site_description: Librería TypeScript para automatización de WhatsApp con Baileys
+site_name: Arcaelas Insiders | WhatsApp
+site_description: TypeScript library for WhatsApp automation with Baileys
 site_author: Arcaelas Insiders
 site_url: https://arcaelas.github.io/whatsapp/
 
@@ -11,7 +11,8 @@ copyright: Copyright &copy; 2025 Arcaelas Insiders
 
 theme:
   name: material
-  language: es
+  custom_dir: overrides
+  language: en
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -19,14 +20,14 @@ theme:
       accent: green
       toggle:
         icon: material/brightness-7
-        name: Cambiar a modo oscuro
+        name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: green
       accent: green
       toggle:
         icon: material/brightness-4
-        name: Cambiar a modo claro
+        name: Switch to light mode
 
   font:
     text: Roboto
@@ -53,29 +54,70 @@ theme:
     - content.tabs.link
     - content.tooltips
     - toc.follow
-    - toc.integrate
+
+plugins:
+  - search:
+      lang:
+        - en
+        - es
+      separator: '[\s\-\.]+'
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: es
+          name: Español
+          build: true
+          nav_translations:
+            Home: Inicio
+            Welcome: Bienvenida
+            Installation: Instalación
+            Getting Started: Primeros Pasos
+            References: Referencias
+            Chat & Group: Chat y Group
+            Messages: Mensajes
+            Events: Eventos
+            Examples: Ejemplos
+            Basic Bot: Bot Básico
+            Command Bot: Bot de Comandos
+            Custom Engine Bot: Bot con Engine Personalizado
+            Media Sending: Envío de Media
+            Group Management: Gestión de Grupos
+            Polls: Encuestas
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+      htmlmin_opts:
+        remove_comments: true
 
 nav:
-  - Inicio:
-    - Bienvenida: index.md
-    - Instalacion: installation.md
-    - Primeros Pasos: getting-started.md
+  - Home:
+    - Welcome: index.md
+    - Installation: installation.md
+    - Getting Started: getting-started.md
 
-  - Referencias:
+  - References:
     - WhatsApp: references/whatsapp.md
-    - Chat y Group: references/chat.md
+    - Chat & Group: references/chat.md
     - Contact: references/contact.md
-    - Mensajes: references/message.md
+    - Messages: references/message.md
     - Engines: references/engines.md
-    - Eventos: references/events.md
+    - Events: references/events.md
 
-  - Ejemplos:
-    - Bot Basico: examples/basic-bot.md
-    - Bot de Comandos: examples/command-bot.md
-    - Bot con Engine Personalizado: examples/s3-bot.md
-    - Envio de Media: examples/media.md
-    - Gestion de Grupos: examples/groups.md
-    - Encuestas: examples/polls.md
+  - Examples:
+    - Basic Bot: examples/basic-bot.md
+    - Command Bot: examples/command-bot.md
+    - Custom Engine Bot: examples/s3-bot.md
+    - Media Sending: examples/media.md
+    - Group Management: examples/groups.md
+    - Polls: examples/polls.md
 
 markdown_extensions:
   - abbr
@@ -117,25 +159,10 @@ markdown_extensions:
       custom_checkbox: true
   - pymdownx.tilde
 
-plugins:
-  - search:
-      lang:
-        - es
-        - en
-      separator: '[\s\-\.]+'
-  - minify:
-      minify_html: true
-      minify_js: true
-      minify_css: true
-      htmlmin_opts:
-        remove_comments: true
-
 extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/arcaelas/whatsapp
     - icon: fontawesome/brands/npm
       link: https://www.npmjs.com/package/@arcaelas/whatsapp
-
-  version:
-    provider: mike
+  generator: false

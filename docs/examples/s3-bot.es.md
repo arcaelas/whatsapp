@@ -1,19 +1,19 @@
-# Custom Engine Bot
+# Bot con Engine Personalizado
 
-Production bot using a custom engine for storage.
-
----
-
-## Description
-
-This example shows how to create a bot that uses a custom engine
-(Redis, PostgreSQL, S3, etc.) instead of the default FileEngine.
+Bot de produccion usando un engine personalizado para almacenamiento.
 
 ---
 
-## Example: Redis Engine
+## Descripcion
 
-### Create the engine
+Este ejemplo muestra como crear un bot que usa un engine personalizado
+(Redis, PostgreSQL, S3, etc.) en lugar del FileEngine por defecto.
+
+---
+
+## Ejemplo: Redis Engine
+
+### Crear el engine
 
 ```typescript title="RedisEngine.ts"
 import type { Engine } from "@arcaelas/whatsapp";
@@ -49,7 +49,7 @@ export class RedisEngine implements Engine {
 }
 ```
 
-### Use the engine
+### Usar el engine
 
 ```typescript title="bot.ts"
 import { WhatsApp } from "@arcaelas/whatsapp";
@@ -57,19 +57,19 @@ import { RedisEngine } from "./RedisEngine";
 import "dotenv/config";
 
 async function main() {
-  // Create Redis engine
+  // Crear engine Redis
   const engine = new RedisEngine(process.env.REDIS_URL || "redis://localhost:6379");
   await engine.connect();
 
-  // Create instance with custom engine
+  // Crear instancia con engine personalizado
   const wa = new WhatsApp({ engine });
 
   // Logging
-  wa.event.on("open", () => console.log("[INFO] Connected"));
-  wa.event.on("close", () => console.log("[WARN] Disconnected"));
+  wa.event.on("open", () => console.log("[INFO] Conectado"));
+  wa.event.on("close", () => console.log("[WARN] Desconectado"));
   wa.event.on("error", (e) => console.error("[ERROR]", e.message));
 
-  // Messages
+  // Mensajes
   wa.event.on("message:created", async (msg) => {
     if (msg.me || msg.type !== "text") return;
 
@@ -88,40 +88,40 @@ async function main() {
       case "status":
         await wa.Message.text(
           msg.cid,
-          `*Bot Status*\n\n` +
+          `*Estado del Bot*\n\n` +
           `Engine: Redis\n` +
-          `Uptime: ${Math.floor(process.uptime() / 60)} minutes`
+          `Uptime: ${Math.floor(process.uptime() / 60)} minutos`
         );
         break;
 
-      case "help":
+      case "ayuda":
         await wa.Message.text(
           msg.cid,
-          `Commands:\n` +
+          `Comandos:\n` +
           `${prefix}ping - Test\n` +
-          `${prefix}status - Bot status\n` +
-          `${prefix}help - This message`
+          `${prefix}status - Estado del bot\n` +
+          `${prefix}ayuda - Este mensaje`
         );
         break;
     }
   });
 
-  // Connect
-  console.log("[INFO] Starting bot...");
+  // Conectar
+  console.log("[INFO] Iniciando bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
       require("fs").writeFileSync("/tmp/qr.png", data);
-      console.log("[INFO] QR saved to /tmp/qr.png");
+      console.log("[INFO] QR guardado en /tmp/qr.png");
     } else {
-      console.log("[INFO] Code:", data);
+      console.log("[INFO] Codigo:", data);
     }
   });
 
-  console.log("[INFO] Bot ready!");
+  console.log("[INFO] Bot listo!");
 
-  // Keep process alive
+  // Mantener proceso vivo
   process.on("SIGINT", () => {
-    console.log("[INFO] Closing...");
+    console.log("[INFO] Cerrando...");
     process.exit(0);
   });
 }
@@ -166,7 +166,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - BOT_PREFIX=!
     volumes:
-      - /tmp:/tmp  # For temporary QR
+      - /tmp:/tmp  # Para el QR temporal
 ```
 
 ---
@@ -176,7 +176,7 @@ services:
 ```typescript
 import { createServer } from "http";
 
-// Add after initializing the bot
+// Agregar despues de inicializar el bot
 const server = createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -192,13 +192,13 @@ const server = createServer((req, res) => {
 });
 
 server.listen(3000, () => {
-  console.log("[INFO] Health check at http://localhost:3000/health");
+  console.log("[INFO] Health check en http://localhost:3000/health");
 });
 ```
 
 ---
 
-## Environment variables
+## Variables de entorno
 
 ```bash title=".env"
 REDIS_URL=redis://localhost:6379
@@ -207,7 +207,7 @@ BOT_PREFIX=!
 
 ---
 
-## Other engines
+## Otros engines
 
-Check the [Engines](../references/engines.md) documentation for
-examples of PostgreSQL, MongoDB, and others.
+Consulta la documentacion de [Engines](../references/engines.md) para ver
+ejemplos de PostgreSQL, MongoDB, y otros.

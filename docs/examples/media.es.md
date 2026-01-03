@@ -1,63 +1,63 @@
-# Media Sending
+# Envio de Media
 
-Examples of sending and receiving multimedia files.
+Ejemplos de envio y recepcion de archivos multimedia.
 
 ---
 
-## Send image
+## Enviar imagen
 
 ```typescript
 import * as fs from "fs";
 
-// From local file
-const img = fs.readFileSync("photo.jpg");
-await wa.Message.image("5491112345678@s.whatsapp.net", img, "Check out this photo!");
+// Desde archivo local
+const img = fs.readFileSync("foto.jpg");
+await wa.Message.image("5491112345678@s.whatsapp.net", img, "Mira esta foto!");
 
-// From URL (download first)
+// Desde URL (descargar primero)
 const response = await fetch("https://example.com/image.jpg");
 const buffer = Buffer.from(await response.arrayBuffer());
-await wa.Message.image("5491112345678@s.whatsapp.net", buffer, "Image from internet");
+await wa.Message.image("5491112345678@s.whatsapp.net", buffer, "Imagen de internet");
 ```
 
 ---
 
-## Send video
+## Enviar video
 
 ```typescript
 import * as fs from "fs";
 
-// From local file
+// Desde archivo local
 const video = fs.readFileSync("video.mp4");
-await wa.Message.video("5491112345678@s.whatsapp.net", video, "Interesting video");
+await wa.Message.video("5491112345678@s.whatsapp.net", video, "Video interesante");
 
-// Note: WhatsApp compresses videos automatically
-// For better quality, use short videos (<3 min) and 720p
+// Nota: WhatsApp comprime los videos automaticamente
+// Para mejor calidad, usa videos cortos (<3 min) y 720p
 ```
 
 ---
 
-## Send audio
+## Enviar audio
 
 ```typescript
 import * as fs from "fs";
 
-// Voice note (PTT - Push to Talk) - default
+// Nota de voz (PTT - Push to Talk) - default
 const audio = fs.readFileSync("audio.ogg");
 await wa.Message.audio("5491112345678@s.whatsapp.net", audio);
 
-// Regular audio (without PTT)
+// Audio normal (sin PTT)
 await wa.Message.audio("5491112345678@s.whatsapp.net", audio, false);
 
-// Supported formats: OGG with Opus codec (preferred), MP3, AAC
-// WhatsApp automatically converts to OGG/Opus
+// Formatos soportados: OGG con codec Opus (preferido), MP3, AAC
+// WhatsApp convierte automaticamente a OGG/Opus
 ```
 
 ---
 
-## Send location
+## Enviar ubicacion
 
 ```typescript
-// Static location
+// Ubicacion estatica
 await wa.Message.location("5491112345678@s.whatsapp.net", {
   lat: -34.6037,
   lng: -58.3816
@@ -66,13 +66,13 @@ await wa.Message.location("5491112345678@s.whatsapp.net", {
 
 ---
 
-## Receive and save media
+## Recibir y guardar media
 
 ```typescript
 import * as fs from "fs";
 import * as path from "path";
 
-const MEDIA_DIR = "./media";
+const MEDIA_DIR = "./medios";
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 wa.event.on("message:created", async (msg) => {
@@ -83,12 +83,12 @@ wa.event.on("message:created", async (msg) => {
 
   if (buffer.length === 0) return;
 
-  // Image
+  // Imagen
   if (msg.type === "image") {
     const ext = msg.mime.split("/")[1] || "jpg";
     const filename = `${timestamp}.${ext}`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Image saved: ${filename} (${buffer.length} bytes)`);
+    console.log(`Imagen guardada: ${filename} (${buffer.length} bytes)`);
     if (msg.caption) {
       console.log(`Caption: ${msg.caption}`);
     }
@@ -98,21 +98,21 @@ wa.event.on("message:created", async (msg) => {
   if (msg.type === "video") {
     const filename = `${timestamp}.mp4`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Video saved: ${filename} (${buffer.length} bytes)`);
+    console.log(`Video guardado: ${filename} (${buffer.length} bytes)`);
   }
 
   // Audio
   if (msg.type === "audio") {
     const filename = `${timestamp}.ogg`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Audio saved: ${filename} (${buffer.length} bytes)`);
+    console.log(`Audio guardado: ${filename} (${buffer.length} bytes)`);
   }
 });
 ```
 
 ---
 
-## Forward media
+## Reenviar media
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
@@ -120,17 +120,17 @@ wa.event.on("message:created", async (msg) => {
 
   const text = (await msg.content()).toString();
 
-  // Command to forward media
-  if (text.startsWith("!forward ")) {
-    const target_phone = text.slice(9).trim();
+  // Comando para reenviar al ultimo mensaje
+  if (text.startsWith("!reenviar ")) {
+    const target_phone = text.slice(10).trim();
     const target_jid = `${target_phone}@s.whatsapp.net`;
 
-    // Get previous message (the one we want to forward)
+    // Obtener mensaje anterior (el que queremos reenviar)
     const prev_msg = await wa.Message.get(msg.cid, "PREVIOUS_MESSAGE_ID");
 
     if (prev_msg && ["image", "video", "audio"].includes(prev_msg.type)) {
       await wa.Message.forward(msg.cid, prev_msg.id, target_jid);
-      await wa.Message.text(msg.cid, "Media forwarded!");
+      await wa.Message.text(msg.cid, "Media reenviada!");
     }
   }
 });
@@ -138,7 +138,7 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Process images
+## Procesar imagenes
 
 ```typescript
 import sharp from "sharp"; // npm install sharp
@@ -149,27 +149,27 @@ wa.event.on("message:created", async (msg) => {
   const buffer = await msg.content();
   if (buffer.length === 0) return;
 
-  // Get metadata
+  // Obtener metadata
   const metadata = await sharp(buffer).metadata();
-  console.log(`Image: ${metadata.width}x${metadata.height}, ${metadata.format}`);
+  console.log(`Imagen: ${metadata.width}x${metadata.height}, ${metadata.format}`);
 
-  // Resize
+  // Redimensionar
   const thumbnail = await sharp(buffer)
     .resize(100, 100, { fit: "cover" })
     .jpeg({ quality: 80 })
     .toBuffer();
 
-  // Send thumbnail as reply
-  await wa.Message.image(msg.cid, thumbnail, "Generated thumbnail");
+  // Enviar thumbnail como respuesta
+  await wa.Message.image(msg.cid, thumbnail, "Thumbnail generado");
 });
 ```
 
 ---
 
-## Transcribe audio
+## Transcribir audio
 
 ```typescript
-// Example with OpenAI Whisper API
+// Ejemplo con Whisper API de OpenAI
 import OpenAI from "openai";
 import * as fs from "fs";
 import * as path from "path";
@@ -182,21 +182,21 @@ wa.event.on("message:created", async (msg) => {
   const buffer = await msg.content();
   if (buffer.length === 0) return;
 
-  // Save temporarily
+  // Guardar temporalmente
   const temp_file = path.join("/tmp", `${Date.now()}.ogg`);
   fs.writeFileSync(temp_file, buffer);
 
   try {
-    // Transcribe
+    // Transcribir
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(temp_file),
       model: "whisper-1",
-      language: "en",
+      language: "es",
     });
 
-    await wa.Message.text(msg.cid, `Transcription:\n${transcription.text}`);
+    await wa.Message.text(msg.cid, `Transcripcion:\n${transcription.text}`);
   } catch (error) {
-    console.error("Error transcribing:", error);
+    console.error("Error transcribiendo:", error);
   } finally {
     fs.unlinkSync(temp_file);
   }
@@ -205,17 +205,17 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Limits and recommendations
+## Limites y recomendaciones
 
-| Type | Limit | Recommendation |
-|------|-------|----------------|
-| Image | 16 MB | < 5 MB, JPEG/PNG |
+| Tipo | Limite | Recomendacion |
+|------|--------|---------------|
+| Imagen | 16 MB | < 5 MB, JPEG/PNG |
 | Video | 64 MB | < 16 MB, MP4 H.264 |
 | Audio | 16 MB | < 5 MB, OGG Opus |
 
-!!! tip "Compression"
-    WhatsApp automatically compresses media.
-    For better quality, use optimized formats.
+!!! tip "Compresion"
+    WhatsApp comprime automaticamente los medios.
+    Para mejor calidad, usa formatos optimizados.
 
 !!! warning "Timeout"
-    Media download may take time. Consider using timeouts and retries.
+    La descarga de media puede tardar. Considera usar timeouts y reintentos.

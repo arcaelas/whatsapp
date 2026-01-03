@@ -1,61 +1,63 @@
 # @arcaelas/whatsapp
 
-> **Libreria TypeScript para automatizacion de WhatsApp**
-> Basada en Baileys | Tipado completo | Engine de persistencia flexible | Facil de usar
+![Banner](assets/banner.png)
+
+> **TypeScript library for WhatsApp automation**
+> Based on Baileys | Full typing | Flexible persistence engine | Easy to use
 
 ---
 
-## Caracteristicas
+## Features
 
-- **Conexion simplificada** - QR o codigo de emparejamiento en una sola llamada
-- **Eventos tipados** - TypeScript completo con autocompletado
-- **Persistencia flexible** - FileEngine por defecto, o implementa tu propio Engine
-- **Clases intuitivas** - Chat, Contact, Message con metodos estaticos
-- **Multiples tipos de mensaje** - text, image, video, audio, location, poll
-- **Gestion de grupos** - Listar miembros, archivar, silenciar, fijar
-- **Soporte de encuestas** - Crear encuestas con multiples opciones
+- **Simplified connection** - QR or pairing code in a single call
+- **Typed events** - Full TypeScript with autocomplete
+- **Flexible persistence** - FileEngine by default, or implement your own Engine
+- **Intuitive classes** - Chat, Contact, Message with static methods
+- **Multiple message types** - text, image, video, audio, location, poll
+- **Group management** - List members, archive, mute, pin
+- **Poll support** - Create polls with multiple options
 
 ---
 
-## Inicio Rapido
+## Quick Start
 
 ```typescript
 import { WhatsApp } from "@arcaelas/whatsapp";
 
-// Crear instancia
+// Create instance
 const wa = new WhatsApp({
-  phone: "5491112345678", // Opcional: para codigo de emparejamiento
+  phone: "5491112345678", // Optional: for pairing code
 });
 
-// Escuchar eventos
-wa.event.on("open", () => console.log("Conectado!"));
-wa.event.on("close", () => console.log("Desconectado"));
+// Listen to events
+wa.event.on("open", () => console.log("Connected!"));
+wa.event.on("close", () => console.log("Disconnected"));
 wa.event.on("error", (err) => console.error("Error:", err.message));
 
-// Conectar
+// Connect
 await wa.pair(async (data) => {
   if (Buffer.isBuffer(data)) {
-    // QR code como imagen PNG
+    // QR code as PNG image
     require("fs").writeFileSync("qr.png", data);
-    console.log("Escanea el QR en qr.png");
+    console.log("Scan the QR in qr.png");
   } else {
-    // Codigo de emparejamiento (8 digitos)
-    console.log("Codigo:", data);
+    // Pairing code (8 digits)
+    console.log("Code:", data);
   }
 });
 
-// Escuchar mensajes
+// Listen to messages
 wa.event.on("message:created", async (msg) => {
-  if (msg.me) return; // Ignorar mensajes propios
+  if (msg.me) return; // Ignore own messages
 
-  // Verificar tipo
+  // Check type
   if (msg.type === "text") {
     const text = (await msg.content()).toString();
-    console.log(`Mensaje: ${text}`);
+    console.log(`Message: ${text}`);
 
-    // Responder
-    if (text.toLowerCase() === "hola") {
-      await wa.Message.text(msg.cid, "Hola! Como estas?");
+    // Reply
+    if (text.toLowerCase() === "hello") {
+      await wa.Message.text(msg.cid, "Hello! How are you?");
     }
   }
 });
@@ -63,18 +65,18 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Tipos de Mensaje
+## Message Types
 
-La libreria soporta multiples tipos de mensaje:
+The library supports multiple message types:
 
-| Tipo | `msg.type` | Descripcion |
+| Type | `msg.type` | Description |
 |------|------------|-------------|
-| Texto | `"text"` | Mensaje de texto plano |
-| Imagen | `"image"` | Imagen con caption opcional |
-| Video | `"video"` | Video con caption opcional |
-| Audio | `"audio"` | Nota de voz o audio |
-| Ubicacion | `"location"` | Coordenadas geograficas |
-| Encuesta | `"poll"` | Encuesta con opciones |
+| Text | `"text"` | Plain text message |
+| Image | `"image"` | Image with optional caption |
+| Video | `"video"` | Video with optional caption |
+| Audio | `"audio"` | Voice note or audio |
+| Location | `"location"` | Geographic coordinates |
+| Poll | `"poll"` | Poll with options |
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
@@ -82,7 +84,7 @@ wa.event.on("message:created", async (msg) => {
 
   if (msg.type === "image") {
     const buffer = await msg.content();
-    console.log(`Imagen recibida: ${buffer.length} bytes`);
+    console.log(`Image received: ${buffer.length} bytes`);
     if (msg.caption) {
       console.log(`Caption: ${msg.caption}`);
     }
@@ -91,7 +93,7 @@ wa.event.on("message:created", async (msg) => {
   if (msg.type === "poll") {
     const buffer = await msg.content();
     const poll = JSON.parse(buffer.toString());
-    console.log(`Encuesta: ${poll.content}`);
+    console.log(`Poll: ${poll.content}`);
     poll.options.forEach((opt: { content: string }, i: number) => {
       console.log(`  ${i + 1}. ${opt.content}`);
     });
@@ -101,25 +103,25 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Engine de Persistencia
+## Persistence Engine
 
-Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
+By default `FileEngine` is used. You can implement your own engine:
 
 === "FileEngine (default)"
     ```typescript
     import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
 
     const wa = new WhatsApp({
-      engine: new FileEngine(".baileys/mi-bot"),
+      engine: new FileEngine(".baileys/my-bot"),
     });
     ```
 
-=== "Engine personalizado"
+=== "Custom engine"
     ```typescript
     import { WhatsApp } from "@arcaelas/whatsapp";
     import type { Engine } from "@arcaelas/whatsapp";
 
-    // Implementa la interfaz Engine
+    // Implement the Engine interface
     class RedisEngine implements Engine {
       async get(key: string): Promise<string | null> { /* ... */ }
       async set(key: string, value: string | null): Promise<void> { /* ... */ }
@@ -133,44 +135,44 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
 ---
 
-## Siguiente Paso
+## Next Step
 
 <div class="grid cards" markdown>
 
--   :material-download:{ .lg .middle } **Instalacion**
+-   :material-download:{ .lg .middle } **Installation**
 
     ---
 
-    Instrucciones detalladas para instalar la libreria
+    Detailed instructions for installing the library
 
-    [:octicons-arrow-right-24: Ver guia](installation.md)
+    [:octicons-arrow-right-24: View guide](installation.md)
 
--   :material-rocket-launch:{ .lg .middle } **Primeros Pasos**
-
-    ---
-
-    Tutorial paso a paso para crear tu primer bot
-
-    [:octicons-arrow-right-24: Comenzar](getting-started.md)
-
--   :material-api:{ .lg .middle } **Referencias API**
+-   :material-rocket-launch:{ .lg .middle } **Getting Started**
 
     ---
 
-    Documentacion completa de todas las clases
+    Step by step tutorial to create your first bot
 
-    [:octicons-arrow-right-24: Ver API](references/whatsapp.md)
+    [:octicons-arrow-right-24: Start](getting-started.md)
 
--   :material-code-tags:{ .lg .middle } **Ejemplos**
+-   :material-api:{ .lg .middle } **API References**
 
     ---
 
-    Ejemplos practicos listos para usar
+    Complete documentation of all classes
 
-    [:octicons-arrow-right-24: Ver ejemplos](examples/basic-bot.md)
+    [:octicons-arrow-right-24: View API](references/whatsapp.md)
+
+-   :material-code-tags:{ .lg .middle } **Examples**
+
+    ---
+
+    Practical ready-to-use examples
+
+    [:octicons-arrow-right-24: View examples](examples/basic-bot.md)
 
 </div>
 
 ---
 
-**Desarrollado por [Arcaelas Insiders](https://github.com/arcaelas)**
+**Developed by [Arcaelas Insiders](https://github.com/arcaelas)**

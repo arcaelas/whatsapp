@@ -1,10 +1,10 @@
 # WhatsApp
 
-Clase principal que gestiona la conexion, eventos y entidades de WhatsApp.
+Main class for WhatsApp connection and management.
 
 ---
 
-## Importacion
+## Import
 
 ```typescript
 import { WhatsApp } from "@arcaelas/whatsapp";
@@ -14,408 +14,220 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 
 ## Constructor
 
-### `new WhatsApp(options?)`
+```typescript
+const wa = new WhatsApp(options?: WhatsAppOptions);
+```
 
-Crea una nueva instancia de WhatsApp.
+### Options
 
-**Parametros:**
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `engine` | `Engine` | `FileEngine(".baileys/default")` | Persistence engine |
+| `phone` | `string` | `undefined` | Phone number for pairing code |
 
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `options.engine` | `Engine` | `FileEngine` | Engine de persistencia |
-| `options.phone` | `string \| number` | `undefined` | Numero para codigo de emparejamiento |
-
-**Ejemplos:**
+### Examples
 
 ```typescript
-// Configuracion minima (usa FileEngine en .baileys/default)
+// Default (FileEngine)
 const wa = new WhatsApp();
 
-// Con numero de telefono (emparejamiento por codigo)
+// Custom path
+import { FileEngine } from "@arcaelas/whatsapp";
 const wa = new WhatsApp({
-  phone: "5491112345678",
+  engine: new FileEngine(".baileys/my-bot"),
 });
 
-// Con engine personalizado
+// With phone for pairing code
 const wa = new WhatsApp({
-  engine: new FileEngine(".baileys/mi-bot"),
   phone: "5491112345678",
 });
 ```
 
 ---
 
-## Propiedades
+## Properties
 
-### `engine`
-
-```typescript
-readonly engine: Engine
-```
-
-Engine de persistencia activo.
-
-### `socket`
+### engine
 
 ```typescript
-get socket(): WASocket | null
+wa.engine: Engine
 ```
 
-Socket de Baileys. `null` si no esta conectado.
+The persistence engine used.
 
-### `event`
+### socket
 
 ```typescript
-readonly event: EventEmitter<WhatsAppEventMap>
+wa.socket: WASocket | null
 ```
 
-EventEmitter tipado para escuchar eventos.
+The Baileys socket. `null` before connecting.
 
-### `Chat`
+### event
 
 ```typescript
-readonly Chat: typeof _Chat
+wa.event: TypedEventEmitter<WhatsAppEventMap>
 ```
 
-Clase Chat enlazada a esta instancia.
+Typed event emitter for all WhatsApp events.
 
-### `Contact`
+### Chat
 
 ```typescript
-readonly Contact: typeof _Contact
+wa.Chat: typeof Chat
 ```
 
-Clase Contact enlazada a esta instancia.
+Chat class bound to this instance.
 
-### `Message`
+### Contact
 
 ```typescript
-readonly Message: typeof _Message
+wa.Contact: typeof Contact
 ```
 
-Clase Message enlazada a esta instancia.
+Contact class bound to this instance.
+
+### Message
+
+```typescript
+wa.Message: typeof Message
+```
+
+Message class bound to this instance.
 
 ---
 
-## Metodos
+## Methods
 
-### `pair(callback)`
+### pair()
+
+Connects to WhatsApp and calls the callback with QR or pairing code.
 
 ```typescript
-pair(callback: (code: string | Buffer) => void | Promise<void>): Promise<void>
+await wa.pair(callback: (data: Buffer | string) => void | Promise<void>): Promise<void>
 ```
 
-Conecta a WhatsApp. Muestra QR o codigo de emparejamiento segun configuracion.
+**Parameters:**
 
-**Parametros:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `callback` | `(data: Buffer \| string) => void` | Called with QR (Buffer) or code (string) |
 
-- `callback` - Funcion llamada con el QR (Buffer PNG) o codigo (string de 8 digitos)
-
-**Comportamiento:**
-
-1. Si `options.phone` esta definido, envia codigo de emparejamiento (solo una vez)
-2. Si no, genera QR code como imagen PNG (periodicamente hasta escanear)
-3. Reintenta conexion automaticamente en caso de desconexion
-4. Emite `open` cuando la conexion es exitosa
-
-**Errores fatales (no reintenta):**
-
-- `loggedOut` (401) - Sesion cerrada desde telefono
-
-**Ejemplo:**
+**Example:**
 
 ```typescript
 await wa.pair(async (data) => {
   if (Buffer.isBuffer(data)) {
-    // QR code - guardar o mostrar
+    // QR as PNG image
     require("fs").writeFileSync("qr.png", data);
-    console.log("Escanea el QR guardado en qr.png");
+    console.log("Scan QR code");
   } else {
-    // Codigo de 8 digitos
-    console.log("Ingresa este codigo en WhatsApp:", data);
+    // 8 digit pairing code
+    console.log("Enter code:", data);
   }
 });
 ```
 
 ---
 
-## Eventos
+## Events
 
-Los eventos se escuchan a traves de `wa.event`:
+Events are accessed through `wa.event`:
 
 ```typescript
-wa.event.on("open", () => {
-  console.log("Conectado");
+wa.event.on("event_name", (payload) => {
+  // handle event
 });
 ```
 
-### `open`
+### Connection events
 
-Emitido cuando la conexion es exitosa.
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `open` | `void` | Connection established |
+| `close` | `void` | Connection closed |
+| `error` | `Error` | Connection error |
+
+### Data events
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `contact:created` | `Contact` | New contact |
+| `contact:updated` | `Contact` | Contact updated |
+| `contact:deleted` | `Contact` | Contact deleted |
+| `chat:created` | `Chat` | New chat |
+| `chat:updated` | `Chat` | Chat updated |
+| `chat:deleted` | `Chat` | Chat deleted |
+| `message:created` | `Message` | New message |
+| `message:updated` | `Message` | Message updated |
+| `message:deleted` | `Message` | Message deleted |
+
+### Examples
 
 ```typescript
+// Connection
 wa.event.on("open", () => {
-  console.log("Conectado a WhatsApp");
+  console.log("Connected to WhatsApp");
 });
-```
 
-### `close`
-
-Emitido cuando la conexion se cierra (se reconectara automaticamente).
-
-```typescript
 wa.event.on("close", () => {
-  console.log("Desconectado de WhatsApp");
-});
-```
-
-### `error`
-
-Emitido cuando ocurre un error fatal (no se reconectara).
-
-```typescript
-wa.event.on("error", (error: Error) => {
-  console.error("Error fatal:", error.message);
-});
-```
-
-### `contact:created`
-
-Emitido cuando se crea un nuevo contacto.
-
-```typescript
-wa.event.on("contact:created", (contact) => {
-  console.log(`Nuevo contacto: ${contact.name} (${contact.phone})`);
-});
-```
-
-### `contact:updated`
-
-Emitido cuando se actualiza un contacto existente.
-
-```typescript
-wa.event.on("contact:updated", (contact) => {
-  console.log(`Contacto actualizado: ${contact.name}`);
-});
-```
-
-### `chat:created`
-
-Emitido cuando se crea un nuevo chat.
-
-```typescript
-wa.event.on("chat:created", (chat) => {
-  console.log(`Nuevo chat: ${chat.name} (${chat.type})`);
-});
-```
-
-### `chat:updated`
-
-Emitido cuando se actualiza un chat existente.
-
-```typescript
-wa.event.on("chat:updated", (chat) => {
-  console.log(`Chat actualizado: ${chat.name}`);
-});
-```
-
-### `chat:pined`
-
-Emitido cuando se fija o desfija un chat.
-
-```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} fijado`);
-  } else {
-    console.log(`Chat ${cid} desfijado`);
-  }
-});
-```
-
-### `chat:archived`
-
-Emitido cuando se archiva o desarchiva un chat.
-
-```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
-});
-```
-
-### `chat:muted`
-
-Emitido cuando se silencia o desilencia un chat.
-
-```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
-  } else {
-    console.log(`Chat ${cid} desilenciado`);
-  }
-});
-```
-
-### `chat:deleted`
-
-Emitido cuando se elimina un chat.
-
-```typescript
-wa.event.on("chat:deleted", (cid) => {
-  console.log(`Chat eliminado: ${cid}`);
-});
-```
-
-### `message:created`
-
-Emitido cuando se recibe un nuevo mensaje.
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  console.log(`Nuevo mensaje de tipo ${msg.type}`);
-  console.log(`  Chat: ${msg.cid}`);
-  console.log(`  Mio: ${msg.me}`);
-
-  if (msg.type === "text") {
-    const text = (await msg.content()).toString();
-    console.log(`  Texto: ${text}`);
-  }
-});
-```
-
-### `message:updated`
-
-Emitido cuando se edita un mensaje.
-
-```typescript
-wa.event.on("message:updated", async (msg) => {
-  console.log(`Mensaje editado: ${msg.id}`);
-  if (msg.type === "text") {
-    const text = (await msg.content()).toString();
-    console.log(`  Nuevo texto: ${text}`);
-  }
-});
-```
-
-### `message:reacted`
-
-Emitido cuando alguien reacciona a un mensaje.
-
-```typescript
-wa.event.on("message:reacted", (cid, mid, emoji) => {
-  console.log(`Reaccion ${emoji} en mensaje ${mid} del chat ${cid}`);
-});
-```
-
-### `message:deleted`
-
-Emitido cuando se elimina un mensaje.
-
-```typescript
-wa.event.on("message:deleted", (cid, mid) => {
-  console.log(`Mensaje eliminado: ${mid} del chat ${cid}`);
-});
-```
-
----
-
-## Patrones comunes
-
-### Bot con comandos
-
-```typescript
-const wa = new WhatsApp();
-
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
-
-  const text = (await msg.content()).toString();
-  if (!text.startsWith("!")) return;
-
-  const [cmd, ...args] = text.slice(1).split(" ");
-
-  if (cmd === "ping") {
-    await wa.Message.text(msg.cid, "pong!");
-  } else if (cmd === "hora") {
-    await wa.Message.text(msg.cid, new Date().toLocaleString());
-  }
+  console.log("Disconnected");
 });
 
-await wa.pair((data) => {
-  if (Buffer.isBuffer(data)) {
-    require("fs").writeFileSync("qr.png", data);
-  } else {
-    console.log("Codigo:", data);
-  }
+wa.event.on("error", (error) => {
+  console.error("Error:", error.message);
 });
-```
 
-### Filtrar por chat
-
-```typescript
-const ALLOWED_CHATS = [
-  "5491112345678@s.whatsapp.net",
-  "123456789@g.us",
-];
-
-wa.event.on("message:created", async (msg) => {
-  if (!ALLOWED_CHATS.includes(msg.cid)) return;
-  // Procesar solo mensajes de chats permitidos
-});
-```
-
-### Auto-respuesta cuando esta ausente
-
-```typescript
-const AWAY_MESSAGE = "Estoy ausente. Respondere pronto.";
-const responded = new Set<string>();
-
+// Messages
 wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
+  console.log(`New message: ${msg.type}`);
+});
 
-  // Responder solo una vez por chat
-  if (responded.has(msg.cid)) return;
-  responded.add(msg.cid);
-
-  await wa.Message.text(msg.cid, AWAY_MESSAGE);
-
-  // Limpiar despues de 1 hora
-  setTimeout(() => responded.delete(msg.cid), 60 * 60 * 1000);
+// Chats
+wa.event.on("chat:updated", (chat) => {
+  console.log(`Chat updated: ${chat.name}`);
 });
 ```
 
 ---
 
-## Interfaz IWhatsApp
+## Complete example
 
 ```typescript
-interface IWhatsApp {
-  engine?: Engine;
-  phone?: string | number;
+import { WhatsApp } from "@arcaelas/whatsapp";
+
+async function main() {
+  const wa = new WhatsApp();
+
+  // Events
+  wa.event.on("open", () => console.log("Connected"));
+  wa.event.on("close", () => console.log("Disconnected"));
+  wa.event.on("error", (e) => console.error("Error:", e.message));
+
+  // Messages
+  wa.event.on("message:created", async (msg) => {
+    if (msg.me || msg.type !== "text") return;
+
+    const text = (await msg.content()).toString();
+
+    if (text.toLowerCase() === "ping") {
+      await wa.Message.text(msg.cid, "pong!");
+    }
+  });
+
+  // Connect
+  await wa.pair(async (data) => {
+    if (Buffer.isBuffer(data)) {
+      require("fs").writeFileSync("qr.png", data);
+      console.log("Scan qr.png");
+    } else {
+      console.log("Code:", data);
+    }
+  });
+
+  console.log("Bot ready!");
 }
-```
 
----
-
-## Interfaz WhatsAppEventMap
-
-```typescript
-interface WhatsAppEventMap {
-  open: [];
-  close: [];
-  error: [Error];
-  "contact:created": [Contact];
-  "contact:updated": [Contact];
-  "chat:created": [Chat];
-  "chat:updated": [Chat];
-  "chat:pined": [cid: string, pined: number | null];
-  "chat:archived": [cid: string, archived: boolean];
-  "chat:muted": [cid: string, muted: number | null];
-  "chat:deleted": [cid: string];
-  "message:created": [Message];
-  "message:updated": [Message];
-  "message:reacted": [cid: string, mid: string, emoji: string];
-  "message:deleted": [cid: string, mid: string];
-}
+main().catch(console.error);
 ```

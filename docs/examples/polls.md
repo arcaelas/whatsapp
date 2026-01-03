@@ -1,41 +1,41 @@
-# Encuestas
+# Polls
 
-Ejemplos de creacion y manejo de encuestas.
+Examples of creating and handling polls.
 
 ---
 
-## Crear encuesta
+## Create poll
 
 ```typescript
-// Encuesta simple
+// Simple poll
 await wa.Message.poll("123456789@g.us", {
-  content: "Cual es tu color favorito?",
+  content: "What's your favorite color?",
   options: [
-    { content: "Rojo" },
-    { content: "Azul" },
-    { content: "Verde" },
-    { content: "Amarillo" }
+    { content: "Red" },
+    { content: "Blue" },
+    { content: "Green" },
+    { content: "Yellow" }
   ]
 });
 ```
 
 ---
 
-## Leer datos de encuesta
+## Read poll data
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
   if (msg.type !== "poll") return;
 
-  // El contenido de una encuesta es JSON
+  // Poll content is JSON
   const buffer = await msg.content();
   const poll = JSON.parse(buffer.toString()) as {
     content: string;
     options: Array<{ content: string }>;
   };
 
-  console.log(`Encuesta: ${poll.content}`);
-  console.log("Opciones:");
+  console.log(`Poll: ${poll.content}`);
+  console.log("Options:");
   poll.options.forEach((opt, i) => {
     console.log(`  ${i + 1}. ${opt.content}`);
   });
@@ -44,7 +44,7 @@ wa.event.on("message:created", async (msg) => {
 
 ---
 
-## Bot de encuestas
+## Poll bot
 
 ```typescript
 wa.event.on("message:created", async (msg) => {
@@ -52,17 +52,17 @@ wa.event.on("message:created", async (msg) => {
 
   const text = (await msg.content()).toString();
 
-  // Comando: !encuesta Pregunta | Opcion1 | Opcion2 | ...
-  if (text.startsWith("!encuesta ")) {
-    const content = text.slice(10);
+  // Command: !poll Question | Option1 | Option2 | ...
+  if (text.startsWith("!poll ")) {
+    const content = text.slice(6);
     const parts = content.split("|").map(s => s.trim());
 
     if (parts.length < 3) {
       await wa.Message.text(
         msg.cid,
-        "Uso: !encuesta Pregunta | Opcion1 | Opcion2 | ...\n\n" +
-        "Ejemplo:\n" +
-        "!encuesta Que comemos hoy? | Pizza | Sushi | Hamburguesa"
+        "Usage: !poll Question | Option1 | Option2 | ...\n\n" +
+        "Example:\n" +
+        "!poll What should we eat? | Pizza | Sushi | Burger"
       );
       return;
     }
@@ -70,7 +70,7 @@ wa.event.on("message:created", async (msg) => {
     const [question, ...options] = parts;
 
     if (options.length > 12) {
-      await wa.Message.text(msg.cid, "Maximo 12 opciones permitidas");
+      await wa.Message.text(msg.cid, "Maximum 12 options allowed");
       return;
     }
 
@@ -79,14 +79,14 @@ wa.event.on("message:created", async (msg) => {
       options: options.map(opt => ({ content: opt }))
     });
 
-    await wa.Message.text(msg.cid, `Encuesta creada: "${question}"`);
+    await wa.Message.text(msg.cid, `Poll created: "${question}"`);
   }
 });
 ```
 
 ---
 
-## Encuesta con temporizador
+## Timed poll
 
 ```typescript
 async function create_timed_poll(
@@ -96,7 +96,7 @@ async function create_timed_poll(
   options: string[],
   duration_minutes: number
 ) {
-  // Crear encuesta
+  // Create poll
   const poll_msg = await wa.Message.poll(chat_id, {
     content: question,
     options: options.map(opt => ({ content: opt }))
@@ -104,34 +104,34 @@ async function create_timed_poll(
 
   if (!poll_msg) return;
 
-  await wa.Message.text(chat_id, `Encuesta activa por ${duration_minutes} minutos`);
+  await wa.Message.text(chat_id, `Poll active for ${duration_minutes} minutes`);
 
-  // Esperar duracion
+  // Wait duration
   await new Promise(r => setTimeout(r, duration_minutes * 60 * 1000));
 
-  // Anunciar que termino
-  await wa.Message.text(chat_id, `*Encuesta finalizada!*\n\nVer resultados en la encuesta.`);
+  // Announce end
+  await wa.Message.text(chat_id, `*Poll ended!*\n\nCheck results in the poll.`);
 }
 
-// Uso
+// Usage
 await create_timed_poll(
   wa,
   "123456789@g.us",
-  "Que pelicula vemos?",
-  ["Accion", "Comedia", "Terror", "Drama"],
-  5 // 5 minutos
+  "What movie should we watch?",
+  ["Action", "Comedy", "Horror", "Drama"],
+  5 // 5 minutes
 );
 ```
 
 ---
 
-## Notas importantes
+## Important notes
 
-!!! info "Limite de opciones"
-    WhatsApp permite maximo 12 opciones por encuesta.
+!!! info "Option limit"
+    WhatsApp allows maximum 12 options per poll.
 
-!!! warning "Visibilidad de votos"
-    Los votos en WhatsApp son anonimos. Solo puedes ver el conteo total, no quien voto.
+!!! warning "Vote visibility"
+    Votes on WhatsApp are anonymous. You can only see total count, not who voted.
 
-!!! tip "Encuestas en grupos"
-    Las encuestas funcionan mejor en grupos donde hay mas participantes.
+!!! tip "Polls in groups"
+    Polls work best in groups where there are more participants.

@@ -1,14 +1,14 @@
-# Instalacion
+# Installation
 
-## Requisitos
+## Requirements
 
-- **Node.js** 18 o superior
-- **npm**, **yarn** o **pnpm**
-- Cuenta de WhatsApp activa
+- **Node.js** 18 or higher
+- **npm**, **yarn** or **pnpm**
+- Active WhatsApp account
 
 ---
 
-## Instalacion del paquete
+## Package installation
 
 === "npm"
     ```bash
@@ -27,9 +27,9 @@
 
 ---
 
-## Configuracion de TypeScript
+## TypeScript configuration
 
-La libreria esta escrita en TypeScript y proporciona tipos completos. Asegurate de tener una configuracion compatible:
+The library is written in TypeScript and provides complete types. Make sure you have a compatible configuration:
 
 ```json title="tsconfig.json"
 {
@@ -46,39 +46,39 @@ La libreria esta escrita en TypeScript y proporciona tipos completos. Asegurate 
 
 ---
 
-## Estructura de archivos
+## File structure
 
-Cuando uses `FileEngine` (default), la libreria crea la siguiente estructura:
+When using `FileEngine` (default), the library creates the following structure:
 
 ```
 .baileys/
-  default/                    # o el nombre que especifiques
+  default/                    # or the name you specify
     session/
-      {key}/index             # Datos de sesion (creds, keys, etc.)
+      {key}/index             # Session data (creds, keys, etc.)
     contact/
-      {jid}/index             # Datos de contacto
+      {jid}/index             # Contact data
     chat/
       {jid}/
-        index                 # Datos del chat
+        index                 # Chat data
         message/
-          index               # Indice "MID TIMESTAMP" por linea
+          index               # Index "MID TIMESTAMP" per line
           {mid}/
-            index             # Metadata del mensaje (JSON)
-            content           # Contenido binario (media)
+            index             # Message metadata (JSON)
+            content           # Binary content (media)
 ```
 
-!!! note "Normalizacion de IDs"
-    Los caracteres `@` en JIDs se reemplazan por `_at_` en los nombres de directorios.
-    Ejemplo: `5491112345678@s.whatsapp.net` → `5491112345678_at_s.whatsapp.net`
+!!! note "ID normalization"
+    The `@` characters in JIDs are replaced with `_at_` in directory names.
+    Example: `5491112345678@s.whatsapp.net` → `5491112345678_at_s.whatsapp.net`
 
-!!! tip "Consejo"
-    Agrega `.baileys/` a tu `.gitignore` para no subir credenciales al repositorio.
+!!! tip "Tip"
+    Add `.baileys/` to your `.gitignore` to avoid uploading credentials to the repository.
 
 ---
 
-## Verificar instalacion
+## Verify installation
 
-Crea un archivo de prueba:
+Create a test file:
 
 ```typescript title="test.ts"
 import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
@@ -87,29 +87,29 @@ const wa = new WhatsApp({
   engine: new FileEngine(".baileys/test"),
 });
 
-console.log("Instalacion correcta!");
-console.log("Clases disponibles:", {
+console.log("Installation successful!");
+console.log("Available classes:", {
   Chat: wa.Chat,
   Contact: wa.Contact,
   Message: wa.Message,
 });
 ```
 
-Ejecuta:
+Run:
 
 ```bash
 npx tsx test.ts
 ```
 
-Si ves el mensaje de exito, la instalacion esta completa.
+If you see the success message, the installation is complete.
 
 ---
 
-## Problemas comunes
+## Common issues
 
 ### Error: Cannot find module 'baileys'
 
-Asegurate de que baileys este instalado como dependencia:
+Make sure baileys is installed as a dependency:
 
 ```bash
 npm install baileys
@@ -117,7 +117,7 @@ npm install baileys
 
 ### Error: libffi.so.7 not found (Linux)
 
-Instala las dependencias del sistema:
+Install system dependencies:
 
 ```bash
 # Debian/Ubuntu
@@ -129,10 +129,10 @@ sudo yum install libffi-devel
 
 ### Error: ENOENT .baileys/default
 
-El directorio se crea automaticamente en la primera conexion. Si persiste, verifica permisos de escritura.
+The directory is created automatically on first connection. If it persists, check write permissions.
 
 ---
 
-## Siguiente paso
+## Next step
 
-[:octicons-arrow-right-24: Primeros pasos](getting-started.md)
+[:octicons-arrow-right-24: Getting started](getting-started.md)
