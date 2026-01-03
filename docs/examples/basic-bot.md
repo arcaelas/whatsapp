@@ -10,33 +10,30 @@ Ejemplo de un bot simple que responde a mensajes.
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
-  const wa = new WhatsApp({
-    sync: true,
-    online: false,
-  });
+  const wa = new WhatsApp();
 
   // Eventos de conexion
-  wa.on("open", () => console.log("Bot conectado!"));
-  wa.on("close", () => console.log("Bot desconectado"));
-  wa.on("error", (err) => console.error("Error:", err.message));
+  wa.event.on("open", () => console.log("Bot conectado!"));
+  wa.event.on("close", () => console.log("Bot desconectado"));
+  wa.event.on("error", (err) => console.error("Error:", err.message));
 
   // Escuchar mensajes
-  wa.on("message:created", async (msg) => {
+  wa.event.on("message:created", async (msg) => {
     // Ignorar mensajes propios
     if (msg.me) return;
 
     // Solo procesar texto
-    if (!(msg instanceof wa.Message.Text)) return;
+    if (msg.type !== "text") return;
 
     const text = (await msg.content()).toString().toLowerCase();
 
     // Respuestas simples
     if (text === "hola") {
-      await wa.Message.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver opciones.");
+      await wa.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver opciones.");
     }
 
     if (text === "ayuda") {
-      await wa.Message.Message.text(
+      await wa.Message.text(
         msg.cid,
         "Comandos disponibles:\n" +
         "- hola: Saludo\n" +
@@ -47,11 +44,11 @@ async function main() {
     }
 
     if (text === "hora") {
-      await wa.Message.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString("es-AR")}`);
+      await wa.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString("es-AR")}`);
     }
 
     if (text === "fecha") {
-      await wa.Message.Message.text(msg.cid, `Hoy es ${new Date().toLocaleDateString("es-AR", {
+      await wa.Message.text(msg.cid, `Hoy es ${new Date().toLocaleDateString("es-AR", {
         weekday: "long",
         year: "numeric",
         month: "long",
@@ -61,7 +58,7 @@ async function main() {
 
     if (text === "ping") {
       const start = Date.now();
-      await wa.Message.Message.text(msg.cid, "pong!");
+      await wa.Message.text(msg.cid, "pong!");
       console.log(`Latencia: ${Date.now() - start}ms`);
     }
   });
@@ -77,8 +74,6 @@ async function main() {
     }
   });
 
-  // Esperar sincronizacion
-  await wa.sync((p) => console.log(`Sincronizando: ${p}%`));
   console.log("Bot listo para recibir mensajes!");
 }
 
@@ -101,52 +96,34 @@ npx tsx bot.ts
 
 ## Mejoras opcionales
 
-### Agregar typing indicator
-
-```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  // Mostrar "escribiendo..."
-  await wa.Chat.typing(msg.cid, true);
-
-  // Simular tiempo de respuesta
-  await new Promise(r => setTimeout(r, 1000));
-
-  // Responder
-  await wa.Message.Message.text(msg.cid, "Respuesta!");
-
-  // Ocultar typing
-  await wa.Chat.typing(msg.cid, false);
-});
-```
-
-### Marcar mensajes como leidos
-
-```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  // Marcar como leido
-  await msg.seen();
-
-  // Procesar mensaje...
-});
-```
-
 ### Agregar reacciones
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
 
   const text = (await msg.content()).toString().toLowerCase();
 
   // Reaccionar segun contenido
   if (text.includes("gracias")) {
-    await msg.react("❤️");
+    await wa.Message.react(msg.cid, msg.id, "❤️");
   } else if (text.includes("jaja")) {
-    await msg.react("😂");
+    await wa.Message.react(msg.cid, msg.id, "😂");
+  }
+});
+```
+
+### Responder con cita
+
+```typescript
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
+
+  const text = (await msg.content()).toString().toLowerCase();
+
+  if (text === "eco") {
+    // Responder citando el mensaje original
+    await wa.Message.text(msg.cid, "Esto es un eco!");
   }
 });
 ```

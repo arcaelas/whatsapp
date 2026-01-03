@@ -72,7 +72,7 @@ nav:
   - Ejemplos:
     - Bot Basico: examples/basic-bot.md
     - Bot de Comandos: examples/command-bot.md
-    - Bot con Persistencia S3: examples/s3-bot.md
+    - Bot con Engine Personalizado: examples/s3-bot.md
     - Envio de Media: examples/media.md
     - Gestion de Grupos: examples/groups.md
     - Encuestas: examples/polls.md

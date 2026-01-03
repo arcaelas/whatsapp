@@ -1,104 +1,77 @@
-# Bot con Persistencia S3
+# Bot con Engine Personalizado
 
-Bot de produccion usando Amazon S3 para almacenamiento.
-
----
-
-## Requisitos
-
-- Cuenta de AWS con acceso a S3
-- Bucket S3 creado
-- Credenciales IAM con permisos S3
+Bot de produccion usando un engine personalizado para almacenamiento.
 
 ---
 
-## Configuracion AWS
+## Descripcion
 
-### Crear bucket
+Este ejemplo muestra como crear un bot que usa un engine personalizado
+(Redis, PostgreSQL, S3, etc.) en lugar del FileEngine por defecto.
 
-```bash
-aws s3 mb s3://mi-bot-whatsapp --region us-east-1
-```
+---
 
-### Politica IAM minima
+## Ejemplo: Redis Engine
 
-```json title="policy.json"
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::mi-bot-whatsapp",
-        "arn:aws:s3:::mi-bot-whatsapp/*"
-      ]
+### Crear el engine
+
+```typescript title="RedisEngine.ts"
+import type { Engine } from "@arcaelas/whatsapp";
+import { createClient } from "redis";
+
+export class RedisEngine implements Engine {
+  private client: ReturnType<typeof createClient>;
+
+  constructor(url: string) {
+    this.client = createClient({ url });
+  }
+
+  async connect() {
+    await this.client.connect();
+  }
+
+  async get(key: string): Promise<string | null> {
+    return await this.client.get(key);
+  }
+
+  async set(key: string, value: string | null): Promise<void> {
+    if (value === null) {
+      await this.client.del(key);
+    } else {
+      await this.client.set(key, value);
     }
-  ]
+  }
+
+  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
+    const keys = await this.client.keys(`${prefix}*`);
+    return keys.slice(offset, offset + limit);
+  }
 }
 ```
 
----
-
-## Variables de entorno
-
-```bash title=".env"
-AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXXX
-AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-AWS_REGION=us-east-1
-S3_BUCKET=mi-bot-whatsapp
-BOT_PREFIX=!
-```
-
----
-
-## Codigo
+### Usar el engine
 
 ```typescript title="bot.ts"
-import { WhatsApp, S3Engine } from "@arcaelas/whatsapp";
+import { WhatsApp } from "@arcaelas/whatsapp";
+import { RedisEngine } from "./RedisEngine";
 import "dotenv/config";
 
 async function main() {
-  // Validar variables de entorno
-  const { AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET } = process.env;
+  // Crear engine Redis
+  const engine = new RedisEngine(process.env.REDIS_URL || "redis://localhost:6379");
+  await engine.connect();
 
-  if (!S3_BUCKET) {
-    throw new Error("S3_BUCKET no configurado");
-  }
-
-  // Crear engine S3
-  const engine = new S3Engine({
-    bucket: S3_BUCKET,
-    prefix: ".baileys/produccion",
-    credentials: AWS_ACCESS_KEY_ID ? {
-      region: AWS_REGION || "us-east-1",
-      accessKeyId: AWS_ACCESS_KEY_ID,
-      secretAccessKey: AWS_SECRET_ACCESS_KEY,
-    } : undefined, // Usa IAM role si no hay credenciales
-  });
-
-  // Crear instancia
-  const wa = new WhatsApp({
-    engine,
-    sync: true,
-    online: false,
-  });
+  // Crear instancia con engine personalizado
+  const wa = new WhatsApp({ engine });
 
   // Logging
-  wa.on("open", () => console.log("[INFO] Conectado"));
-  wa.on("close", () => console.log("[WARN] Desconectado"));
-  wa.on("error", (e) => console.error("[ERROR]", e.message));
-  wa.on("progress", (p) => console.log(`[SYNC] ${p}%`));
+  wa.event.on("open", () => console.log("[INFO] Conectado"));
+  wa.event.on("close", () => console.log("[WARN] Desconectado"));
+  wa.event.on("error", (e) => console.error("[ERROR]", e.message));
 
   // Mensajes
-  wa.on("message:created", async (msg) => {
-    if (msg.me) return;
-    if (!(msg instanceof wa.Message.Text)) return;
+  wa.event.on("message:created", async (msg) => {
+    if (msg.me || msg.type !== "text") return;
 
     const text = (await msg.content()).toString();
     const prefix = process.env.BOT_PREFIX || "!";
@@ -109,22 +82,20 @@ async function main() {
 
     switch (cmd.toLowerCase()) {
       case "ping":
-        await wa.Message.Message.text(msg.cid, "pong!");
+        await wa.Message.text(msg.cid, "pong!");
         break;
 
       case "status":
-        await wa.Message.Message.text(
+        await wa.Message.text(
           msg.cid,
           `*Estado del Bot*\n\n` +
-          `Engine: S3\n` +
-          `Bucket: ${S3_BUCKET}\n` +
-          `Region: ${AWS_REGION || "us-east-1"}\n` +
+          `Engine: Redis\n` +
           `Uptime: ${Math.floor(process.uptime() / 60)} minutos`
         );
         break;
 
       case "ayuda":
-        await wa.Message.Message.text(
+        await wa.Message.text(
           msg.cid,
           `Comandos:\n` +
           `${prefix}ping - Test\n` +
@@ -139,7 +110,6 @@ async function main() {
   console.log("[INFO] Iniciando bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      // En produccion, enviar QR por otro medio
       require("fs").writeFileSync("/tmp/qr.png", data);
       console.log("[INFO] QR guardado en /tmp/qr.png");
     } else {
@@ -147,7 +117,6 @@ async function main() {
     }
   });
 
-  await wa.sync((p) => console.log(`[SYNC] ${p}%`));
   console.log("[INFO] Bot listo!");
 
   // Mantener proceso vivo
@@ -184,74 +153,25 @@ CMD ["node", "--import", "tsx", "bot.ts"]
 version: "3.8"
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
   bot:
     build: .
     restart: unless-stopped
+    depends_on:
+      - redis
     environment:
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - S3_BUCKET=${S3_BUCKET}
-      - BOT_PREFIX=${BOT_PREFIX}
+      - REDIS_URL=redis://redis:6379
+      - BOT_PREFIX=!
     volumes:
       - /tmp:/tmp  # Para el QR temporal
 ```
 
 ---
 
-## AWS Lambda (opcional)
-
-Para ejecutar como funcion Lambda con API Gateway:
-
-```typescript title="lambda.ts"
-import { WhatsApp, S3Engine } from "@arcaelas/whatsapp";
-import { APIGatewayProxyHandler } from "aws-lambda";
-
-let wa: WhatsApp | null = null;
-
-async function getWhatsApp(): Promise<WhatsApp> {
-  if (wa) return wa;
-
-  wa = new WhatsApp({
-    engine: new S3Engine({
-      bucket: process.env.S3_BUCKET!,
-      prefix: ".baileys/lambda",
-    }),
-    sync: false,
-    online: false,
-  });
-
-  await wa.pair();
-  return wa;
-}
-
-export const handler: APIGatewayProxyHandler = async (event) => {
-  const whatsapp = await getWhatsApp();
-  const body = JSON.parse(event.body || "{}");
-
-  // Enviar mensaje via API
-  if (body.action === "send") {
-    const { to, message } = body;
-    await whatsapp.Message.Message.text(to, message);
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ success: true }),
-    };
-  }
-
-  return {
-    statusCode: 400,
-    body: JSON.stringify({ error: "Invalid action" }),
-  };
-};
-```
-
----
-
-## Monitoreo
-
-### Health check
+## Health check
 
 ```typescript
 import { createServer } from "http";
@@ -276,19 +196,18 @@ server.listen(3000, () => {
 });
 ```
 
-### CloudWatch Logs
+---
 
-```typescript
-// Reemplazar console.log con formato estructurado
-function log(level: string, message: string, meta?: object) {
-  console.log(JSON.stringify({
-    level,
-    message,
-    timestamp: new Date().toISOString(),
-    ...meta,
-  }));
-}
+## Variables de entorno
 
-wa.on("open", () => log("INFO", "Conectado"));
-wa.on("error", (e) => log("ERROR", e.message, { stack: e.stack }));
+```bash title=".env"
+REDIS_URL=redis://localhost:6379
+BOT_PREFIX=!
 ```
+
+---
+
+## Otros engines
+
+Consulta la documentacion de [Engines](../references/engines.md) para ver
+ejemplos de PostgreSQL, MongoDB, y otros.

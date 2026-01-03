@@ -6,7 +6,7 @@ Referencia completa de todos los eventos emitidos por WhatsApp.
 
 ## Escuchar eventos
 
-WhatsApp extiende `EventEmitter` con tipado TypeScript:
+WhatsApp expone un EventEmitter tipado a traves de `wa.event`:
 
 ```typescript
 import { WhatsApp } from "@arcaelas/whatsapp";
@@ -14,19 +14,19 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 const wa = new WhatsApp();
 
 // Escuchar evento
-wa.on("message:created", (msg) => {
+wa.event.on("message:created", (msg) => {
   // msg esta tipado correctamente
 });
 
 // Escuchar una sola vez
-wa.once("open", () => {
+wa.event.once("open", () => {
   console.log("Primera conexion exitosa");
 });
 
 // Remover listener
 const handler = (msg) => console.log(msg);
-wa.on("message:created", handler);
-wa.off("message:created", handler);
+wa.event.on("message:created", handler);
+wa.event.off("message:created", handler);
 ```
 
 ---
@@ -38,28 +38,27 @@ wa.off("message:created", handler);
 Emitido cuando la conexion es exitosa.
 
 ```typescript
-wa.on("open", () => {
+wa.event.on("open", () => {
   console.log("Conectado a WhatsApp");
   // Aqui puedes empezar a enviar mensajes
 });
 ```
 
-**Payload:** `void`
+**Payload:** ninguno
 
 ---
 
 ### `close`
 
-Emitido cuando la conexion se cierra.
+Emitido cuando la conexion se cierra. La reconexion es automatica.
 
 ```typescript
-wa.on("close", () => {
-  console.log("Desconectado");
-  // La reconexion es automatica en la mayoria de casos
+wa.event.on("close", () => {
+  console.log("Desconectado, reconectando...");
 });
 ```
 
-**Payload:** `void`
+**Payload:** ninguno
 
 ---
 
@@ -68,13 +67,11 @@ wa.on("close", () => {
 Emitido cuando ocurre un error fatal que no permite reconexion.
 
 ```typescript
-wa.on("error", (error: Error) => {
+wa.event.on("error", (error) => {
   console.error("Error fatal:", error.message);
 
-  // Errores comunes:
+  // Error comun:
   // - "Logged out" - Sesion cerrada desde telefono
-  // - "Connection replaced" - Otra sesion tomo el control
-  // - "Max retries exceeded" - Demasiados intentos de reconexion
 });
 ```
 
@@ -82,76 +79,120 @@ wa.on("error", (error: Error) => {
 
 ---
 
-### `progress`
+## Eventos de contacto
 
-Emitido durante la sincronizacion del historial.
+### `contact:created`
+
+Emitido cuando se crea un nuevo contacto.
 
 ```typescript
-wa.on("progress", (percent: number) => {
-  console.log(`Sincronizando: ${percent}%`);
-
-  if (percent === 100) {
-    console.log("Sincronizacion completa");
-  }
+wa.event.on("contact:created", (contact) => {
+  console.log(`Nuevo contacto: ${contact.name}`);
+  console.log(`  ID: ${contact.id}`);
+  console.log(`  Telefono: ${contact.phone}`);
+  console.log(`  Es yo: ${contact.me}`);
 });
 ```
 
-**Payload:** `number` (0-100)
+**Payload:** `Contact`
 
 ---
 
-## Eventos de contacto
+### `contact:updated`
 
-### `contact:upsert`
-
-Emitido cuando se crea o actualiza un contacto.
+Emitido cuando se actualiza un contacto existente.
 
 ```typescript
-wa.on("contact:upsert", (contact) => {
-  console.log(`Contacto: ${contact.name}`);
-  console.log(`  ID: ${contact.id}`);
-  console.log(`  Telefono: ${contact.phone}`);
-  console.log(`  Foto: ${contact.photo || "Sin foto"}`);
+wa.event.on("contact:updated", (contact) => {
+  console.log(`Contacto actualizado: ${contact.name}`);
 });
 ```
 
-**Payload:** `Contact` (instancia de la clase Contact)
-
-**Propiedades disponibles:**
-
-- `id` - JID del contacto
-- `name` - Nombre en WhatsApp
-- `phone` - Numero de telefono
-- `photo` - URL de foto o null
-- `custom_name` - Nombre personalizado local
+**Payload:** `Contact`
 
 ---
 
 ## Eventos de chat
 
-### `chat:upsert`
+### `chat:created`
 
-Emitido cuando se crea o actualiza un chat.
+Emitido cuando se crea un nuevo chat.
 
 ```typescript
-wa.on("chat:upsert", (chat) => {
+wa.event.on("chat:created", (chat) => {
   if (chat.type === "group") {
-    console.log(`Grupo: ${chat.name}`);
+    console.log(`Nuevo grupo: ${chat.name}`);
   } else {
-    console.log(`Chat: ${chat.name}`);
+    console.log(`Nuevo chat: ${chat.name}`);
   }
 });
 ```
 
 **Payload:** `Chat`
 
-**Propiedades disponibles:**
+---
 
-- `id` - JID del chat
-- `name` - Nombre del chat/grupo
-- `photo` - URL de foto o null
-- `phone` - Numero (null en grupos)
-- `type` - `"contact"` o `"group"`
+### `chat:updated`
+
+Emitido cuando se actualiza un chat existente.
+
+```typescript
+wa.event.on("chat:updated", (chat) => {
+  console.log(`Chat actualizado: ${chat.name}`);
+});
+```
+
+**Payload:** `Chat`
+
+---
+
+### `chat:pined`
+
+Emitido cuando se fija o desfija un chat.
+
+```typescript
+wa.event.on("chat:pined", (cid, pined) => {
+  if (pined) {
+    console.log(`Chat ${cid} fijado en ${new Date(pined)}`);
+  } else {
+    console.log(`Chat ${cid} desfijado`);
+  }
+});
+```
+
+**Payload:** `(cid: string, pined: number | null)`
+
+---
+
+### `chat:archived`
+
+Emitido cuando se archiva o desarchiva un chat.
+
+```typescript
+wa.event.on("chat:archived", (cid, archived) => {
+  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
+});
+```
+
+**Payload:** `(cid: string, archived: boolean)`
+
+---
+
+### `chat:muted`
+
+Emitido cuando se silencia o desilencia un chat.
+
+```typescript
+wa.event.on("chat:muted", (cid, muted) => {
+  if (muted) {
+    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
+  } else {
+    console.log(`Chat ${cid} desilenciado`);
+  }
+});
+```
+
+**Payload:** `(cid: string, muted: number | null)`
 
 ---
 
@@ -160,12 +201,12 @@ wa.on("chat:upsert", (chat) => {
 Emitido cuando se elimina un chat.
 
 ```typescript
-wa.on("chat:deleted", (chatId: string) => {
-  console.log(`Chat eliminado: ${chatId}`);
+wa.event.on("chat:deleted", (cid) => {
+  console.log(`Chat eliminado: ${cid}`);
 });
 ```
 
-**Payload:** `string` (JID del chat)
+**Payload:** `(cid: string)`
 
 ---
 
@@ -176,62 +217,36 @@ wa.on("chat:deleted", (chatId: string) => {
 Emitido cuando se recibe un nuevo mensaje.
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   console.log(`Nuevo mensaje:`);
   console.log(`  ID: ${msg.id}`);
   console.log(`  Chat: ${msg.cid}`);
-  console.log(`  Autor: ${msg.uid}`);
   console.log(`  Tipo: ${msg.type}`);
   console.log(`  Mio: ${msg.me}`);
-  console.log(`  Fecha: ${msg.created_at}`);
+  console.log(`  Caption: ${msg.caption}`);
 
-  // Verificar tipo
-  if (msg instanceof wa.Message.Text) {
+  // Obtener contenido
+  if (msg.type === "text") {
     const text = (await msg.content()).toString();
     console.log(`  Texto: ${text}`);
   }
 });
 ```
 
-**Payload:** `Message` (o subclases: Text, Image, Video, Audio, Location, Poll)
+**Payload:** `Message`
 
 **Propiedades disponibles:**
 
 - `id` - ID del mensaje
 - `cid` - JID del chat
-- `uid` - JID del autor
-- `mid` - ID del mensaje citado (o null)
-- `type` - Tipo de mensaje
-- `mime` - MIME type
-- `caption` - Caption/descripcion
 - `me` - true si es mensaje propio
-- `status` - Estado del mensaje
-- `created_at` - Fecha ISO
+- `type` - Tipo de mensaje (text, image, video, audio, location, poll)
+- `mime` - MIME type
+- `caption` - Caption/texto
+- `status` - Estado del mensaje (enum)
+- `starred` - true si esta destacado
+- `forwarded` - true si fue reenviado
 - `edited` - true si fue editado
-
----
-
-### `message:status`
-
-Emitido cuando cambia el estado de un mensaje.
-
-```typescript
-wa.on("message:status", (msg) => {
-  console.log(`Mensaje ${msg.id}: ${msg.status}`);
-  // Estados: pending, sent, delivered, read
-});
-```
-
-**Payload:** `Message`
-
-**Estados posibles:**
-
-| Estado | Descripcion |
-|--------|-------------|
-| `pending` | Enviando |
-| `sent` | Enviado (un check) |
-| `delivered` | Entregado (dos checks) |
-| `read` | Leido (checks azules) |
 
 ---
 
@@ -240,13 +255,13 @@ wa.on("message:status", (msg) => {
 Emitido cuando se edita un mensaje.
 
 ```typescript
-wa.on("message:updated", async (msg) => {
+wa.event.on("message:updated", async (msg) => {
   console.log(`Mensaje editado: ${msg.id}`);
   console.log(`  edited: ${msg.edited}`); // true
 
-  if (msg instanceof wa.Message.Text) {
-    const newText = (await msg.content()).toString();
-    console.log(`  Nuevo texto: ${newText}`);
+  if (msg.type === "text") {
+    const new_text = (await msg.content()).toString();
+    console.log(`  Nuevo texto: ${new_text}`);
   }
 });
 ```
@@ -255,36 +270,36 @@ wa.on("message:updated", async (msg) => {
 
 ---
 
+### `message:reacted`
+
+Emitido cuando alguien reacciona a un mensaje.
+
+```typescript
+wa.event.on("message:reacted", (cid, mid, emoji) => {
+  console.log(`Reaccion en mensaje:`);
+  console.log(`  Chat: ${cid}`);
+  console.log(`  Mensaje: ${mid}`);
+  console.log(`  Emoji: ${emoji}`); // "" si se quito la reaccion
+});
+```
+
+**Payload:** `(cid: string, mid: string, emoji: string)`
+
+---
+
 ### `message:deleted`
 
 Emitido cuando se elimina un mensaje.
 
 ```typescript
-wa.on("message:deleted", ({ cid, mid }) => {
+wa.event.on("message:deleted", (cid, mid) => {
   console.log(`Mensaje eliminado:`);
   console.log(`  Chat: ${cid}`);
   console.log(`  Mensaje: ${mid}`);
 });
 ```
 
-**Payload:** `{ cid: string; mid: string }`
-
----
-
-### `message:reaction`
-
-Emitido cuando alguien reacciona a un mensaje.
-
-```typescript
-wa.on("message:reaction", async (msg) => {
-  console.log(`Reaccion en mensaje ${msg.id}`);
-
-  // El contenido del mensaje no cambia
-  // pero puedes detectar que hubo actividad
-});
-```
-
-**Payload:** `Message`
+**Payload:** `(cid: string, mid: string)`
 
 ---
 
@@ -293,42 +308,52 @@ wa.on("message:reaction", async (msg) => {
 ### Logger completo
 
 ```typescript
-function setupLogger(wa: WhatsApp) {
-  wa.on("open", () => console.log("[INFO] Conectado"));
-  wa.on("close", () => console.log("[WARN] Desconectado"));
-  wa.on("error", (e) => console.error("[ERROR]", e.message));
-  wa.on("progress", (p) => console.log(`[SYNC] ${p}%`));
+function setup_logger(wa: WhatsApp) {
+  // Conexion
+  wa.event.on("open", () => console.log("[INFO] Conectado"));
+  wa.event.on("close", () => console.log("[WARN] Desconectado"));
+  wa.event.on("error", (e) => console.error("[ERROR]", e.message));
 
-  wa.on("contact:upsert", (c) =>
-    console.log(`[CONTACT] ${c.name} (${c.phone})`)
+  // Contactos
+  wa.event.on("contact:created", (c) =>
+    console.log(`[CONTACT:NEW] ${c.name} (${c.phone})`)
+  );
+  wa.event.on("contact:updated", (c) =>
+    console.log(`[CONTACT:UPD] ${c.name}`)
   );
 
-  wa.on("chat:upsert", (c) =>
-    console.log(`[CHAT] ${c.name} (${c.type})`)
+  // Chats
+  wa.event.on("chat:created", (c) =>
+    console.log(`[CHAT:NEW] ${c.name} (${c.type})`)
+  );
+  wa.event.on("chat:updated", (c) =>
+    console.log(`[CHAT:UPD] ${c.name}`)
+  );
+  wa.event.on("chat:pined", (cid, p) =>
+    console.log(`[CHAT:PIN] ${cid}: ${p ? "fijado" : "desfijado"}`)
+  );
+  wa.event.on("chat:archived", (cid, a) =>
+    console.log(`[CHAT:ARC] ${cid}: ${a ? "archivado" : "desarchivado"}`)
+  );
+  wa.event.on("chat:muted", (cid, m) =>
+    console.log(`[CHAT:MUTE] ${cid}: ${m ? "silenciado" : "desilenciado"}`)
+  );
+  wa.event.on("chat:deleted", (cid) =>
+    console.log(`[CHAT:DEL] ${cid}`)
   );
 
-  wa.on("chat:deleted", (id) =>
-    console.log(`[CHAT] Eliminado: ${id}`)
+  // Mensajes
+  wa.event.on("message:created", (m) =>
+    console.log(`[MSG:NEW] ${m.cid} <- ${m.type}`)
   );
-
-  wa.on("message:created", (m) =>
-    console.log(`[MSG:NEW] ${m.uid} -> ${m.cid}: ${m.type}`)
-  );
-
-  wa.on("message:status", (m) =>
-    console.log(`[MSG:STATUS] ${m.id}: ${m.status}`)
-  );
-
-  wa.on("message:updated", (m) =>
+  wa.event.on("message:updated", (m) =>
     console.log(`[MSG:EDIT] ${m.id}`)
   );
-
-  wa.on("message:deleted", ({ cid, mid }) =>
-    console.log(`[MSG:DEL] ${mid} from ${cid}`)
+  wa.event.on("message:reacted", (cid, mid, emoji) =>
+    console.log(`[MSG:REACT] ${mid}: ${emoji}`)
   );
-
-  wa.on("message:reaction", (m) =>
-    console.log(`[MSG:REACT] ${m.id}`)
+  wa.event.on("message:deleted", (cid, mid) =>
+    console.log(`[MSG:DEL] ${mid} from ${cid}`)
   );
 }
 ```
@@ -338,7 +363,7 @@ function setupLogger(wa: WhatsApp) {
 ```typescript
 const MONITORED_CHAT = "5491112345678@s.whatsapp.net";
 
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.cid !== MONITORED_CHAT) return;
   // Solo procesar mensajes de este chat
 });
@@ -347,9 +372,9 @@ wa.on("message:created", async (msg) => {
 ### Filtrar por tipo
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   // Solo imagenes
-  if (!(msg instanceof wa.Message.Image)) return;
+  if (msg.type !== "image") return;
 
   const buffer = await msg.content();
   console.log(`Imagen recibida: ${buffer.length} bytes`);
@@ -362,26 +387,29 @@ wa.on("message:created", async (msg) => {
 const queue: Message[] = [];
 let processing = false;
 
-wa.on("message:created", (msg) => {
+wa.event.on("message:created", (msg) => {
   queue.push(msg);
-  processQueue();
+  process_queue();
 });
 
-async function processQueue() {
+async function process_queue() {
   if (processing || queue.length === 0) return;
 
   processing = true;
   const msg = queue.shift()!;
 
   try {
-    // Procesar mensaje
-    await handleMessage(msg);
+    await handle_message(msg);
   } catch (error) {
     console.error("Error procesando mensaje:", error);
   }
 
   processing = false;
-  processQueue();
+  process_queue();
+}
+
+async function handle_message(msg: Message) {
+  // Procesar mensaje
 }
 ```
 
@@ -390,25 +418,19 @@ async function processQueue() {
 ```typescript
 const stats = {
   messages: 0,
-  images: 0,
-  videos: 0,
-  audios: 0,
-  locations: 0,
-  polls: 0,
+  text: 0,
+  image: 0,
+  video: 0,
+  audio: 0,
+  location: 0,
+  poll: 0,
 };
 
-wa.on("message:created", (msg) => {
+wa.event.on("message:created", (msg) => {
   stats.messages++;
+  stats[msg.type as keyof typeof stats]++;
 
-  switch (msg.type) {
-    case "image": stats.images++; break;
-    case "video": stats.videos++; break;
-    case "audio": stats.audios++; break;
-    case "location": stats.locations++; break;
-    case "poll": stats.polls++; break;
-  }
-
-  console.log(`Estadisticas:`, stats);
+  console.log("Estadisticas:", stats);
 });
 ```
 
@@ -418,17 +440,27 @@ wa.on("message:created", (msg) => {
 
 ```typescript
 interface WhatsAppEventMap {
-  open: void;
-  close: void;
-  error: Error;
-  progress: number;
-  "contact:upsert": Contact;
-  "chat:upsert": Chat;
-  "chat:deleted": string;
-  "message:created": Message;
-  "message:status": Message;
-  "message:updated": Message;
-  "message:deleted": { cid: string; mid: string };
-  "message:reaction": Message;
+  // Conexion
+  open: [];
+  close: [];
+  error: [Error];
+
+  // Contactos
+  "contact:created": [Contact];
+  "contact:updated": [Contact];
+
+  // Chats
+  "chat:created": [Chat];
+  "chat:updated": [Chat];
+  "chat:pined": [cid: string, pined: number | null];
+  "chat:archived": [cid: string, archived: boolean];
+  "chat:muted": [cid: string, muted: number | null];
+  "chat:deleted": [cid: string];
+
+  // Mensajes
+  "message:created": [Message];
+  "message:updated": [Message];
+  "message:reacted": [cid: string, mid: string, emoji: string];
+  "message:deleted": [cid: string, mid: string];
 }
 ```

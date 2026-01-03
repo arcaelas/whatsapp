@@ -8,9 +8,9 @@ Ejemplos de creacion y manejo de encuestas.
 
 ```typescript
 // Encuesta simple
-await wa.Message.Message.poll("123456789@g.us", {
+await wa.Message.poll("123456789@g.us", {
   content: "Cual es tu color favorito?",
-  items: [
+  options: [
     { content: "Rojo" },
     { content: "Azul" },
     { content: "Verde" },
@@ -21,25 +21,24 @@ await wa.Message.Message.poll("123456789@g.us", {
 
 ---
 
-## Leer resultados
+## Leer datos de encuesta
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (!(msg instanceof wa.Message.Poll)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.type !== "poll") return;
 
-  const poll = await msg.count();
-  if (!poll) return;
+  // El contenido de una encuesta es JSON
+  const buffer = await msg.content();
+  const poll = JSON.parse(buffer.toString()) as {
+    content: string;
+    options: Array<{ content: string }>;
+  };
 
   console.log(`Encuesta: ${poll.content}`);
-  console.log("Resultados:");
-
-  let totalVotes = 0;
-  poll.items.forEach((item, i) => {
-    console.log(`  ${i + 1}. ${item.content}: ${item.count} votos`);
-    totalVotes += item.count;
+  console.log("Opciones:");
+  poll.options.forEach((opt, i) => {
+    console.log(`  ${i + 1}. ${opt.content}`);
   });
-
-  console.log(`Total: ${totalVotes} votos`);
 });
 ```
 
@@ -48,9 +47,8 @@ wa.on("message:created", async (msg) => {
 ## Bot de encuestas
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (!(msg instanceof wa.Message.Text)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
 
   const text = (await msg.content()).toString();
 
@@ -60,7 +58,7 @@ wa.on("message:created", async (msg) => {
     const parts = content.split("|").map(s => s.trim());
 
     if (parts.length < 3) {
-      await wa.Message.Message.text(
+      await wa.Message.text(
         msg.cid,
         "Uso: !encuesta Pregunta | Opcion1 | Opcion2 | ...\n\n" +
         "Ejemplo:\n" +
@@ -72,47 +70,16 @@ wa.on("message:created", async (msg) => {
     const [question, ...options] = parts;
 
     if (options.length > 12) {
-      await wa.Message.Message.text(msg.cid, "Maximo 12 opciones permitidas");
+      await wa.Message.text(msg.cid, "Maximo 12 opciones permitidas");
       return;
     }
 
-    await wa.Message.Message.poll(msg.cid, {
+    await wa.Message.poll(msg.cid, {
       content: question,
-      items: options.map(opt => ({ content: opt }))
-    });
-    await wa.Message.Message.text(msg.cid, `Encuesta creada: "${question}"`);
-  }
-
-  // Mostrar resultados de la ultima encuesta
-  if (text === "!resultados") {
-    const messages = await wa.Message.Message.paginate(msg.cid, 0, 50);
-    const pollMsg = messages.find(m => m instanceof wa.Message.Poll);
-
-    if (!pollMsg || !(pollMsg instanceof wa.Message.Poll)) {
-      await wa.Message.Message.text(msg.cid, "No hay encuestas recientes");
-      return;
-    }
-
-    const poll = await pollMsg.count();
-    if (!poll) {
-      await wa.Message.Message.text(msg.cid, "Error leyendo encuesta");
-      return;
-    }
-
-    let result = `*${poll.content}*\n\n`;
-    let totalVotes = poll.items.reduce((sum, item) => sum + item.count, 0);
-
-    poll.items.forEach((item, i) => {
-      const percent = totalVotes > 0
-        ? Math.round((item.count / totalVotes) * 100)
-        : 0;
-      const bar = "█".repeat(Math.floor(percent / 10)) + "░".repeat(10 - Math.floor(percent / 10));
-      result += `${i + 1}. ${item.content}\n`;
-      result += `   ${bar} ${percent}% (${item.count})\n\n`;
+      options: options.map(opt => ({ content: opt }))
     });
 
-    result += `Total: ${totalVotes} votos`;
-    await wa.Message.Message.text(msg.cid, result);
+    await wa.Message.text(msg.cid, `Encuesta creada: "${question}"`);
   }
 });
 ```
@@ -122,48 +89,33 @@ wa.on("message:created", async (msg) => {
 ## Encuesta con temporizador
 
 ```typescript
-async function createTimedPoll(
-  chatId: string,
+async function create_timed_poll(
+  wa: WhatsApp,
+  chat_id: string,
   question: string,
   options: string[],
-  durationMinutes: number
+  duration_minutes: number
 ) {
   // Crear encuesta
-  await wa.Message.Message.poll(chatId, {
+  const poll_msg = await wa.Message.poll(chat_id, {
     content: question,
-    items: options.map(opt => ({ content: opt }))
+    options: options.map(opt => ({ content: opt }))
   });
-  await wa.Message.Message.text(chatId, `Encuesta activa por ${durationMinutes} minutos`);
+
+  if (!poll_msg) return;
+
+  await wa.Message.text(chat_id, `Encuesta activa por ${duration_minutes} minutos`);
 
   // Esperar duracion
-  await new Promise(r => setTimeout(r, durationMinutes * 60 * 1000));
+  await new Promise(r => setTimeout(r, duration_minutes * 60 * 1000));
 
-  // Obtener resultados
-  const messages = await wa.Message.Message.paginate(chatId, 0, 50);
-  const pollMsg = messages.find(m =>
-    m instanceof wa.Message.Poll &&
-    m.me // Solo encuestas creadas por nosotros
-  );
-
-  if (!pollMsg || !(pollMsg instanceof wa.Message.Poll)) return;
-
-  const poll = await pollMsg.count();
-  if (!poll) return;
-
-  // Anunciar ganador
-  const winner = poll.items.reduce((max, item) =>
-    item.count > max.count ? item : max
-  );
-
-  await wa.Message.Message.text(
-    chatId,
-    `*Encuesta finalizada!*\n\n` +
-    `Ganador: ${winner.content} con ${winner.count} votos`
-  );
+  // Anunciar que termino
+  await wa.Message.text(chat_id, `*Encuesta finalizada!*\n\nVer resultados en la encuesta.`);
 }
 
 // Uso
-await createTimedPoll(
+await create_timed_poll(
+  wa,
   "123456789@g.us",
   "Que pelicula vemos?",
   ["Accion", "Comedia", "Terror", "Drama"],

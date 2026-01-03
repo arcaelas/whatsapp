@@ -11,15 +11,12 @@ import * as fs from "fs";
 
 // Desde archivo local
 const img = fs.readFileSync("foto.jpg");
-await wa.Message.Message.image("5491112345678@s.whatsapp.net", img, "Mira esta foto!");
+await wa.Message.image("5491112345678@s.whatsapp.net", img, "Mira esta foto!");
 
 // Desde URL (descargar primero)
 const response = await fetch("https://example.com/image.jpg");
 const buffer = Buffer.from(await response.arrayBuffer());
-await wa.Message.Message.image("5491112345678@s.whatsapp.net", buffer, "Imagen de internet");
-
-// Citando otro mensaje
-await wa.Message.Message.image("CHAT_ID", img, "Respuesta con imagen", "MESSAGE_ID");
+await wa.Message.image("5491112345678@s.whatsapp.net", buffer, "Imagen de internet");
 ```
 
 ---
@@ -31,7 +28,7 @@ import * as fs from "fs";
 
 // Desde archivo local
 const video = fs.readFileSync("video.mp4");
-await wa.Message.Message.video("5491112345678@s.whatsapp.net", video, "Video interesante");
+await wa.Message.video("5491112345678@s.whatsapp.net", video, "Video interesante");
 
 // Nota: WhatsApp comprime los videos automaticamente
 // Para mejor calidad, usa videos cortos (<3 min) y 720p
@@ -44,9 +41,12 @@ await wa.Message.Message.video("5491112345678@s.whatsapp.net", video, "Video int
 ```typescript
 import * as fs from "fs";
 
-// Nota de voz (PTT - Push to Talk)
+// Nota de voz (PTT - Push to Talk) - default
 const audio = fs.readFileSync("audio.ogg");
-await wa.Message.Message.audio("5491112345678@s.whatsapp.net", audio);
+await wa.Message.audio("5491112345678@s.whatsapp.net", audio);
+
+// Audio normal (sin PTT)
+await wa.Message.audio("5491112345678@s.whatsapp.net", audio, false);
 
 // Formatos soportados: OGG con codec Opus (preferido), MP3, AAC
 // WhatsApp convierte automaticamente a OGG/Opus
@@ -58,7 +58,7 @@ await wa.Message.Message.audio("5491112345678@s.whatsapp.net", audio);
 
 ```typescript
 // Ubicacion estatica
-await wa.Message.Message.location("5491112345678@s.whatsapp.net", {
+await wa.Message.location("5491112345678@s.whatsapp.net", {
   lat: -34.6037,
   lng: -58.3816
 });
@@ -75,21 +75,19 @@ import * as path from "path";
 const MEDIA_DIR = "./medios";
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
   const timestamp = Date.now();
-  const author = msg.uid.split("@")[0];
+  const buffer = await msg.content();
+
+  if (buffer.length === 0) return;
 
   // Imagen
-  if (msg instanceof wa.Message.Image) {
-    const buffer = await msg.content();
-    if (buffer.length === 0) return;
-
+  if (msg.type === "image") {
     const ext = msg.mime.split("/")[1] || "jpg";
-    const filename = `${timestamp}_${author}.${ext}`;
+    const filename = `${timestamp}.${ext}`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-
     console.log(`Imagen guardada: ${filename} (${buffer.length} bytes)`);
     if (msg.caption) {
       console.log(`Caption: ${msg.caption}`);
@@ -97,24 +95,16 @@ wa.on("message:created", async (msg) => {
   }
 
   // Video
-  if (msg instanceof wa.Message.Video) {
-    const buffer = await msg.content();
-    if (buffer.length === 0) return;
-
-    const filename = `${timestamp}_${author}.mp4`;
+  if (msg.type === "video") {
+    const filename = `${timestamp}.mp4`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-
     console.log(`Video guardado: ${filename} (${buffer.length} bytes)`);
   }
 
   // Audio
-  if (msg instanceof wa.Message.Audio) {
-    const buffer = await msg.content();
-    if (buffer.length === 0) return;
-
-    const filename = `${timestamp}_${author}.ogg`;
+  if (msg.type === "audio") {
+    const filename = `${timestamp}.ogg`;
     fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-
     console.log(`Audio guardado: ${filename} (${buffer.length} bytes)`);
   }
 });
@@ -125,29 +115,22 @@ wa.on("message:created", async (msg) => {
 ## Reenviar media
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
 
   const text = (await msg.content()).toString();
 
-  // Comando para reenviar al ultimo chat
+  // Comando para reenviar al ultimo mensaje
   if (text.startsWith("!reenviar ")) {
-    const targetPhone = text.slice(10).trim();
-    const targetJid = `${targetPhone}@s.whatsapp.net`;
+    const target_phone = text.slice(10).trim();
+    const target_jid = `${target_phone}@s.whatsapp.net`;
 
-    // El mensaje anterior puede ser media
-    const messages = await wa.Message.Message.paginate(msg.cid, 0, 2);
-    const mediaMsg = messages.find(m =>
-      m.id !== msg.id && (
-        m instanceof wa.Message.Image ||
-        m instanceof wa.Message.Video ||
-        m instanceof wa.Message.Audio
-      )
-    );
+    // Obtener mensaje anterior (el que queremos reenviar)
+    const prev_msg = await wa.Message.get(msg.cid, "PREVIOUS_MESSAGE_ID");
 
-    if (mediaMsg) {
-      await mediaMsg.forward(targetJid);
-      await wa.Message.Message.text(msg.cid, "Media reenviada!");
+    if (prev_msg && ["image", "video", "audio"].includes(prev_msg.type)) {
+      await wa.Message.forward(msg.cid, prev_msg.id, target_jid);
+      await wa.Message.text(msg.cid, "Media reenviada!");
     }
   }
 });
@@ -160,9 +143,8 @@ wa.on("message:created", async (msg) => {
 ```typescript
 import sharp from "sharp"; // npm install sharp
 
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (!(msg instanceof wa.Message.Image)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "image") return;
 
   const buffer = await msg.content();
   if (buffer.length === 0) return;
@@ -178,7 +160,7 @@ wa.on("message:created", async (msg) => {
     .toBuffer();
 
   // Enviar thumbnail como respuesta
-  await wa.Message.Message.image(msg.cid, thumbnail, "Thumbnail generado", msg.id);
+  await wa.Message.image(msg.cid, thumbnail, "Thumbnail generado");
 });
 ```
 
@@ -194,30 +176,29 @@ import * as path from "path";
 
 const openai = new OpenAI();
 
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (!(msg instanceof wa.Message.Audio)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "audio") return;
 
   const buffer = await msg.content();
   if (buffer.length === 0) return;
 
   // Guardar temporalmente
-  const tempFile = path.join("/tmp", `${Date.now()}.ogg`);
-  fs.writeFileSync(tempFile, buffer);
+  const temp_file = path.join("/tmp", `${Date.now()}.ogg`);
+  fs.writeFileSync(temp_file, buffer);
 
   try {
     // Transcribir
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFile),
+      file: fs.createReadStream(temp_file),
       model: "whisper-1",
       language: "es",
     });
 
-    await wa.Message.Message.text(msg.cid, `Transcripcion:\n${transcription.text}`, msg.id);
+    await wa.Message.text(msg.cid, `Transcripcion:\n${transcription.text}`);
   } catch (error) {
     console.error("Error transcribiendo:", error);
   } finally {
-    fs.unlinkSync(tempFile);
+    fs.unlinkSync(temp_file);
   }
 });
 ```

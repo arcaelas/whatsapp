@@ -26,7 +26,10 @@ mi-bot/
 ### src/commands/index.ts
 
 ```typescript
-import { Message, WhatsApp } from "@arcaelas/whatsapp";
+import type { WhatsApp } from "@arcaelas/whatsapp";
+
+// Tipo para mensaje (inferido de wa.Message)
+type Message = InstanceType<WhatsApp["Message"]>;
 
 export interface CommandContext {
   wa: WhatsApp;
@@ -47,7 +50,7 @@ export interface Command {
 export const commands = new Map<string, Command>();
 
 // Helper para registrar comando
-export function registerCommand(cmd: Command) {
+export function register_command(cmd: Command) {
   commands.set(cmd.name, cmd);
   cmd.aliases?.forEach(alias => commands.set(alias, cmd));
 }
@@ -61,15 +64,15 @@ import "./hora";
 ### src/commands/ping.ts
 
 ```typescript
-import { registerCommand } from "./index";
+import { register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "ping",
   description: "Verificar latencia del bot",
   aliases: ["p"],
   async execute({ wa, cid }) {
     const start = Date.now();
-    await wa.Message.Message.text(cid, "pong!");
+    await wa.Message.text(cid, "pong!");
     console.log(`Latencia: ${Date.now() - start}ms`);
   },
 });
@@ -78,27 +81,27 @@ registerCommand({
 ### src/commands/ayuda.ts
 
 ```typescript
-import { commands, registerCommand } from "./index";
+import { commands, register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "ayuda",
   description: "Mostrar lista de comandos",
   aliases: ["help", "h", "?"],
   async execute({ wa, cid }) {
-    const uniqueCommands = new Map<string, string>();
+    const unique_commands = new Map<string, string>();
 
     commands.forEach((cmd) => {
-      if (!uniqueCommands.has(cmd.name)) {
-        uniqueCommands.set(cmd.name, cmd.description);
+      if (!unique_commands.has(cmd.name)) {
+        unique_commands.set(cmd.name, cmd.description);
       }
     });
 
     let message = "*Comandos disponibles:*\n\n";
-    uniqueCommands.forEach((desc, name) => {
+    unique_commands.forEach((desc, name) => {
       message += `!${name} - ${desc}\n`;
     });
 
-    await wa.Message.Message.text(cid, message);
+    await wa.Message.text(cid, message);
   },
 });
 ```
@@ -106,9 +109,9 @@ registerCommand({
 ### src/commands/hora.ts
 
 ```typescript
-import { registerCommand } from "./index";
+import { register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "hora",
   description: "Mostrar hora actual",
   aliases: ["time", "t"],
@@ -126,7 +129,7 @@ registerCommand({
       year: "numeric",
     });
 
-    await wa.Message.Message.text(cid, `${time}\n${date}`);
+    await wa.Message.text(cid, `${time}\n${date}`);
   },
 });
 ```
@@ -140,17 +143,17 @@ import { commands, CommandContext } from "./commands";
 const PREFIX = "!";
 
 async function main() {
-  const wa = new WhatsApp({ sync: true, online: false });
+  const wa = new WhatsApp();
 
-  wa.on("open", () => console.log("Bot conectado"));
-  wa.on("error", (e) => console.error("Error:", e.message));
+  wa.event.on("open", () => console.log("Bot conectado"));
+  wa.event.on("error", (e) => console.error("Error:", e.message));
 
-  wa.on("message:created", async (msg) => {
+  wa.event.on("message:created", async (msg) => {
     // Ignorar mensajes propios
     if (msg.me) return;
 
     // Solo texto
-    if (!(msg instanceof wa.Message.Text)) return;
+    if (msg.type !== "text") return;
 
     const text = (await msg.content()).toString();
 
@@ -158,11 +161,11 @@ async function main() {
     if (!text.startsWith(PREFIX)) return;
 
     // Parsear comando y argumentos
-    const [commandName, ...args] = text.slice(PREFIX.length).split(" ");
-    const cmd = commands.get(commandName.toLowerCase());
+    const [command_name, ...args] = text.slice(PREFIX.length).split(" ");
+    const cmd = commands.get(command_name.toLowerCase());
 
     if (!cmd) {
-      await wa.Message.Message.text(msg.cid, `Comando no encontrado. Escribe ${PREFIX}ayuda`);
+      await wa.Message.text(msg.cid, `Comando no encontrado. Escribe ${PREFIX}ayuda`);
       return;
     }
 
@@ -172,14 +175,14 @@ async function main() {
       msg,
       cid: msg.cid,
       args,
-      text: text.slice(PREFIX.length + commandName.length + 1),
+      text: text.slice(PREFIX.length + command_name.length + 1),
     };
 
     try {
       await cmd.execute(ctx);
     } catch (error) {
       console.error(`Error en comando ${cmd.name}:`, error);
-      await wa.Message.Message.text(msg.cid, "Ocurrio un error ejecutando el comando");
+      await wa.Message.text(msg.cid, "Ocurrio un error ejecutando el comando");
     }
   });
 
@@ -191,7 +194,6 @@ async function main() {
     }
   });
 
-  await wa.sync();
   console.log("Bot listo!");
 }
 
@@ -205,18 +207,18 @@ main().catch(console.error);
 ### Comando con argumentos
 
 ```typescript title="src/commands/decir.ts"
-import { registerCommand } from "./index";
+import { register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "decir",
   description: "Repetir un mensaje",
   aliases: ["echo", "say"],
   async execute({ wa, cid, text }) {
     if (!text.trim()) {
-      await wa.Message.Message.text(cid, "Uso: !decir <mensaje>");
+      await wa.Message.text(cid, "Uso: !decir <mensaje>");
       return;
     }
-    await wa.Message.Message.text(cid, text);
+    await wa.Message.text(cid, text);
   },
 });
 ```
@@ -224,9 +226,9 @@ registerCommand({
 ### Comando con validacion
 
 ```typescript title="src/commands/dado.ts"
-import { registerCommand } from "./index";
+import { register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "dado",
   description: "Lanzar un dado",
   aliases: ["dice", "roll"],
@@ -234,12 +236,12 @@ registerCommand({
     const sides = parseInt(args[0]) || 6;
 
     if (sides < 2 || sides > 100) {
-      await wa.Message.Message.text(cid, "El dado debe tener entre 2 y 100 caras");
+      await wa.Message.text(cid, "El dado debe tener entre 2 y 100 caras");
       return;
     }
 
     const result = Math.floor(Math.random() * sides) + 1;
-    await wa.Message.Message.text(cid, `Dado de ${sides} caras: ${result}`);
+    await wa.Message.text(cid, `Dado de ${sides} caras: ${result}`);
   },
 });
 ```
@@ -247,25 +249,25 @@ registerCommand({
 ### Comando solo para grupos
 
 ```typescript title="src/commands/grupo.ts"
-import { registerCommand } from "./index";
+import { register_command } from "./index";
 
-registerCommand({
+register_command({
   name: "grupo",
   description: "Informacion del grupo",
   aliases: ["group", "g"],
   async execute({ wa, cid }) {
     // Solo en grupos
     if (!cid.endsWith("@g.us")) {
-      await wa.Message.Message.text(cid, "Este comando solo funciona en grupos");
+      await wa.Message.text(cid, "Este comando solo funciona en grupos");
       return;
     }
 
     const chat = await wa.Chat.get(cid);
     if (!chat) return;
 
-    const members = await chat.members(0, 1000);
+    const members = await wa.Chat.members(cid, 0, 1000);
 
-    await wa.Message.Message.text(
+    await wa.Message.text(
       cid,
       `*${chat.name}*\n\n` +
       `Miembros: ${members.length}`

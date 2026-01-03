@@ -20,29 +20,18 @@ wa.Contact // Clase Contact enlazada
 | Propiedad | Tipo | Descripcion |
 |-----------|------|-------------|
 | `id` | `string` | JID del contacto (ej: `5491112345678@s.whatsapp.net`) |
-| `name` | `string` | Nombre del contacto en WhatsApp |
-| `phone` | `string` | Numero de telefono |
-| `custom_name` | `string` | Nombre personalizado local |
+| `me` | `boolean` | `true` si es el usuario autenticado |
+| `name` | `string` | Nombre del contacto |
+| `phone` | `string \| null` | Numero de telefono |
+| `photo` | `string \| null` | URL de la foto de perfil o `null` |
 
 ---
 
 ## Metodos estaticos
 
-### `Contact.me()`
-
-Obtiene el contacto del usuario actual (yo).
-
-```typescript
-const me = await wa.Contact.me();
-if (me) {
-  console.log(`Mi numero: ${me.phone}`);
-  console.log(`Mi nombre: ${me.name}`);
-}
-```
-
 ### `Contact.get(uid)`
 
-Obtiene un contacto por su ID o numero de telefono. Si no existe en el engine, intenta verificar con WhatsApp (`onWhatsApp`) y lo crea automaticamente.
+Obtiene un contacto por su ID o numero de telefono. Si no existe en el engine, verifica con WhatsApp (`onWhatsApp`) y lo crea automaticamente.
 
 ```typescript
 // Con JID completo
@@ -54,7 +43,16 @@ const contact2 = await wa.Contact.get("5491112345678");
 if (contact) {
   console.log(`Nombre: ${contact.name}`);
   console.log(`Telefono: ${contact.phone}`);
+  console.log(`Es yo: ${contact.me}`);
 }
+```
+
+### `Contact.rename(uid, name)`
+
+Cambia el nombre de un contacto (solo local).
+
+```typescript
+await wa.Contact.rename("5491112345678@s.whatsapp.net", "Cliente VIP");
 ```
 
 ### `Contact.paginate(offset, limit)`
@@ -68,27 +66,19 @@ for (const contact of contacts) {
 }
 ```
 
-### `Contact.rename(uid, name)`
-
-Cambia el nombre personalizado de un contacto (solo local).
-
-```typescript
-await wa.Contact.rename("5491112345678@s.whatsapp.net", "Cliente VIP");
-```
-
 ---
 
 ## Metodos de instancia
 
 ### `rename(name)`
 
-Cambia el nombre personalizado del contacto.
+Cambia el nombre del contacto (solo local).
 
 ```typescript
 const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
 if (contact) {
   await contact.rename("Mi mejor amigo");
-  console.log(contact.custom_name); // "Mi mejor amigo"
+  console.log(contact.name); // "Mi mejor amigo"
 }
 ```
 
@@ -101,46 +91,35 @@ const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
 if (contact) {
   const chat = await contact.chat();
   if (chat) {
-    await wa.Message.Message.text(chat.id, "Hola desde tu contacto!");
+    console.log(`Chat: ${chat.name} (${chat.type})`);
   }
-}
-```
-
-### `photo(type?)`
-
-Obtiene la URL de la foto de perfil del contacto desde WhatsApp.
-
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `type` | `'preview' \| 'image'` | `'preview'` | `'preview'` para miniatura, `'image'` para alta resolucion |
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  // Obtener miniatura
-  const thumbnail = await contact.photo();
-  console.log(`Miniatura: ${thumbnail}`);
-
-  // Obtener imagen en alta resolucion
-  const fullImage = await contact.photo("image");
-  console.log(`Imagen HD: ${fullImage}`);
 }
 ```
 
 ---
 
-## Eventos
+## Eventos de Contact
 
-### `contact:upsert`
+Los eventos se escuchan a traves de `wa.event`:
 
-Emitido cuando se crea o actualiza un contacto.
+### `contact:created`
+
+Emitido cuando se crea un nuevo contacto.
 
 ```typescript
-wa.on("contact:upsert", async (contact) => {
-  console.log(`Contacto actualizado: ${contact.name}`);
+wa.event.on("contact:created", (contact) => {
+  console.log(`Nuevo contacto: ${contact.name}`);
   console.log(`  Telefono: ${contact.phone}`);
-  const foto = await contact.photo();
-  console.log(`  Foto: ${foto || "Sin foto"}`);
+});
+```
+
+### `contact:updated`
+
+Emitido cuando se actualiza un contacto existente.
+
+```typescript
+wa.event.on("contact:updated", (contact) => {
+  console.log(`Contacto actualizado: ${contact.name}`);
 });
 ```
 
@@ -168,7 +147,7 @@ console.log(`Total de contactos: ${all_contacts.length}`);
 ### Buscar contacto por nombre
 
 ```typescript
-async function findContactByName(name: string) {
+async function find_contact_by_name(wa: WhatsApp, name: string) {
   let offset = 0;
   const limit = 50;
 
@@ -177,8 +156,7 @@ async function findContactByName(name: string) {
     if (contacts.length === 0) break;
 
     const found = contacts.find(c =>
-      c.name.toLowerCase().includes(name.toLowerCase()) ||
-      c.custom_name.toLowerCase().includes(name.toLowerCase())
+      c.name.toLowerCase().includes(name.toLowerCase())
     );
 
     if (found) return found;
@@ -188,56 +166,51 @@ async function findContactByName(name: string) {
   return null;
 }
 
-const contact = await findContactByName("Juan");
+const contact = await find_contact_by_name(wa, "Juan");
 if (contact) {
-  await wa.Message.Message.text(contact.id, "Te encontre!");
+  await wa.Message.text(contact.id, "Te encontre!");
 }
 ```
 
-### Enviar mensaje a contacto desde evento
+### Mensaje de bienvenida a nuevos contactos
 
 ```typescript
-wa.on("contact:upsert", async (contact) => {
-  // Solo nuevos contactos
-  if (!contact.custom_name) {
-    await wa.Message.Message.text(contact.id, "Bienvenido! Soy un bot de asistencia.");
-  }
+wa.event.on("contact:created", async (contact) => {
+  // Evitar enviarse mensaje a si mismo
+  if (contact.me) return;
+
+  await wa.Message.text(
+    contact.id,
+    "Bienvenido! Soy un bot de asistencia. Escribe !ayuda para ver comandos."
+  );
 });
 ```
 
-### Obtener autor de un mensaje
+### Enviar mensaje desde contacto
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
+const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
+if (contact) {
+  // Opcion 1: Usando el chat del contacto
+  const chat = await contact.chat();
+  // Enviar al chat...
 
-  const author = await msg.author();
-  if (author) {
-    console.log(`Mensaje de ${author.name} (${author.phone})`);
-  }
-});
+  // Opcion 2: Directamente con el ID del contacto
+  await wa.Message.text(contact.id, "Hola desde tu contacto!");
+}
 ```
 
-### Sincronizar contactos con base de datos externa
+---
+
+## Interfaz IContact
 
 ```typescript
-interface ExternalContact {
-  phone: string;
+interface IContact {
+  id: string;
+  me: boolean;
   name: string;
-  tags: string[];
-}
-
-async function syncWithExternalDB(db: ExternalContact[]) {
-  const contacts = await wa.Contact.paginate(0, 1000);
-
-  for (const contact of contacts) {
-    const external = db.find(c => c.phone === contact.phone);
-    if (external) {
-      // Actualizar nombre local con tags
-      const newName = `${contact.name} [${external.tags.join(", ")}]`;
-      await contact.rename(newName);
-    }
-  }
+  phone: string | null;
+  photo: string | null;
 }
 ```
 
@@ -249,22 +222,10 @@ async function syncWithExternalDB(db: ExternalContact[]) {
     El JID (Jabber ID) de un contacto tiene el formato `{numero}@s.whatsapp.net`.
     Ejemplo: `5491112345678@s.whatsapp.net`
 
-!!! warning "Nombre personalizado"
-    El `custom_name` es solo local y no afecta el nombre que otros ven.
-    Se almacena en el engine de persistencia.
+!!! warning "Nombre local"
+    El nombre del contacto se almacena localmente en el engine.
+    Los cambios con `rename()` solo afectan tu instancia, no lo que otros ven.
 
-!!! tip "Foto de perfil"
-    La URL retornada por `photo()` puede expirar. Si necesitas la imagen, descargala y almacenala.
-
----
-
-## Interfaz IContact
-
-```typescript
-interface IContact {
-  id: string;
-  name: string;
-  phone: string;
-  custom_name: string;
-}
-```
+!!! tip "Verificacion de WhatsApp"
+    `Contact.get()` verifica con WhatsApp si el numero existe.
+    Si el numero no tiene WhatsApp, retorna `null`.

@@ -1,128 +1,91 @@
 # Message
 
-Clases para manejar diferentes tipos de mensajes de WhatsApp.
+Clase para gestionar mensajes de WhatsApp.
 
 ---
 
 ## Importacion
 
-Las clases se acceden desde la instancia de WhatsApp:
+La clase se accede desde la instancia de WhatsApp:
 
 ```typescript
 const wa = new WhatsApp();
-
-wa.Message.Message   // Clase base
-wa.Message.Text      // Mensajes de texto
-wa.Message.Image     // Imagenes
-wa.Message.Video     // Videos
-wa.Message.Audio     // Audios/notas de voz
-wa.Message.Location  // Ubicaciones
-wa.Message.Poll      // Encuestas
-wa.Message.create    // Helper para crear instancias
+wa.Message // Clase Message enlazada
 ```
 
 ---
 
-## Message (clase base)
+## Propiedades
 
-Clase base de la que heredan todos los tipos de mensaje.
-
-### Propiedades
+Propiedades disponibles en instancias de Message:
 
 | Propiedad | Tipo | Descripcion |
 |-----------|------|-------------|
 | `id` | `string` | ID unico del mensaje |
 | `cid` | `string` | JID del chat |
-| `uid` | `string` | JID del autor |
-| `mid` | `string \| null` | ID del mensaje citado (si aplica) |
-| `type` | `string` | Tipo: `text`, `image`, `video`, `audio`, `location`, `poll`, `unknown` |
-| `mime` | `string` | Tipo MIME del contenido |
-| `caption` | `string` | Descripcion/caption del mensaje |
 | `me` | `boolean` | `true` si el mensaje es propio |
-| `status` | `string` | Estado: `pending`, `sent`, `delivered`, `read` |
-| `created_at` | `string` | Fecha de creacion (ISO 8601) |
+| `type` | `MessageType` | Tipo: `text`, `image`, `video`, `audio`, `location`, `poll` |
+| `mime` | `string` | Tipo MIME del contenido |
+| `caption` | `string` | Texto o caption del mensaje |
+| `status` | `MESSAGE_STATUS` | Estado del mensaje (enum numerico) |
+| `starred` | `boolean` | `true` si el mensaje esta destacado |
+| `forwarded` | `boolean` | `true` si el mensaje fue reenviado |
 | `edited` | `boolean` | `true` si fue editado |
 
-### Metodos estaticos
+### Enum MESSAGE_STATUS
 
-#### `Message.get(cid, mid)`
+```typescript
+enum MESSAGE_STATUS {
+  PENDING = 0,    // Pendiente de envio
+  SERVER_ACK = 1, // Servidor recibio el mensaje
+  DELIVERED = 2,  // Entregado al destinatario
+  READ = 3,       // Leido por el destinatario
+  PLAYED = 4,     // Reproducido (audio/video)
+}
+```
+
+### Tipo MessageType
+
+```typescript
+type MessageType = "text" | "image" | "video" | "audio" | "location" | "poll";
+```
+
+---
+
+## Metodos estaticos
+
+### `Message.get(cid, mid)`
 
 Obtiene un mensaje por chat ID y message ID.
 
 ```typescript
-const msg = await wa.Message.Message.get(
+const msg = await wa.Message.get(
   "5491112345678@s.whatsapp.net",
   "MESSAGE_ID"
 );
 
-if (msg instanceof wa.Message.Text) {
-  console.log("Es un mensaje de texto");
+if (msg) {
+  console.log(`Tipo: ${msg.type}`);
+  console.log(`Caption: ${msg.caption}`);
 }
 ```
 
-#### `Message.remove(cid, mid)`
-
-Elimina un mensaje.
-
-```typescript
-await wa.Message.Message.remove("CHAT_ID", "MESSAGE_ID");
-```
-
-#### `Message.seen(cid, mid)`
-
-Marca un mensaje como leido.
-
-```typescript
-await wa.Message.Message.seen("CHAT_ID", "MESSAGE_ID");
-```
-
-#### `Message.react(cid, mid, emoji)`
-
-Reacciona a un mensaje.
-
-```typescript
-// Agregar reaccion
-await wa.Message.Message.react("CHAT_ID", "MESSAGE_ID", "❤️");
-
-// Quitar reaccion
-await wa.Message.Message.react("CHAT_ID", "MESSAGE_ID", "");
-```
-
-#### `Message.forward(cid, mid, target)`
-
-Reenvia un mensaje a otro chat.
-
-```typescript
-await wa.Message.Message.forward("CHAT_ID", "MESSAGE_ID", "TARGET_CHAT_ID");
-```
-
-#### `Message.paginate(cid, offset?, limit?)`
-
-Obtiene mensajes paginados de un chat.
-
-```typescript
-// Primeros 20 mensajes
-const messages = await wa.Message.Message.paginate("CHAT_ID");
-
-// Con offset y limite
-const page2 = await wa.Message.Message.paginate("CHAT_ID", 20, 20);
-```
-
-### Metodos estaticos de envio
-
-#### `Message.text(cid, content, reply_mid?)`
+### `Message.text(cid, text)`
 
 Envia un mensaje de texto.
 
 ```typescript
-// Enviar texto
-await wa.Message.Message.text("5491112345678@s.whatsapp.net", "Hola!");
+const msg = await wa.Message.text(
+  "5491112345678@s.whatsapp.net",
+  "Hola mundo!"
+);
 
-// Responder a un mensaje
-await wa.Message.Message.text("CHAT_ID", "Esta es una respuesta", "MESSAGE_ID");
+if (msg) {
+  console.log(`Mensaje enviado: ${msg.id}`);
+}
 ```
 
-#### `Message.image(cid, data, caption?, reply_mid?)`
+### `Message.image(cid, buffer, caption?)`
 
 Envia una imagen.
 
@@ -130,418 +93,217 @@ Envia una imagen.
 import * as fs from "fs";
 
 const buffer = fs.readFileSync("./foto.jpg");
-await wa.Message.Message.image("CHAT_ID", buffer, "Mira esta foto!");
+const msg = await wa.Message.image(
+  "5491112345678@s.whatsapp.net",
+  buffer,
+  "Mira esta foto!"
+);
 ```
 
-#### `Message.video(cid, data, caption?, reply_mid?)`
+### `Message.video(cid, buffer, caption?)`
 
 Envia un video.
 
 ```typescript
 const buffer = fs.readFileSync("./video.mp4");
-await wa.Message.Message.video("CHAT_ID", buffer, "Video divertido");
+const msg = await wa.Message.video(
+  "5491112345678@s.whatsapp.net",
+  buffer,
+  "Video divertido"
+);
 ```
 
-#### `Message.audio(cid, data, ptt?, reply_mid?)`
+### `Message.audio(cid, buffer, ptt?)`
 
 Envia un audio. Por defecto como nota de voz (PTT).
 
 | Parametro | Tipo | Default | Descripcion |
 |-----------|------|---------|-------------|
+| `cid` | `string` | - | ID del chat destino |
+| `buffer` | `Buffer` | - | Buffer del audio |
 | `ptt` | `boolean` | `true` | `true` para nota de voz, `false` para audio normal |
 
 ```typescript
 const buffer = fs.readFileSync("./audio.ogg");
 
 // Como nota de voz (default)
-await wa.Message.Message.audio("CHAT_ID", buffer);
+await wa.Message.audio("5491112345678@s.whatsapp.net", buffer);
 
 // Como audio normal
-await wa.Message.Message.audio("CHAT_ID", buffer, false);
+await wa.Message.audio("5491112345678@s.whatsapp.net", buffer, false);
 ```
 
-#### `Message.location(cid, coords, reply_mid?)`
+### `Message.location(cid, opts)`
 
 Envia una ubicacion.
 
 ```typescript
-await wa.Message.Message.location("CHAT_ID", {
+await wa.Message.location("5491112345678@s.whatsapp.net", {
   lat: -34.6037,
-  lng: -58.3816
+  lng: -58.3816,
 });
 ```
 
-#### `Message.poll(cid, opts)`
+**Interfaz LocationOptions:**
+
+```typescript
+interface LocationOptions {
+  lat: number;   // Latitud en grados
+  lng: number;   // Longitud en grados
+  live?: boolean; // true para ubicacion en tiempo real
+}
+```
+
+### `Message.poll(cid, opts)`
 
 Envia una encuesta.
 
 ```typescript
-await wa.Message.Message.poll("CHAT_ID", {
+await wa.Message.poll("5491112345678@s.whatsapp.net", {
   content: "Cual es tu lenguaje favorito?",
-  items: [
+  options: [
     { content: "JavaScript" },
     { content: "TypeScript" },
     { content: "Python" },
-    { content: "Go" }
-  ]
+    { content: "Go" },
+  ],
 });
 ```
 
-### Metodos de instancia
+**Interfaz PollOptions:**
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  // Obtener contenido
-  const buffer = await msg.content();
-
-  // Eliminar
-  await msg.remove();
-
-  // Marcar como leido
-  await msg.seen();
-
-  // Reaccionar
-  await msg.react("👍");
-
-  // Obtener reacciones
-  const reactions = await msg.reacts();
-
-  // Reenviar a otro chat
-  await msg.forward("TARGET_CHAT_ID");
-
-  // Obtener chat
-  const chat = await msg.chat();
-
-  // Obtener autor
-  const author = await msg.author();
-});
-```
-
----
-
-## Text
-
-Mensajes de texto plano.
-
-### Propiedades adicionales
-
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'text'` | Siempre es `'text'` |
-
-### Metodos
-
-#### `content()`
-
-Retorna el texto como Buffer.
-
-```typescript
-if (msg instanceof wa.Message.Text) {
-  const text = (await msg.content()).toString();
-  console.log(text);
+interface PollOptions {
+  content: string;  // Pregunta o titulo de la encuesta
+  options: Array<{ content: string }>; // Opciones de respuesta
 }
 ```
 
-#### `edit(content)` (instancia)
+### `Message.react(cid, mid, emoji)`
 
-Edita el mensaje (solo si es propio).
+Reacciona a un mensaje.
 
 ```typescript
-if (msg instanceof wa.Message.Text && msg.me) {
-  await msg.edit("Texto corregido");
-}
+// Agregar reaccion
+await wa.Message.react("CHAT_ID", "MESSAGE_ID", "❤️");
+
+// Quitar reaccion (emoji vacio)
+await wa.Message.react("CHAT_ID", "MESSAGE_ID", "");
 ```
 
-#### `Text.edit(cid, mid, content)` (estatico)
+### `Message.remove(cid, mid)`
+
+Elimina un mensaje para todos.
 
 ```typescript
-await wa.Message.Text.edit("CHAT_ID", "MESSAGE_ID", "Nuevo texto");
+await wa.Message.remove("CHAT_ID", "MESSAGE_ID");
 ```
 
-#### `forward(target_cid)` (instancia)
+### `Message.forward(cid, mid, to_cid)`
 
-Reenvia el mensaje a otro chat.
-
-```typescript
-if (msg instanceof wa.Message.Text) {
-  await msg.forward("5491198765432@s.whatsapp.net");
-}
-```
-
----
-
-## Image
-
-Mensajes con imagen.
-
-### Propiedades adicionales
-
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'image'` | Siempre es `'image'` |
-| `caption` | `string` | Descripcion de la imagen |
-| `mime` | `string` | MIME type (ej: `image/jpeg`) |
-
-### Metodos
-
-#### `content()`
-
-Retorna la imagen como Buffer.
+Reenvia un mensaje a otro chat.
 
 ```typescript
-if (msg instanceof wa.Message.Image) {
-  const buffer = await msg.content();
-  require("fs").writeFileSync("imagen.jpg", buffer);
-  console.log(`Guardada: ${buffer.length} bytes`);
-}
-```
-
-#### `forward(target_cid)`
-
-Reenvia la imagen a otro chat.
-
-```typescript
-if (msg instanceof wa.Message.Image) {
-  await msg.forward("5491198765432@s.whatsapp.net");
-}
-```
-
----
-
-## Video
-
-Mensajes con video.
-
-### Propiedades adicionales
-
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'video'` | Siempre es `'video'` |
-| `caption` | `string` | Descripcion del video |
-| `mime` | `string` | MIME type (ej: `video/mp4`) |
-
-### Metodos
-
-#### `content()`
-
-Retorna el video como Buffer.
-
-```typescript
-if (msg instanceof wa.Message.Video) {
-  const buffer = await msg.content();
-  require("fs").writeFileSync("video.mp4", buffer);
-}
-```
-
-#### `forward(target_cid)`
-
-Reenvia el video a otro chat.
-
-```typescript
-if (msg instanceof wa.Message.Video) {
-  await msg.forward("5491198765432@s.whatsapp.net");
-}
-```
-
----
-
-## Audio
-
-Notas de voz y audios.
-
-### Propiedades adicionales
-
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'audio'` | Siempre es `'audio'` |
-| `mime` | `string` | MIME type (ej: `audio/ogg; codecs=opus`) |
-
-### Metodos
-
-#### `content()`
-
-Retorna el audio como Buffer.
-
-```typescript
-if (msg instanceof wa.Message.Audio) {
-  const buffer = await msg.content();
-  require("fs").writeFileSync("audio.ogg", buffer);
-}
-```
-
-#### `forward(target_cid)`
-
-Reenvia el audio a otro chat.
-
-```typescript
-if (msg instanceof wa.Message.Audio) {
-  await msg.forward("5491198765432@s.whatsapp.net");
-}
-```
-
----
-
-## Location
-
-Mensajes de ubicacion (estatica o en vivo).
-
-### Propiedades adicionales
-
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'location'` | Siempre es `'location'` |
-
-### Metodos
-
-#### `coords()`
-
-Obtiene las coordenadas de la ubicacion.
-
-```typescript
-if (msg instanceof wa.Message.Location) {
-  const coords = await msg.coords();
-  if (coords) {
-    console.log(`Latitud: ${coords.lat}`);
-    console.log(`Longitud: ${coords.lng}`);
-  }
-}
-```
-
-#### `watch(callback)`
-
-!!! warning "Experimental"
-    Este metodo depende de que Baileys emita eventos `message:updated` para ubicaciones en vivo.
-    La funcionalidad puede ser limitada o no funcionar segun la version de Baileys.
-
-Observa cambios en ubicacion en vivo.
-
-```typescript
-if (msg instanceof wa.Message.Location) {
-  const unsubscribe = msg.watch((coords) => {
-    console.log(`Nueva posicion: ${coords.lat}, ${coords.lng}`);
-  });
-
-  // Dejar de observar despues de 5 minutos
-  setTimeout(unsubscribe, 5 * 60 * 1000);
-}
-```
-
-#### `Location.watch(cid, mid, callback)` (estatico)
-
-!!! warning "Experimental"
-    Mismo aviso que el metodo de instancia. La funcionalidad depende de eventos internos de Baileys.
-
-```typescript
-const unsubscribe = wa.Message.Location.watch(
-  "CHAT_ID",
+await wa.Message.forward(
+  "CHAT_ORIGEN",
   "MESSAGE_ID",
-  (coords) => console.log(coords)
+  "CHAT_DESTINO"
 );
 ```
 
-#### `forward(target_cid)`
+### `Message.edit(cid, mid, text)`
 
-Reenvia la ubicacion a otro chat.
+Edita un mensaje de texto (solo mensajes propios).
 
 ```typescript
-if (msg instanceof wa.Message.Location) {
-  await msg.forward("5491198765432@s.whatsapp.net");
-}
+await wa.Message.edit("CHAT_ID", "MESSAGE_ID", "Texto corregido");
+```
+
+### `Message.watch(cid, mid, handler)`
+
+Observa cambios en un mensaje especifico (ediciones, actualizaciones).
+
+```typescript
+const unsubscribe = wa.Message.watch(
+  "CHAT_ID",
+  "MESSAGE_ID",
+  (msg) => {
+    console.log(`Mensaje actualizado: ${msg.caption}`);
+  }
+);
+
+// Dejar de observar
+unsubscribe();
 ```
 
 ---
 
-## Poll
+## Metodos de instancia
 
-Mensajes de encuesta.
+### `content()`
 
-### Propiedades adicionales
+Obtiene el contenido del mensaje como Buffer.
 
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `type` | `'poll'` | Siempre es `'poll'` |
+El contenido varia segun el tipo:
 
-### Interfaz PollCountData
-
-```typescript
-interface PollCountData {
-  content: string;
-  items: Array<{
-    content: string;
-    count: number;
-  }>;
-}
-```
-
-### Metodos
-
-#### `count()`
-
-Obtiene los datos y conteo de votos de la encuesta.
+| Tipo | Contenido |
+|------|-----------|
+| `text` | Texto como Buffer UTF-8 |
+| `image` | Buffer de la imagen |
+| `video` | Buffer del video |
+| `audio` | Buffer del audio |
+| `location` | JSON `{ lat, lng }` como Buffer |
+| `poll` | JSON `{ content, options }` como Buffer |
 
 ```typescript
-if (msg instanceof wa.Message.Poll) {
-  const poll = await msg.count();
-  if (poll) {
-    console.log(`Pregunta: ${poll.content}`);
-    poll.items.forEach((item, i) => {
-      console.log(`  ${i + 1}. ${item.content}: ${item.count} votos`);
-    });
+wa.event.on("message:created", async (msg) => {
+  const buffer = await msg.content();
+
+  if (msg.type === "text") {
+    const text = buffer.toString();
+    console.log(`Texto: ${text}`);
+  } else if (msg.type === "image") {
+    require("fs").writeFileSync("imagen.jpg", buffer);
+  } else if (msg.type === "location") {
+    const { lat, lng } = JSON.parse(buffer.toString());
+    console.log(`Ubicacion: ${lat}, ${lng}`);
   }
-}
-```
-
-#### `Poll.count(cid, mid)` (estatico)
-
-```typescript
-const poll = await wa.Message.Poll.count("CHAT_ID", "MESSAGE_ID");
+});
 ```
 
 ---
 
 ## Verificar tipo de mensaje
 
-### Usando instanceof
-
-```typescript
-wa.on("message:created", async (msg) => {
-  if (msg instanceof wa.Message.Text) {
-    // Es texto
-  } else if (msg instanceof wa.Message.Image) {
-    // Es imagen
-  } else if (msg instanceof wa.Message.Video) {
-    // Es video
-  } else if (msg instanceof wa.Message.Audio) {
-    // Es audio
-  } else if (msg instanceof wa.Message.Location) {
-    // Es ubicacion
-  } else if (msg instanceof wa.Message.Poll) {
-    // Es encuesta
-  } else {
-    // Tipo desconocido
-  }
-});
-```
-
 ### Usando propiedad type
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   switch (msg.type) {
     case "text":
+      const text = (await msg.content()).toString();
+      console.log(`Texto: ${text}`);
       break;
     case "image":
+      const imgBuffer = await msg.content();
+      console.log(`Imagen: ${imgBuffer.length} bytes`);
       break;
     case "video":
+      const vidBuffer = await msg.content();
+      console.log(`Video: ${vidBuffer.length} bytes`);
       break;
     case "audio":
+      const audBuffer = await msg.content();
+      console.log(`Audio: ${audBuffer.length} bytes`);
       break;
     case "location":
+      const { lat, lng } = JSON.parse((await msg.content()).toString());
+      console.log(`Ubicacion: ${lat}, ${lng}`);
       break;
     case "poll":
+      const poll = JSON.parse((await msg.content()).toString());
+      console.log(`Encuesta: ${poll.content}`);
       break;
-    default:
-      console.log("Tipo desconocido:", msg.type);
   }
 });
 ```
@@ -559,24 +321,18 @@ import * as path from "path";
 const MEDIA_DIR = "./medios";
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
   const timestamp = Date.now();
+  const buffer = await msg.content();
 
-  if (msg instanceof wa.Message.Image) {
-    const buffer = await msg.content();
+  if (msg.type === "image") {
     const ext = msg.mime.split("/")[1] || "jpg";
     fs.writeFileSync(path.join(MEDIA_DIR, `${timestamp}.${ext}`), buffer);
-  }
-
-  if (msg instanceof wa.Message.Video) {
-    const buffer = await msg.content();
+  } else if (msg.type === "video") {
     fs.writeFileSync(path.join(MEDIA_DIR, `${timestamp}.mp4`), buffer);
-  }
-
-  if (msg instanceof wa.Message.Audio) {
-    const buffer = await msg.content();
+  } else if (msg.type === "audio") {
     fs.writeFileSync(path.join(MEDIA_DIR, `${timestamp}.ogg`), buffer);
   }
 });
@@ -585,31 +341,26 @@ wa.on("message:created", async (msg) => {
 ### Bot de ubicacion
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "location") return;
 
-  if (msg instanceof wa.Message.Location) {
-    const coords = await msg.coords();
-    if (!coords) return;
+  const { lat, lng } = JSON.parse((await msg.content()).toString());
 
-    await wa.Message.Message.text(
-      msg.cid,
-      `Recibi tu ubicacion:\n` +
-      `Lat: ${coords.lat}\n` +
-      `Lng: ${coords.lng}\n` +
-      `Google Maps: https://maps.google.com/?q=${coords.lat},${coords.lng}`,
-      msg.id
-    );
-  }
+  await wa.Message.text(
+    msg.cid,
+    `Recibi tu ubicacion:\n` +
+    `Lat: ${lat}\n` +
+    `Lng: ${lng}\n` +
+    `Google Maps: https://maps.google.com/?q=${lat},${lng}`
+  );
 });
 ```
 
 ### Bot de encuestas
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (!(msg instanceof wa.Message.Text)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
 
   const text = (await msg.content()).toString();
 
@@ -619,32 +370,34 @@ wa.on("message:created", async (msg) => {
     const [question, ...options] = parts;
 
     if (options.length >= 2) {
-      await wa.Message.Message.poll(msg.cid, {
+      await wa.Message.poll(msg.cid, {
         content: question,
-        items: options.map(opt => ({ content: opt }))
+        options: options.map(opt => ({ content: opt })),
       });
     } else {
-      await wa.Message.Message.text(msg.cid, "Uso: !encuesta Pregunta | Opcion1 | Opcion2 | ...");
+      await wa.Message.text(
+        msg.cid,
+        "Uso: !encuesta Pregunta | Opcion1 | Opcion2 | ..."
+      );
     }
   }
+});
+```
 
-  // Mostrar resultados de encuesta existente
-  if (text === "!resultados") {
-    const messages = await wa.Message.Message.paginate(msg.cid, 0, 50);
-    const pollMsg = messages.find(m => m instanceof wa.Message.Poll);
+### Eco con reaccion
 
-    if (pollMsg && pollMsg instanceof wa.Message.Poll) {
-      const data = await pollMsg.count();
-      if (data) {
-        let result = `*${data.content}*\n\n`;
-        data.items.forEach((item, i) => {
-          result += `${i + 1}. ${item.content}: ${item.count} votos\n`;
-        });
-        await wa.Message.Message.text(msg.cid, result);
-      }
-    } else {
-      await wa.Message.Message.text(msg.cid, "No hay encuestas recientes");
-    }
+```typescript
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
+
+  const text = (await msg.content()).toString();
+
+  if (text.startsWith("!eco ")) {
+    // Reaccionar al mensaje original
+    await wa.Message.react(msg.cid, msg.id, "👍");
+
+    // Enviar eco
+    await wa.Message.text(msg.cid, text.slice(5));
   }
 });
 ```
@@ -655,16 +408,23 @@ wa.on("message:created", async (msg) => {
 
 ```typescript
 interface IMessage {
-  id: string;
-  cid: string;
-  uid: string;
-  mid: string | null;
-  type: "text" | "image" | "video" | "audio" | "location" | "poll" | "unknown";
-  mime: string;
-  caption: string;
-  me: boolean;
-  status: "pending" | "sent" | "delivered" | "read";
-  created_at: string;
-  edited: boolean;
+  raw: WAMessage;  // WAMessage original de Baileys
+  edited: boolean; // true si el mensaje fue editado
 }
 ```
+
+---
+
+## Notas
+
+!!! info "Contenido de mensajes"
+    El metodo `content()` siempre retorna Buffer. Usa `.toString()` para texto
+    o `JSON.parse()` para location/poll.
+
+!!! warning "Media"
+    Para mensajes de media (image, video, audio), el contenido se descarga
+    desde WhatsApp la primera vez y se almacena en cache en el engine.
+
+!!! tip "Caption vs Content"
+    - `caption` es el texto/descripcion del mensaje (disponible inmediatamente)
+    - `content()` es el contenido completo (puede requerir descarga)

@@ -1,7 +1,7 @@
 # @arcaelas/whatsapp
 
 > **Libreria TypeScript para automatizacion de WhatsApp**
-> Basada en Baileys | Tipado completo | Multiples engines de persistencia | Facil de usar
+> Basada en Baileys | Tipado completo | Engine de persistencia flexible | Facil de usar
 
 ---
 
@@ -9,11 +9,11 @@
 
 - **Conexion simplificada** - QR o codigo de emparejamiento en una sola llamada
 - **Eventos tipados** - TypeScript completo con autocompletado
-- **Persistencia flexible** - Memory, FileSystem o Amazon S3
-- **Clases intuitivas** - Chat, Contact, Message con metodos encadenables
-- **Mensajes tipados** - Text, Image, Video, Audio, Location, Poll
+- **Persistencia flexible** - FileEngine por defecto, o implementa tu propio Engine
+- **Clases intuitivas** - Chat, Contact, Message con metodos estaticos
+- **Multiples tipos de mensaje** - text, image, video, audio, location, poll
 - **Gestion de grupos** - Listar miembros, archivar, silenciar, fijar
-- **Soporte de encuestas** - Crear y votar en encuestas
+- **Soporte de encuestas** - Crear encuestas con multiples opciones
 
 ---
 
@@ -24,10 +24,13 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 
 // Crear instancia
 const wa = new WhatsApp({
-  phone: "5491112345678",  // Opcional: para codigo de emparejamiento
-  sync: true,              // Sincronizar historial
-  online: false,           // No mostrar "en linea"
+  phone: "5491112345678", // Opcional: para codigo de emparejamiento
 });
+
+// Escuchar eventos
+wa.event.on("open", () => console.log("Conectado!"));
+wa.event.on("close", () => console.log("Desconectado"));
+wa.event.on("error", (err) => console.error("Error:", err.message));
 
 // Conectar
 await wa.pair(async (data) => {
@@ -41,19 +44,18 @@ await wa.pair(async (data) => {
   }
 });
 
-// Esperar sincronizacion
-await wa.sync((progress) => console.log(`Sincronizando: ${progress}%`));
-
 // Escuchar mensajes
-wa.on("message:created", async (msg) => {
-  // Verificar tipo con instanceof
-  if (msg instanceof wa.Message.Text) {
+wa.event.on("message:created", async (msg) => {
+  if (msg.me) return; // Ignorar mensajes propios
+
+  // Verificar tipo
+  if (msg.type === "text") {
     const text = (await msg.content()).toString();
-    console.log(`${msg.uid}: ${text}`);
+    console.log(`Mensaje: ${text}`);
 
     // Responder
-    if (text === "hola") {
-      await wa.Message.Message.text(msg.cid, "Hola! Como estas?");
+    if (text.toLowerCase() === "hola") {
+      await wa.Message.text(msg.cid, "Hola! Como estas?");
     }
   }
 });
@@ -63,31 +65,35 @@ wa.on("message:created", async (msg) => {
 
 ## Tipos de Mensaje
 
-La libreria soporta multiples tipos de mensaje, cada uno con metodos especificos:
+La libreria soporta multiples tipos de mensaje:
 
-| Tipo | Clase | Metodos especiales |
-|------|-------|-------------------|
-| Texto | `wa.Message.Text` | `edit()`, `forward()` |
-| Imagen | `wa.Message.Image` | `forward()` |
-| Video | `wa.Message.Video` | `forward()` |
-| Audio | `wa.Message.Audio` | `forward()` |
-| Ubicacion | `wa.Message.Location` | `coords()`, `forward()` |
-| Encuesta | `wa.Message.Poll` | `count()` |
+| Tipo | `msg.type` | Descripcion |
+|------|------------|-------------|
+| Texto | `"text"` | Mensaje de texto plano |
+| Imagen | `"image"` | Imagen con caption opcional |
+| Video | `"video"` | Video con caption opcional |
+| Audio | `"audio"` | Nota de voz o audio |
+| Ubicacion | `"location"` | Coordenadas geograficas |
+| Encuesta | `"poll"` | Encuesta con opciones |
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg instanceof wa.Message.Image) {
+wa.event.on("message:created", async (msg) => {
+  if (msg.me) return;
+
+  if (msg.type === "image") {
     const buffer = await msg.content();
     console.log(`Imagen recibida: ${buffer.length} bytes`);
-    // Reenviar a otro chat
-    await msg.forward("5491198765432@s.whatsapp.net");
+    if (msg.caption) {
+      console.log(`Caption: ${msg.caption}`);
+    }
   }
 
-  if (msg instanceof wa.Message.Poll) {
-    const poll = await msg.count();
-    console.log(`Encuesta: ${poll?.content}`);
-    poll?.items.forEach((item, i) => {
-      console.log(`  ${i + 1}. ${item.content} (${item.count} votos)`);
+  if (msg.type === "poll") {
+    const buffer = await msg.content();
+    const poll = JSON.parse(buffer.toString());
+    console.log(`Encuesta: ${poll.content}`);
+    poll.options.forEach((opt: { content: string }, i: number) => {
+      console.log(`  ${i + 1}. ${opt.content}`);
     });
   }
 });
@@ -95,9 +101,9 @@ wa.on("message:created", async (msg) => {
 
 ---
 
-## Engines de Persistencia
+## Engine de Persistencia
 
-Elige donde almacenar sesion, contactos, chats y mensajes:
+Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
 === "FileEngine (default)"
     ```typescript
@@ -108,30 +114,20 @@ Elige donde almacenar sesion, contactos, chats y mensajes:
     });
     ```
 
-=== "MemoryEngine"
+=== "Engine personalizado"
     ```typescript
-    import { WhatsApp, MemoryEngine } from "@arcaelas/whatsapp";
+    import { WhatsApp } from "@arcaelas/whatsapp";
+    import type { Engine } from "@arcaelas/whatsapp";
 
-    // Ideal para testing - datos se pierden al cerrar
-    const wa = new WhatsApp({
-      engine: new MemoryEngine(),
-    });
-    ```
-
-=== "S3Engine"
-    ```typescript
-    import { WhatsApp, S3Engine } from "@arcaelas/whatsapp";
+    // Implementa la interfaz Engine
+    class RedisEngine implements Engine {
+      async get(key: string): Promise<string | null> { /* ... */ }
+      async set(key: string, value: string | null): Promise<void> { /* ... */ }
+      async list(prefix: string, offset?: number, limit?: number): Promise<string[]> { /* ... */ }
+    }
 
     const wa = new WhatsApp({
-      engine: new S3Engine({
-        bucket: "mi-bucket",
-        prefix: ".baileys/produccion",
-        credentials: {
-          region: "us-east-1",
-          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        },
-      }),
+      engine: new RedisEngine(),
     });
     ```
 

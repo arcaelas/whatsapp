@@ -24,15 +24,12 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
   // Crear instancia de WhatsApp
-  const wa = new WhatsApp({
-    sync: true,    // Sincronizar historial existente
-    online: false, // No mostrar "en linea" al conectar
-  });
+  const wa = new WhatsApp();
 
   // Escuchar eventos antes de conectar
-  wa.on("open", () => console.log("Conectado!"));
-  wa.on("close", () => console.log("Desconectado"));
-  wa.on("error", (err) => console.error("Error:", err.message));
+  wa.event.on("open", () => console.log("Conectado!"));
+  wa.event.on("close", () => console.log("Desconectado"));
+  wa.event.on("error", (err) => console.error("Error:", err.message));
 
   // Conectar mostrando QR en consola
   console.log("Esperando QR...");
@@ -79,42 +76,42 @@ Agrega un listener para mensajes entrantes:
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
-  const wa = new WhatsApp({ sync: true, online: false });
+  const wa = new WhatsApp();
 
   // Escuchar nuevos mensajes
-  wa.on("message:created", async (msg) => {
+  wa.event.on("message:created", async (msg) => {
     // Ignorar mensajes propios
     if (msg.me) return;
 
+    // Solo procesar texto
+    if (msg.type !== "text") return;
+
     // Obtener contenido como texto
     const content = (await msg.content()).toString();
-    console.log(`[${msg.type}] ${msg.uid}: ${content}`);
+    console.log(`[${msg.type}] ${msg.cid}: ${content}`);
 
-    // Responder a mensajes de texto
-    if (msg instanceof wa.Message.Text) {
-      const text = content.toLowerCase();
+    const text = content.toLowerCase();
 
-      if (text === "hola") {
-        await wa.Message.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver comandos.");
-      }
+    if (text === "hola") {
+      await wa.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver comandos.");
+    }
 
-      if (text === "ayuda") {
-        await wa.Message.Message.text(
-          msg.cid,
-          "Comandos disponibles:\n" +
-          "- hola: Saludo\n" +
-          "- hora: Hora actual\n" +
-          "- ping: Test de respuesta"
-        );
-      }
+    if (text === "ayuda") {
+      await wa.Message.text(
+        msg.cid,
+        "Comandos disponibles:\n" +
+        "- hola: Saludo\n" +
+        "- hora: Hora actual\n" +
+        "- ping: Test de respuesta"
+      );
+    }
 
-      if (text === "hora") {
-        await wa.Message.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString()}`);
-      }
+    if (text === "hora") {
+      await wa.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString()}`);
+    }
 
-      if (text === "ping") {
-        await wa.Message.Message.text(msg.cid, "pong!");
-      }
+    if (text === "ping") {
+      await wa.Message.text(msg.cid, "pong!");
     }
   });
 
@@ -126,8 +123,6 @@ async function main() {
     }
   });
 
-  // Esperar sincronizacion inicial
-  await wa.sync((p) => console.log(`Sincronizando: ${p}%`));
   console.log("Bot listo!");
 }
 
@@ -143,7 +138,6 @@ Si prefieres no escanear QR, usa el numero de telefono:
 ```typescript
 const wa = new WhatsApp({
   phone: "5491112345678", // Sin + ni espacios
-  sync: true,
 });
 
 await wa.pair(async (data) => {
@@ -157,58 +151,53 @@ await wa.pair(async (data) => {
 
 ---
 
-## 6. Usar diferentes tipos de mensaje
+## 6. Manejar diferentes tipos de mensaje
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
-  // Mensaje de texto
-  if (msg instanceof wa.Message.Text) {
-    const text = (await msg.content()).toString();
-    console.log("Texto:", text);
+  const buffer = await msg.content();
 
-    // Editar mensaje propio (solo funciona con mensajes enviados por ti)
-    // await msg.edit("Texto editado");
+  // Mensaje de texto
+  if (msg.type === "text") {
+    const text = buffer.toString();
+    console.log("Texto:", text);
   }
 
   // Imagen
-  if (msg instanceof wa.Message.Image) {
-    const buffer = await msg.content();
-    console.log(`Imagen: ${buffer.length} bytes, caption: ${msg.caption}`);
+  if (msg.type === "image") {
+    console.log(`Imagen: ${buffer.length} bytes`);
+    if (msg.caption) {
+      console.log(`Caption: ${msg.caption}`);
+    }
     // Guardar imagen
     require("fs").writeFileSync("imagen.jpg", buffer);
   }
 
   // Video
-  if (msg instanceof wa.Message.Video) {
-    const buffer = await msg.content();
+  if (msg.type === "video") {
     console.log(`Video: ${buffer.length} bytes`);
   }
 
   // Audio (nota de voz)
-  if (msg instanceof wa.Message.Audio) {
-    const buffer = await msg.content();
+  if (msg.type === "audio") {
     console.log(`Audio: ${buffer.length} bytes`);
   }
 
   // Ubicacion
-  if (msg instanceof wa.Message.Location) {
-    const coords = await msg.coords();
-    if (coords) {
-      console.log(`Ubicacion: ${coords.lat}, ${coords.lng}`);
-    }
+  if (msg.type === "location") {
+    const coords = JSON.parse(buffer.toString());
+    console.log(`Ubicacion: ${coords.lat}, ${coords.lng}`);
   }
 
   // Encuesta
-  if (msg instanceof wa.Message.Poll) {
-    const poll = await msg.count();
-    if (poll) {
-      console.log(`Encuesta: ${poll.content}`);
-      poll.items.forEach((item, i) => {
-        console.log(`  ${i + 1}. ${item.content} (${item.count} votos)`);
-      });
-    }
+  if (msg.type === "poll") {
+    const poll = JSON.parse(buffer.toString());
+    console.log(`Encuesta: ${poll.content}`);
+    poll.options.forEach((opt: { content: string }, i: number) => {
+      console.log(`  ${i + 1}. ${opt.content}`);
+    });
   }
 });
 ```
@@ -221,33 +210,33 @@ wa.on("message:created", async (msg) => {
 const cid = "5491198765432@s.whatsapp.net";
 
 // Texto
-await wa.Message.Message.text(cid, "Hola!");
+await wa.Message.text(cid, "Hola!");
 
 // Texto citando mensaje
-await wa.Message.Message.text(cid, "Respuesta", "MESSAGE_ID_TO_QUOTE");
+await wa.Message.text(cid, "Respuesta", "MESSAGE_ID_TO_QUOTE");
 
 // Imagen con caption
 const img = require("fs").readFileSync("foto.jpg");
-await wa.Message.Message.image(cid, img, "Mira esta foto!");
+await wa.Message.image(cid, img, "Mira esta foto!");
 
 // Video
 const vid = require("fs").readFileSync("video.mp4");
-await wa.Message.Message.video(cid, vid, "Video interesante");
+await wa.Message.video(cid, vid, "Video interesante");
 
 // Audio (nota de voz)
 const aud = require("fs").readFileSync("audio.ogg");
-await wa.Message.Message.audio(cid, aud);
+await wa.Message.audio(cid, aud);
 
 // Ubicacion
-await wa.Message.Message.location(cid, {
+await wa.Message.location(cid, {
   lat: -34.6037,
   lng: -58.3816
 });
 
 // Encuesta
-await wa.Message.Message.poll(cid, {
+await wa.Message.poll(cid, {
   content: "Cual prefieres?",
-  items: [
+  options: [
     { content: "Opcion A" },
     { content: "Opcion B" },
     { content: "Opcion C" }
@@ -260,37 +249,34 @@ await wa.Message.Message.poll(cid, {
 ## 8. Reaccionar a mensajes
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
+  if (msg.type !== "text") return;
 
   const text = (await msg.content()).toString().toLowerCase();
 
   // Reaccionar con emoji
   if (text.includes("gracias")) {
-    await msg.react("❤️");
+    await wa.Message.react(msg.cid, msg.id, "❤️");
   }
 
   if (text.includes("jaja")) {
-    await msg.react("😂");
+    await wa.Message.react(msg.cid, msg.id, "😂");
   }
 
   // Quitar reaccion
-  // await msg.react("");
+  // await wa.Message.react(msg.cid, msg.id, "");
 });
 ```
 
 ---
 
-## 9. Marcar como leido
+## 9. Marcar chat como leido
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  // Marcar mensaje individual como leido
-  await msg.seen();
-
-  // O marcar todo el chat como leido
-  const chat = await msg.chat();
-  await chat?.seen();
+wa.event.on("message:created", async (msg) => {
+  // Marcar chat como leido
+  await wa.Chat.seen(msg.cid);
 });
 ```
 

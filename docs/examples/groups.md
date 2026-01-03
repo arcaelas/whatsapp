@@ -4,23 +4,7 @@ Ejemplos de trabajo con grupos de WhatsApp.
 
 ---
 
-## Listar grupos
-
-```typescript
-// Obtener todos los chats
-const chats = await wa.Chat.paginate(0, 100);
-
-// Filtrar solo grupos
-const groups = chats.filter(c => c.type === "group");
-
-for (const group of groups) {
-  console.log(`${group.name} (${group.id})`);
-}
-```
-
----
-
-## Informacion del grupo
+## Obtener informacion de grupo
 
 ```typescript
 const chat = await wa.Chat.get("123456789@g.us");
@@ -28,10 +12,9 @@ const chat = await wa.Chat.get("123456789@g.us");
 if (chat && chat.type === "group") {
   console.log(`Nombre: ${chat.name}`);
   console.log(`ID: ${chat.id}`);
-  console.log(`Foto: ${chat.photo ?? "Sin foto"}`);
 
   // Miembros
-  const members = await chat.members(0, 1000);
+  const members = await wa.Chat.members(chat.id, 0, 1000);
   console.log(`Miembros: ${members.length}`);
 
   for (const member of members) {
@@ -45,20 +28,18 @@ if (chat && chat.type === "group") {
 ## Detectar grupos en eventos
 
 ```typescript
-wa.on("chat:upsert", (chat) => {
+wa.event.on("chat:created", (chat) => {
   if (chat.type === "group") {
-    console.log(`Grupo actualizado: ${chat.name}`);
-    console.log(`  Foto: ${chat.photo ?? "Sin foto"}`);
+    console.log(`Grupo creado: ${chat.name}`);
   }
 });
 
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   // Verificar si el mensaje es de un grupo
-  const isGroup = msg.cid.endsWith("@g.us");
+  const is_group = msg.cid.endsWith("@g.us");
 
-  if (isGroup) {
+  if (is_group) {
     console.log(`Mensaje en grupo: ${msg.cid}`);
-    console.log(`Autor: ${msg.uid}`);
   }
 });
 ```
@@ -69,17 +50,17 @@ wa.on("message:created", async (msg) => {
 
 ```typescript
 // Enviar texto a un grupo
-await wa.Message.Message.text("123456789@g.us", "Hola grupo!");
+await wa.Message.text("123456789@g.us", "Hola grupo!");
 
 // Enviar imagen a un grupo
 import * as fs from "fs";
 const img = fs.readFileSync("foto.jpg");
-await wa.Message.Message.image("123456789@g.us", img, "Foto para el grupo");
+await wa.Message.image("123456789@g.us", img, "Foto para el grupo");
 
 // Crear encuesta en grupo
-await wa.Message.Message.poll("123456789@g.us", {
+await wa.Message.poll("123456789@g.us", {
   content: "Donde nos juntamos?",
-  items: [
+  options: [
     { content: "En mi casa" },
     { content: "En el parque" },
     { content: "En el centro" }
@@ -92,47 +73,21 @@ await wa.Message.Message.poll("123456789@g.us", {
 ## Responder en grupos
 
 ```typescript
-wa.on("message:created", async (msg) => {
+wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
   // Solo procesar mensajes de grupos
   if (!msg.cid.endsWith("@g.us")) return;
 
-  if (!(msg instanceof wa.Message.Text)) return;
+  if (msg.type !== "text") return;
 
   const text = (await msg.content()).toString().toLowerCase();
 
-  // Responder mencionando el mensaje original
+  // Responder
   if (text.includes("hola")) {
-    await wa.Message.Message.text(msg.cid, "Hola! Bienvenido al grupo", msg.id);
+    await wa.Message.text(msg.cid, "Hola! Bienvenido al grupo");
   }
 });
-```
-
----
-
-## Broadcast a grupos
-
-```typescript
-async function broadcastToGroups(message: string) {
-  const chats = await wa.Chat.paginate(0, 100);
-  const groups = chats.filter(c => c.type === "group");
-
-  for (const group of groups) {
-    try {
-      await wa.Message.Message.text(group.id, message);
-      console.log(`Enviado a: ${group.name}`);
-
-      // Esperar entre mensajes para evitar ban
-      await new Promise(r => setTimeout(r, 2000));
-    } catch (error) {
-      console.error(`Error en ${group.name}:`, error);
-    }
-  }
-}
-
-// Uso
-await broadcastToGroups("Mensaje importante para todos los grupos");
 ```
 
 ---
@@ -140,17 +95,12 @@ await broadcastToGroups("Mensaje importante para todos los grupos");
 ## Obtener miembros de un grupo
 
 ```typescript
-const chat = await wa.Chat.get("123456789@g.us");
+const group_id = "123456789@g.us";
+const members = await wa.Chat.members(group_id, 0, 1000);
 
-if (chat && chat.type === "group") {
-  const members = await chat.members(0, 1000);
-
-  console.log(`Grupo: ${chat.name}`);
-  console.log(`Total miembros: ${members.length}`);
-
-  for (const member of members) {
-    console.log(`  - ${member.name}: ${member.phone}`);
-  }
+console.log(`Grupo tiene ${members.length} miembros:`);
+for (const member of members) {
+  console.log(`  - ${member.name}: ${member.phone}`);
 }
 ```
 
@@ -161,21 +111,20 @@ if (chat && chat.type === "group") {
 ```typescript
 import * as fs from "fs";
 
-async function exportGroupMembers(groupId: string) {
-  const chat = await wa.Chat.get(groupId);
+async function export_group_members(wa: WhatsApp, group_id: string) {
+  const chat = await wa.Chat.get(group_id);
   if (!chat || chat.type !== "group") {
     throw new Error("Grupo no encontrado");
   }
 
-  const members = await chat.members(0, 10000);
+  const members = await wa.Chat.members(group_id, 0, 10000);
 
   const data = {
     group: {
       id: chat.id,
       name: chat.name,
-      photo: chat.photo,
     },
-    exportedAt: new Date().toISOString(),
+    exported_at: new Date().toISOString(),
     members: members.map(m => ({
       id: m.id,
       phone: m.phone,
@@ -195,9 +144,8 @@ async function exportGroupMembers(groupId: string) {
 ## Bot de comandos para grupos
 
 ```typescript
-wa.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (!(msg instanceof wa.Message.Text)) return;
+wa.event.on("message:created", async (msg) => {
+  if (msg.me || msg.type !== "text") return;
 
   // Solo en grupos
   if (!msg.cid.endsWith("@g.us")) return;
@@ -211,8 +159,8 @@ wa.on("message:created", async (msg) => {
     case "info":
       const chat = await wa.Chat.get(msg.cid);
       if (chat) {
-        const members = await chat.members(0, 1000);
-        await wa.Message.Message.text(
+        const members = await wa.Chat.members(msg.cid, 0, 1000);
+        await wa.Message.text(
           msg.cid,
           `*${chat.name}*\n\n` +
           `ID: ${chat.id}\n` +
@@ -222,12 +170,9 @@ wa.on("message:created", async (msg) => {
       break;
 
     case "miembros":
-      const group = await wa.Chat.get(msg.cid);
-      if (group) {
-        const members = await group.members(0, 50);
-        const list = members.map(m => `- ${m.name}`).join("\n");
-        await wa.Message.Message.text(msg.cid, `*Miembros:*\n${list}`);
-      }
+      const group_members = await wa.Chat.members(msg.cid, 0, 50);
+      const list = group_members.map(m => `- ${m.name}`).join("\n");
+      await wa.Message.text(msg.cid, `*Miembros:*\n${list}`);
       break;
   }
 });

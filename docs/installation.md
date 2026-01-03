@@ -27,18 +27,6 @@
 
 ---
 
-## Dependencias opcionales
-
-### Amazon S3 (para S3Engine)
-
-Si planeas usar persistencia en S3, instala el cliente de AWS:
-
-```bash
-npm install @aws-sdk/client-s3
-```
-
----
-
 ## Configuracion de TypeScript
 
 La libreria esta escrita en TypeScript y proporciona tipos completos. Asegurate de tener una configuracion compatible:
@@ -88,28 +76,17 @@ Cuando uses `FileEngine` (default), la libreria crea la siguiente estructura:
 
 ---
 
-## Variables de entorno
-
-Para S3Engine, configura las credenciales de AWS:
-
-```bash title=".env"
-AWS_ACCESS_KEY_ID=tu_access_key
-AWS_SECRET_ACCESS_KEY=tu_secret_key
-AWS_REGION=us-east-1
-```
-
-Si usas IAM roles (EC2, Lambda, ECS), no necesitas credenciales explicitas.
-
----
-
 ## Verificar instalacion
 
 Crea un archivo de prueba:
 
 ```typescript title="test.ts"
-import { WhatsApp, MemoryEngine } from "@arcaelas/whatsapp";
+import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
 
-const wa = new WhatsApp({ engine: new MemoryEngine() });
+const wa = new WhatsApp({
+  engine: new FileEngine(".baileys/test"),
+});
+
 console.log("Instalacion correcta!");
 console.log("Clases disponibles:", {
   Chat: wa.Chat,
