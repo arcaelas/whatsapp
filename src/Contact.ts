@@ -1,104 +1,147 @@
-import { Inmutables } from '@arcaelas/utils';
-import { jidNormalizedUser } from 'baileys';
-import type { Context } from './types';
+/**
+ * @file Contact.ts
+ * @description Clase Contact para gestión de contactos de WhatsApp
+ */
+
+import { BufferJSON, jidNormalizedUser } from 'baileys';
+import type { WhatsApp } from './WhatsApp';
+
+/**
+ * @description Datos persistidos de un contacto.
+ */
+export interface IContact {
+    /** JID del contacto (ej: 123456@s.whatsapp.net) */
+    id: string;
+    /** true si es el usuario autenticado */
+    me: boolean;
+    /** Nombre del contacto */
+    name: string;
+    /** Número de teléfono sin formato */
+    phone: string | null;
+    /** URL de la foto de perfil o null */
+    photo: string | null;
+}
 
 /**
  * @description
- * Clase base para validacion con instanceof.
- * La implementacion real se genera con contact().
+ * Clase base para representar un contacto de WhatsApp.
+ * Usar Contact.get() para obtener instancias.
  */
 export class Contact {
-    readonly id!: string;
-    readonly name!: string;
-    readonly phone!: string;
-    readonly photo!: string | null;
-    public custom_name!: string;
+    readonly id: string;
+    readonly me: boolean;
+    name: string;
+    phone: string | null;
+    photo: string | null;
+
+    constructor(data: IContact) {
+        this.id = data.id;
+        this.me = data.me;
+        this.name = data.name;
+        this.phone = data.phone;
+        this.photo = data.photo;
+    }
+
+    /**
+     * @description Cambia el nombre del contacto.
+     * @param name Nuevo nombre.
+     * @returns true si se guardó correctamente.
+     */
+    rename(name: string): Promise<boolean> {
+        return Promise.resolve(false);
+    }
+
+    /**
+     * @description Obtiene o crea el chat con este contacto.
+     * @returns Chat asociado al contacto.
+     */
+    chat(): Promise<unknown> {
+        return Promise.resolve(null);
+    }
 }
-export type IContact = {
-    [K in keyof Contact as Contact[K] extends Exclude<Inmutables | null, object> ? K : never]: Contact[K];
-};
 
 /**
  * @description Factory que retorna la clase Contact enlazada al contexto.
  * @param wa Instancia de WhatsApp.
  * @returns Clase _Contact que extiende Contact.
  */
-export function contact(wa: Context) {
+export function contact(wa: WhatsApp) {
     return class _Contact extends Contact {
-        constructor(data: IContact) {
-            super();
-            Object.assign(this, data);
-        }
-
         /**
-         * @description Obtiene el contacto propio (yo).
-         * @returns Contacto propio o null si no hay conexion.
+         * @description Obtiene un contacto por su ID.
+         * @param uid JID del contacto (@s.whatsapp.net) o número de teléfono.
+         * @returns Contacto o null si no existe.
          */
-        static async me(): Promise<_Contact | null> {
-            if (!wa.socket?.user) return null;
-            const jid = jidNormalizedUser(wa.socket.user.id);
-            const existing = await _Contact.get(jid);
-            if (existing) return existing;
+        static async get(uid: string): Promise<_Contact | null> {
+            const jid = uid.includes('@') ? uid : `${uid}@s.whatsapp.net`;
+            const stored = await wa.engine.get(`contact/${jid}/index`);
+            if (stored) return new _Contact(JSON.parse(stored, BufferJSON.reviver));
+            if (!wa.socket) return null;
+
+            const found = (await wa.socket.onWhatsApp(jid.split('@')[0]))?.[0];
+            if (!found?.exists) return null;
+
+            const id = jidNormalizedUser(found.jid);
             const data: IContact = {
-                id: jid,
-                name: wa.socket.user.name ?? jid.split('@')[0],
+                id,
+                me: id === (wa.socket.user?.id ? jidNormalizedUser(wa.socket.user.id) : null),
+                name: jid.split('@')[0],
                 phone: jid.split('@')[0],
                 photo: null,
-                custom_name: wa.socket.user.name ?? jid.split('@')[0],
             };
-            await wa.engine.contact(data.id, data);
+            await wa.engine.set(`contact/${id}/index`, JSON.stringify(data, BufferJSON.replacer));
             return new _Contact(data);
         }
 
         /**
-         * @description Obtiene un contacto por su ID.
-         * @param uid JID del contacto (@s.whatsapp.net).
-         * @returns Contacto o null si no existe.
+         * @description Cambia el nombre de un contacto.
+         * @param uid JID del contacto.
+         * @param name Nuevo nombre.
+         * @returns true si se guardó correctamente.
          */
-        static async get(uid: string): Promise<_Contact | null> {
-            const data = await wa.engine.contact(uid);
-            return data ? new _Contact(data) : null;
+        static async rename(uid: string, name: string): Promise<boolean> {
+            const jid = uid.includes('@') ? uid : `${uid}@s.whatsapp.net`;
+            const stored = await wa.engine.get(`contact/${jid}/index`);
+            if (!stored) return false;
+            const data: IContact = JSON.parse(stored, BufferJSON.reviver);
+            data.name = name;
+            await wa.engine.set(`contact/${jid}/index`, JSON.stringify(data, BufferJSON.replacer));
+            return true;
         }
 
         /**
          * @description Obtiene contactos paginados.
-         * @param offset Inicio de paginacion.
-         * @param limit Cantidad maxima de resultados.
+         * @param offset Inicio de paginación.
+         * @param limit Cantidad máxima de resultados.
          * @returns Array de contactos.
          */
-        static async find(offset: number, limit: number): Promise<_Contact[]> {
-            const items = await wa.engine.contacts(offset, limit);
-            return items.map((data) => new _Contact(data));
+        static async paginate(offset: number, limit: number): Promise<_Contact[]> {
+            const contacts: _Contact[] = [];
+            for (const key of await wa.engine.list('contact/', offset, limit)) {
+                if (!key.endsWith('/index')) continue;
+                const stored = await wa.engine.get(key);
+                if (stored) contacts.push(new _Contact(JSON.parse(stored, BufferJSON.reviver)));
+            }
+            return contacts;
         }
 
         /**
-         * @description Obtiene o crea el chat 1-1 con este contacto.
-         * El chat se crea localmente y se sincroniza con WhatsApp automaticamente
-         * al enviar el primer mensaje.
+         * @description Cambia el nombre del contacto.
+         * @param name Nuevo nombre.
+         * @returns true si se guardó correctamente.
+         */
+        async rename(name: string): Promise<boolean> {
+            const result = await _Contact.rename(this.id, name);
+            if (result) this.name = name;
+            return result;
+        }
+
+        /**
+         * @description Obtiene o crea el chat con este contacto.
          * @returns Chat asociado al contacto.
          */
         async chat() {
-            const existing = await wa.Chat.get(this.id);
-            if (existing) return existing;
-            const data = {
-                id: this.id,
-                name: this.custom_name || this.name,
-                photo: this.photo,
-                phone: this.phone,
-                type: 'contact' as const,
-            };
-            await wa.engine.chat(data.id, data);
-            return new wa.Chat(data);
-        }
-
-        /**
-         * @description Cambia el nombre personalizado del contacto (local).
-         * @param name Nuevo nombre.
-         * @returns true si se guardo correctamente.
-         */
-        async rename(name: string): Promise<boolean> {
-            this.custom_name = name;
-            return await wa.engine.contact(this.id, this as IContact);
+            return wa.Chat.get(this.id);
         }
     };
 }

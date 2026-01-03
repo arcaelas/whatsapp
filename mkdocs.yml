@@ -1,0 +1,141 @@
+site_name: Arcaelas WhatsApp
+site_description: Librería TypeScript para automatización de WhatsApp con Baileys
+site_author: Arcaelas Insiders
+site_url: https://arcaelas.github.io/whatsapp/
+
+repo_name: arcaelas/whatsapp
+repo_url: https://github.com/arcaelas/whatsapp
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2025 Arcaelas Insiders
+
+theme:
+  name: material
+  language: es
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: green
+      toggle:
+        icon: material/brightness-7
+        name: Cambiar a modo oscuro
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: green
+      toggle:
+        icon: material/brightness-4
+        name: Cambiar a modo claro
+
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+  features:
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - toc.follow
+    - toc.integrate
+
+nav:
+  - Inicio:
+    - Bienvenida: index.md
+    - Instalacion: installation.md
+    - Primeros Pasos: getting-started.md
+
+  - Referencias:
+    - WhatsApp: references/whatsapp.md
+    - Chat y Group: references/chat.md
+    - Contact: references/contact.md
+    - Mensajes: references/message.md
+    - Engines: references/engines.md
+    - Eventos: references/events.md
+
+  - Ejemplos:
+    - Bot Basico: examples/basic-bot.md
+    - Bot de Comandos: examples/command-bot.md
+    - Bot con Persistencia S3: examples/s3-bot.md
+    - Envio de Media: examples/media.md
+    - Gestion de Grupos: examples/groups.md
+    - Encuestas: examples/polls.md
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+plugins:
+  - search:
+      lang:
+        - es
+        - en
+      separator: '[\s\-\.]+'
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+      htmlmin_opts:
+        remove_comments: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/arcaelas/whatsapp
+    - icon: fontawesome/brands/npm
+      link: https://www.npmjs.com/package/@arcaelas/whatsapp
+
+  version:
+    provider: mike

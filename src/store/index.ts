@@ -1,5 +1,7 @@
-export { Engine } from './engine';
+/**
+ * @file store/index.ts
+ * @description Exportaciones del módulo de persistencia
+ */
+
+export type { Engine } from './engine';
 export { FileEngine } from './driver/FileEngine';
-export { MemoryEngine } from './driver/MemoryEngine';
-export { S3Engine } from './driver/S3Engine';
-export type { S3EngineOptions } from './driver/S3Engine';

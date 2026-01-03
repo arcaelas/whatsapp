@@ -1,6 +1,14 @@
 # Credentials
 .env
 .baileys
+
+# Testing files
+test.ts
+src/_test*.ts
+src/_index.ts
+
+# MkDocs build
+site/
 .env.*
 !.env.example
 serverless.yml

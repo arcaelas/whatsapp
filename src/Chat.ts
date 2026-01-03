@@ -1,284 +1,204 @@
-import { Inmutables } from '@arcaelas/utils';
-import type { AnyMessageContent } from 'baileys';
-import type { Context } from './types';
+/**
+ * @file Chat.ts
+ * @description Clase Chat para gestión de conversaciones de WhatsApp
+ */
+
+import { BufferJSON } from 'baileys';
+import type { IContact } from './Contact';
+import type { WhatsApp } from './WhatsApp';
+
+/**
+ * @description Datos persistidos de un chat.
+ */
+export interface IChat {
+    /** JID del chat (ej: 123456@s.whatsapp.net o grupo@g.us) */
+    id: string;
+    /** Nombre del chat o contacto */
+    name: string;
+    /** Tipo de chat: contacto individual o grupo */
+    type: 'contact' | 'group';
+    /** Timestamp cuando se fijó o null si no está fijado */
+    pined: number | null;
+    /** true si el chat está archivado */
+    archived: boolean;
+    /** Timestamp cuando expira el silencio o null si no está silenciado */
+    muted: number | null;
+}
 
 /**
  * @description
- * Clase base para validacion con instanceof.
- * La implementacion real se genera con chat().
+ * Clase base para representar una conversación de WhatsApp.
+ * Usar Chat.get() para obtener instancias.
  */
 export class Chat {
-    readonly id!: string;
-    readonly name!: string;
-    readonly photo!: string | null;
-    readonly phone!: string | null;
-    readonly type!: 'group' | 'contact';
+    readonly id: string;
+    name: string;
+    type: 'contact' | 'group';
+    pined: number | null;
+    archived: boolean;
+    muted: number | null;
+
+    constructor(data: IChat) {
+        this.id = data.id;
+        this.name = data.name;
+        this.type = data.type;
+        this.pined = data.pined;
+        this.archived = data.archived;
+        this.muted = data.muted;
+    }
 }
-export type IChat = {
-    [K in keyof Chat as Chat[K] extends Exclude<Inmutables | null, object> ? K : never]: Chat[K];
-};
 
 /**
  * @description Factory que retorna la clase Chat enlazada al contexto.
  * @param wa Instancia de WhatsApp.
  * @returns Clase _Chat que extiende Chat.
  */
-export function chat(wa: Context) {
-    /**
-     * @description Metodo interno para enviar mensajes.
-     * @param cid ID del chat.
-     * @param content Contenido del mensaje.
-     * @param mid ID del mensaje a citar (opcional).
-     * @returns true si se envio correctamente.
-     */
-    async function _send(cid: string, content: AnyMessageContent, mid?: string): Promise<boolean> {
-        if (!wa.socket) return false;
-        const options = mid ? { quoted: { key: { remoteJid: cid, id: mid }, message: {} } } : undefined;
-        const result = await wa.socket.sendMessage(cid, content, options as never);
-        return !!result?.key?.id;
-    }
+export function chat(wa: WhatsApp) {
     return class _Chat extends Chat {
-        constructor(data: IChat) {
-            super();
-            Object.assign(this, data);
-        }
-
         /**
          * @description Obtiene un chat por su ID.
-         * @param cid ID del chat (remoteJid).
+         * @param cid ID del chat (JID).
          * @returns Chat o null si no existe.
          */
         static async get(cid: string): Promise<_Chat | null> {
-            const data = await wa.engine.chat(cid);
-            return data ? new _Chat(data) : null;
-        }
+            const stored = await wa.engine.get(`chat/${cid}/index`);
+            if (stored) return new _Chat(JSON.parse(stored, BufferJSON.reviver));
 
-        /**
-         * @description Obtiene chats paginados.
-         * @param offset Inicio de paginacion.
-         * @param limit Cantidad maxima de resultados.
-         * @returns Array de chats.
-         */
-        static async find(offset: number, limit: number): Promise<_Chat[]> {
-            const items = await wa.engine.chats(offset, limit);
-            return items.map((data) => new _Chat(data));
-        }
-
-        /**
-         * @description Marca un mensaje como leido. Si no se especifica mid, marca el ultimo mensaje.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje (opcional). Si no se proporciona, usa el ultimo mensaje.
-         * @returns true si se marco correctamente.
-         */
-        static async seen(cid: string, mid?: string): Promise<boolean> {
-            if (!wa.socket) return false;
-            if (mid) {
-                const msg = await wa.engine.message(cid, mid);
-                if (!msg) return false;
-                await wa.socket.readMessages([{ remoteJid: cid, id: mid, participant: msg.uid }]);
-                return true;
-            }
-            const messages = await wa.engine.messages(cid, 0, 1);
-            if (!messages.length) return false;
-            return _Chat.seen(cid, messages[0].id);
-        }
-
-        /**
-         * @description Obtiene los participantes de un chat.
-         * @param cid ID del chat.
-         * @param offset Inicio de paginacion.
-         * @param limit Cantidad maxima de resultados.
-         * @returns Array de contactos (incluye me en grupos).
-         */
-        static async members(cid: string, offset: number, limit: number) {
-            if (cid.endsWith('@g.us') && wa.socket) {
-                const metadata = await wa.socket.groupMetadata(cid);
-                const participants = metadata.participants.slice(offset, offset + limit);
-                const members: InstanceType<typeof wa.Contact>[] = [];
-                for (const p of participants) {
-                    const existing = await wa.Contact.get(p.id);
-                    if (existing) members.push(existing);
-                    else
-                        members.push(
-                            new wa.Contact({
-                                id: p.id,
-                                name: p.id.split('@')[0],
-                                phone: p.id.split('@')[0],
-                                photo: null,
-                                custom_name: p.id.split('@')[0],
-                            })
-                        );
-                }
-                return members;
-            }
             const contact = await wa.Contact.get(cid);
-            const me = await wa.Contact.me();
-            const result: InstanceType<typeof wa.Contact>[] = [];
-            if (contact) result.push(contact);
-            if (me) result.push(me);
-            return result.slice(offset, offset + limit);
+            if (!contact) return null;
+
+            const data: IChat = {
+                id: cid,
+                name: contact.name,
+                type: cid.endsWith('@g.us') ? 'group' : 'contact',
+                pined: null,
+                archived: false,
+                muted: null,
+            };
+            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
+            return new _Chat(data);
         }
 
         /**
-         * @description Obtiene mensajes paginados de un chat.
+         * @description Fija o desfija un chat.
          * @param cid ID del chat.
-         * @param offset Inicio de paginacion.
-         * @param limit Cantidad maxima de resultados.
-         * @returns Array de mensajes.
+         * @param value true para fijar, false para desfijar.
+         * @returns true si se actualizó correctamente.
          */
-        static async messages(cid: string, offset: number, limit: number) {
-            const items = await wa.engine.messages(cid, offset, limit);
-            return items.map((data) => new wa.Message(data));
-        }
-
-        /**
-         * @description Envia un mensaje de texto.
-         * @param cid ID del chat.
-         * @param content Texto a enviar.
-         * @param mid ID del mensaje a citar (opcional).
-         * @returns true si se envio correctamente.
-         */
-        static async text(cid: string, content: string, mid?: string): Promise<boolean> {
-            return await _send(cid, { text: content }, mid);
-        }
-
-        /**
-         * @description Envia una imagen.
-         * @param cid ID del chat.
-         * @param buffer Buffer de la imagen.
-         * @param mid ID del mensaje a citar (opcional).
-         * @returns true si se envio correctamente.
-         */
-        static async image(cid: string, buffer: Buffer, mid?: string): Promise<boolean> {
-            return await _send(cid, { image: buffer }, mid);
-        }
-
-        /**
-         * @description Envia un video.
-         * @param cid ID del chat.
-         * @param buffer Buffer del video.
-         * @param mid ID del mensaje a citar (opcional).
-         * @returns true si se envio correctamente.
-         */
-        static async video(cid: string, buffer: Buffer, mid?: string): Promise<boolean> {
-            return await _send(cid, { video: buffer }, mid);
-        }
-
-        /**
-         * @description Envia un audio.
-         * @param cid ID del chat.
-         * @param buffer Buffer del audio.
-         * @param mid ID del mensaje a citar (opcional).
-         * @returns true si se envio correctamente.
-         */
-        static async audio(cid: string, buffer: Buffer, mid?: string): Promise<boolean> {
-            return await _send(cid, { audio: buffer, ptt: true }, mid);
-        }
-
-        /**
-         * @description Envia una ubicacion.
-         * @param cid ID del chat.
-         * @param coords Coordenadas con lat, lng y caption opcional.
-         * @param mid ID del mensaje a citar (opcional).
-         * @returns true si se envio correctamente.
-         */
-        static async location(cid: string, coords: { lat: number; lng: number; caption?: string }, mid?: string): Promise<boolean> {
-            return await _send(
-                cid,
-                {
-                    location: {
-                        degreesLatitude: coords.lat,
-                        degreesLongitude: coords.lng,
-                        name: coords.caption,
-                    },
-                },
-                mid
-            );
-        }
-
-        /**
-         * @description Crea una encuesta.
-         * @param cid ID del chat.
-         * @param text Pregunta de la encuesta.
-         * @param options Opciones de respuesta.
-         * @returns true si se envio correctamente.
-         */
-        static async poll(cid: string, text: string, options: string[]): Promise<boolean> {
-            return await _send(cid, {
-                poll: {
-                    name: text,
-                    values: options,
-                    selectableCount: 1,
-                },
-            });
-        }
-
-        /**
-         * @description Activa o desactiva el estado "escribiendo...".
-         * @param cid ID del chat.
-         * @param active true para activar, false para desactivar.
-         * @returns true si se actualizo correctamente.
-         */
-        static async typing(cid: string, active: boolean): Promise<boolean> {
+        static async pin(cid: string, value: boolean): Promise<boolean> {
             if (!wa.socket) return false;
-            await wa.socket.sendPresenceUpdate(active ? 'composing' : 'available', cid);
+            await wa.socket.chatModify({ pin: value }, cid);
+            const chat = await _Chat.get(cid);
+            if (!chat) return true;
+            chat.pined = value ? Date.now() : null;
+            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(chat, BufferJSON.replacer));
             return true;
         }
 
         /**
-         * @description Activa o desactiva el estado "grabando...".
+         * @description Archiva o desarchiva un chat.
          * @param cid ID del chat.
-         * @param active true para activar, false para desactivar.
-         * @returns true si se actualizo correctamente.
+         * @param value true para archivar, false para desarchivar.
+         * @returns true si se actualizó correctamente.
          */
-        static async recording(cid: string, active: boolean): Promise<boolean> {
+        static async archive(cid: string, value: boolean): Promise<boolean> {
             if (!wa.socket) return false;
-            await wa.socket.sendPresenceUpdate(active ? 'recording' : 'available', cid);
+            await wa.socket.chatModify({ archive: value, lastMessages: [] }, cid);
+            const chat = await _Chat.get(cid);
+            if (!chat) return true;
+            chat.archived = value;
+            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(chat, BufferJSON.replacer));
             return true;
         }
 
-        async seen(mid?: string): Promise<boolean> {
-            return _Chat.seen(this.id, mid);
+        /**
+         * @description Silencia o quita silencio de un chat.
+         * @param cid ID del chat.
+         * @param duration Duración en milisegundos (0 o null para quitar silencio).
+         * @returns true si se actualizó correctamente.
+         */
+        static async mute(cid: string, duration: number | null): Promise<boolean> {
+            if (!wa.socket) return false;
+            const mute_end = duration ? Date.now() + duration : null;
+            await wa.socket.chatModify({ mute: mute_end }, cid);
+            const chat = await _Chat.get(cid);
+            if (!chat) return true;
+            chat.muted = mute_end;
+            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(chat, BufferJSON.replacer));
+            return true;
         }
 
-        async members(offset: number, limit: number) {
-            return _Chat.members(this.id, offset, limit);
+        /**
+         * @description Marca un chat como leído.
+         * @param cid ID del chat.
+         * @returns true si se marcó correctamente.
+         */
+        static async seen(cid: string): Promise<boolean> {
+            if (!wa.socket) return false;
+
+            const index_key = (await wa.engine.list(`chat/${cid}/message/`, 0, 1)).find((k) => k.endsWith('/index'));
+            if (!index_key) return false;
+
+            const stored = await wa.engine.get(index_key);
+            if (!stored) return false;
+
+            const msg = JSON.parse(stored, BufferJSON.reviver);
+            await wa.socket.readMessages([{ remoteJid: cid, id: msg.id, participant: msg.me ? undefined : cid }]);
+            return true;
         }
 
-        async messages(offset: number, limit: number) {
-            return _Chat.messages(this.id, offset, limit);
+        /**
+         * @description Elimina un chat.
+         * @param cid ID del chat.
+         * @returns true si se eliminó correctamente.
+         */
+        static async remove(cid: string): Promise<boolean> {
+            if (!wa.socket) return false;
+
+            const stored = await wa.engine.get(`chat/${cid}/index`);
+            if (!stored) return false;
+
+            if ((JSON.parse(stored, BufferJSON.reviver) as IChat).type === 'group') {
+                await wa.socket.groupLeave(cid);
+            } else {
+                await wa.socket.chatModify({ delete: true, lastMessages: [] }, cid);
+            }
+
+            await wa.engine.set(`chat/${cid}/index`, null);
+            return true;
         }
 
-        async text(content: string, mid?: string): Promise<boolean> {
-            return _Chat.text(this.id, content, mid);
-        }
+        /**
+         * @description Obtiene los miembros de un chat.
+         * @param cid ID del chat.
+         * @param offset Inicio de paginación.
+         * @param limit Cantidad máxima de resultados.
+         * @returns Array de contactos.
+         */
+        static async members(cid: string, offset: number, limit: number): Promise<InstanceType<typeof wa.Contact>[]> {
+            if (!cid.endsWith('@g.us') || !wa.socket) {
+                const contact = await wa.Contact.get(cid);
+                return contact ? [contact] : [];
+            }
 
-        async image(buffer: Buffer, mid?: string): Promise<boolean> {
-            return _Chat.image(this.id, buffer, mid);
-        }
-
-        async video(buffer: Buffer, mid?: string): Promise<boolean> {
-            return _Chat.video(this.id, buffer, mid);
-        }
-
-        async audio(buffer: Buffer, mid?: string): Promise<boolean> {
-            return _Chat.audio(this.id, buffer, mid);
-        }
-
-        async location(coords: { lat: number; lng: number; caption?: string }, mid?: string): Promise<boolean> {
-            return _Chat.location(this.id, coords, mid);
-        }
-
-        async poll(text: string, options: string[]): Promise<boolean> {
-            return _Chat.poll(this.id, text, options);
-        }
-
-        async typing(active: boolean): Promise<boolean> {
-            return _Chat.typing(this.id, active);
-        }
-
-        async recording(active: boolean): Promise<boolean> {
-            return _Chat.recording(this.id, active);
+            const members: InstanceType<typeof wa.Contact>[] = [];
+            for (const p of (await wa.socket.groupMetadata(cid)).participants.slice(offset, offset + limit)) {
+                const existing = await wa.Contact.get(p.id);
+                if (existing) {
+                    members.push(existing);
+                } else {
+                    const data: IContact = {
+                        id: p.id,
+                        me: false,
+                        name: p.id.split('@')[0],
+                        phone: p.id.split('@')[0],
+                        photo: null,
+                    };
+                    await wa.engine.set(`contact/${p.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                    members.push(new wa.Contact(data));
+                }
+            }
+            return members;
         }
     };
 }

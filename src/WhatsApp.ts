@@ -1,7 +1,12 @@
-import { promify } from '@arcaelas/utils';
+/**
+ * @file WhatsApp.ts
+ * @description Clase principal que gestiona la conexión y eventos de WhatsApp
+ */
+
 import { Boom } from '@hapi/boom';
 import {
-    decryptPollVote,
+    Browsers,
+    BufferJSON,
     DisconnectReason,
     downloadMediaMessage,
     fetchLatestBaileysVersion,
@@ -10,325 +15,432 @@ import {
     jidNormalizedUser,
     makeWASocket,
     proto,
-    WASocket,
     type AuthenticationCreds,
-    type Chat as BaileysChat,
-    type Contact as BaileysContact,
-    type ConnectionState,
+    type SignalDataTypeMap,
+    type WAMessage,
+    type WASocket,
 } from 'baileys';
-import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { chat } from './Chat';
-import { contact } from './Contact';
-import { IMessage, message } from './Message';
-import { Engine, FileEngine } from './store';
+import { chat, type IChat } from './Chat';
+import { contact, type IContact } from './Contact';
+import { message, MESSAGE_TYPE_MAP, type IMessage } from './Message';
+import { FileEngine, type Engine } from './store';
 
+/**
+ * @description Opciones de configuración de WhatsApp.
+ */
 export interface IWhatsApp {
+    /** Motor de almacenamiento personalizado */
     engine?: Engine;
-    phone?: string;
-    sync?: boolean;
-    online?: boolean;
+    /** Número de teléfono para emparejamiento con código */
+    phone?: string | number;
 }
 
+/**
+ * @description Mapa de eventos emitidos por WhatsApp.
+ */
 interface WhatsAppEventMap {
-    open: void;
-    close: void;
-    error: Error;
-    progress: number;
-    'contact:upsert': InstanceType<ReturnType<typeof contact>>;
-    'chat:upsert': InstanceType<ReturnType<typeof chat>>;
-    'chat:deleted': string;
-    'message:created': InstanceType<ReturnType<typeof message>>;
-    'message:status': InstanceType<ReturnType<typeof message>>;
-    'message:updated': InstanceType<ReturnType<typeof message>>;
-    'message:deleted': { cid: string; mid: string };
-    'message:reaction': InstanceType<ReturnType<typeof message>>;
+    open: [];
+    close: [];
+    error: [Error];
+    'message:created': [InstanceType<ReturnType<typeof message>>];
+    'message:updated': [InstanceType<ReturnType<typeof message>>];
+    'message:reacted': [cid: string, mid: string, emoji: string];
+    'message:deleted': [cid: string, mid: string];
+    'chat:created': [InstanceType<ReturnType<typeof chat>>];
+    'chat:updated': [InstanceType<ReturnType<typeof chat>>];
+    'chat:pined': [cid: string, pined: number | null];
+    'chat:archived': [cid: string, archived: boolean];
+    'chat:muted': [cid: string, muted: number | null];
+    'chat:deleted': [cid: string];
+    'contact:created': [InstanceType<ReturnType<typeof contact>>];
+    'contact:updated': [InstanceType<ReturnType<typeof contact>>];
 }
 
-const MESSAGE_TYPE_MAP: Record<string, IMessage['type']> = {
-    conversation: 'text',
-    extendedTextMessage: 'text',
-    imageMessage: 'image',
-    videoMessage: 'video',
-    audioMessage: 'audio',
-    locationMessage: 'location',
-    liveLocationMessage: 'location',
-    pollCreationMessage: 'poll',
-    pollCreationMessageV2: 'poll',
-    pollCreationMessageV3: 'poll',
-};
+/**
+ * @description
+ * Clase principal para gestionar la conexión con WhatsApp.
+ *
+ * @example
+ * const { event, pair, Contact, Chat, Message } = new WhatsApp({ phone: '5491112345678' });
+ * event.on('open', () => console.log('Conectado'));
+ * await pair((code) => console.log('Código:', code));
+ */
+export class WhatsApp {
+    private readonly _phone?: string;
+    private _socket: WASocket | null = null;
 
-const STATUS_MAP: Record<number, IMessage['status']> = {
-    0: 'pending',
-    1: 'pending',
-    2: 'sent',
-    3: 'delivered',
-    4: 'read',
-    5: 'read',
-};
-
-export class WhatsApp extends EventEmitter<{ [K in keyof WhatsAppEventMap]: [WhatsAppEventMap[K]] }> {
-    readonly options: Readonly<IWhatsApp>;
-    engine: Engine;
-    socket: WASocket | null = null;
-
-    Contact: ReturnType<typeof contact>;
-    Chat: ReturnType<typeof chat>;
-    Message: ReturnType<typeof message>;
+    readonly engine: Engine;
+    readonly event: EventEmitter<WhatsAppEventMap>;
+    readonly Contact: ReturnType<typeof contact>;
+    readonly Chat: ReturnType<typeof chat>;
+    readonly Message: ReturnType<typeof message>;
 
     constructor(options: IWhatsApp = {}) {
-        super();
-        this.options = Object.freeze({ ...options });
-        this.engine = options.engine ?? new FileEngine(options.phone ? `.baileys/${options.phone}` : '.baileys/default');
+        this._phone = options.phone?.toString();
+        this.engine = options.engine ?? new FileEngine(this._phone ? `.baileys/${this._phone}` : '.baileys/default');
+        this.event = new EventEmitter();
         this.Contact = contact(this);
         this.Chat = chat(this);
         this.Message = message(this);
-
-        this.on('contact:upsert', async (i) => {
-            const e = await this.engine.contact(i.id);
-            await this.engine.contact(i.id, { id: i.id, name: i.name, phone: i.phone, photo: i.photo ?? e?.photo ?? null, custom_name: e?.custom_name ?? i.custom_name });
-        });
-        this.on('chat:upsert', async (i) => {
-            const e = await this.engine.chat(i.id);
-            await this.engine.chat(i.id, { id: i.id, name: i.name, phone: i.phone, photo: i.photo ?? e?.photo ?? null, type: i.type });
-        });
-        this.on('chat:deleted', (cid) => this.engine.chat(cid, null));
-        this.on('message:created', async (i) => {
-            await this.engine.message(i.cid, i.id, { id: i.id, cid: i.cid, uid: i.uid, mid: i.mid, type: i.type, mime: i.mime, caption: i.caption, me: i.me, status: i.status, created_at: i.created_at, edited: i.edited });
-            const content = await i.content();
-            if (content.length) await this.engine.content(i.cid, i.id, content);
-        });
-        this.on('message:status', async (i) => {
-            await this.engine.message(i.cid, i.id, { id: i.id, cid: i.cid, uid: i.uid, mid: i.mid, type: i.type, mime: i.mime, caption: i.caption, me: i.me, status: i.status, created_at: i.created_at, edited: i.edited });
-        });
-        this.on('message:updated', async (i) => {
-            await this.engine.message(i.cid, i.id, { id: i.id, cid: i.cid, uid: i.uid, mid: i.mid, type: i.type, mime: i.mime, caption: i.caption, me: i.me, status: i.status, created_at: i.created_at, edited: i.edited });
-            const content = await i.content();
-            if (content.length) await this.engine.content(i.cid, i.id, content);
-        });
-        this.on('message:deleted', ({ cid, mid }) => this.engine.message(cid, mid, null));
     }
 
-    async pair(callback?: (data: Buffer | string) => void | Promise<void>): Promise<void> {
-        const promise = promify();
+    /** @description Retorna el socket de Baileys (null si no está conectado). */
+    get socket(): WASocket | null {
+        return this._socket;
+    }
+
+    /**
+     * @description Conecta a WhatsApp.
+     * - Con phone: callback recibe código de 8 dígitos (una vez)
+     * - Sin phone: callback recibe QR como Buffer PNG (periódicamente)
+     * @param callback Función que recibe el código o QR.
+     */
+    pair = async (callback: (code: string | Buffer) => void | Promise<void>): Promise<void> => {
         const { version } = await fetchLatestBaileysVersion();
-        const creds = await this.engine.session<AuthenticationCreds>('session/creds');
+        const stored = await this.engine.get('session/creds');
+        const creds: AuthenticationCreds = stored ? JSON.parse(stored, BufferJSON.reviver) : initAuthCreds();
 
-        this.socket = makeWASocket({
-            version,
-            printQRInTerminal: false,
-            syncFullHistory: this.options.sync ?? false,
-            markOnlineOnConnect: this.options.online ?? false,
-            auth: {
-                creds: creds ?? initAuthCreds(),
-                keys: {
-                    get: async (type, ids) => {
-                        const result: Record<string, unknown> = {};
-                        for (const id of ids) {
-                            let value = await this.engine.session(`session/signal/${type}/${id}`);
-                            if (value && type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                            result[id] = value;
-                        }
-                        return result as never;
-                    },
-                    set: async (data) => {
-                        for (const type in data) {
-                            for (const id in data[type]) {
-                                await this.engine.session(`session/signal/${type}/${id}`, data[type][id] ?? null);
-                            }
-                        }
-                    },
-                },
-            },
-        });
-
-        const socket = this.socket;
         let code_sent = false;
 
-        socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }: Partial<ConnectionState>) => {
-            if (qr && callback) {
-                if (this.options.phone && !code_sent) {
-                    code_sent = true;
-                    await callback(await socket.requestPairingCode(this.options.phone));
-                } else if (!this.options.phone) {
-                    await callback(await QRCode.toBuffer(qr, { type: 'png', margin: 2 }));
+        const connect = async (): Promise<void> => {
+            this._socket = makeWASocket({
+                version,
+                auth: {
+                    creds,
+                    keys: {
+                        get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+                            const data: { [id: string]: SignalDataTypeMap[T] } = {};
+                            for (const id of ids) {
+                                const stored = await this.engine.get(`session/${type}/${id}`);
+                                if (stored) {
+                                    let value = JSON.parse(stored, BufferJSON.reviver);
+                                    if (type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    data[id] = value;
+                                }
+                            }
+                            return data;
+                        },
+                        set: async (data: Record<string, Record<string, unknown | null>>) => {
+                            for (const category in data) {
+                                for (const id in data[category]) {
+                                    const value = data[category][id];
+                                    await this.engine.set(`session/${category}/${id}`, value ? JSON.stringify(value, BufferJSON.replacer) : null);
+                                }
+                            }
+                        },
+                    },
+                },
+                browser: Browsers.windows('Chrome'),
+                printQRInTerminal: false,
+                logger: pino({ level: 'silent' }),
+                syncFullHistory: false,
+                markOnlineOnConnect: false,
+            });
+
+            const socket = this._socket;
+
+            socket.ev.on('creds.update', () => this.engine.set('session/creds', JSON.stringify(creds, BufferJSON.replacer)));
+
+            socket.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect, qr } = update;
+
+                if (qr && !creds.registered) {
+                    if (this._phone && !code_sent) {
+                        code_sent = true;
+                        await callback(await socket.requestPairingCode(this._phone));
+                    } else if (!this._phone) {
+                        await callback(await QRCode.toBuffer(qr, { type: 'png', margin: 2 }));
+                    }
                 }
-            }
-            if (connection === 'open') {
-                this.emit('open');
-                promise.resolve();
-            } else if (connection === 'close') {
-                this.socket = null;
-                const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
-                if (code === DisconnectReason.loggedOut) {
-                    this.emit('error', lastDisconnect?.error ?? new Error('Logged out'));
-                    promise.reject(lastDisconnect?.error);
-                } else {
-                    this.emit('close');
+
+                if (connection === 'open') {
+                    this.event.emit('open');
+                } else if (connection === 'close') {
+                    this._socket = null;
+                    if ((lastDisconnect?.error as Boom)?.output?.statusCode === DisconnectReason.loggedOut) {
+                        this.event.emit('error', new Error('Logged out'));
+                        return;
+                    }
+                    this.event.emit('close');
+                    setTimeout(connect, 3000);
                 }
-            }
-        });
+            });
 
-        socket.ev.on('creds.update', () => this.engine.session('session/creds', socket.authState.creds));
+            // ═══════════════════════════════════════════════════════════════════
+            // CONTACTS
+            // ═══════════════════════════════════════════════════════════════════
 
-        socket.ev.on('messaging-history.set', async ({ chats, contacts, messages, progress, isLatest }) => {
-            contacts.forEach((c) => c.id && this._emit_contact(c));
-            chats.forEach((ch) => this._emit_chat(ch));
-            messages.forEach((m) => this._emit_message(m));
-            this.emit('progress', isLatest ? 100 : progress ?? 0);
-        });
-
-        socket.ev.on('contacts.upsert', (list) => list.forEach((c) => c.id && this._emit_contact(c)));
-        socket.ev.on('contacts.update', (list) => list.forEach((c) => c.id && this._emit_contact(c)));
-        socket.ev.on('chats.upsert', (list) => list.forEach((ch) => this._emit_chat(ch)));
-
-        socket.ev.on('chats.update', async (list) => {
-            for (const u of list) {
-                if (!u.id) continue;
-                const existing = await this.engine.chat(u.id);
-                if (existing) this._emit_chat({ ...existing, name: (u as { name?: string }).name ?? existing.name });
-            }
-        });
-
-        socket.ev.on('chats.delete', (ids) => ids.forEach((id) => this.emit('chat:deleted', id)));
-
-        socket.ev.on('messages.upsert', async ({ messages }) => {
-            for (const m of messages) {
-                getContentType(m.message ?? {}) === 'pollUpdateMessage' ? await this._process_poll_vote(m) : this._emit_message(m);
-            }
-        });
-
-        socket.ev.on('messages.update', async (list) => {
-            for (const { key, update } of list) {
-                if (!key.remoteJid || !key.id) continue;
-                const existing = await this.engine.message(key.remoteJid, key.id);
-                if (!existing) continue;
-                const is_edit = !!(update as { edit?: unknown }).edit;
-                const merged: IMessage = { ...existing, status: update.status != null ? STATUS_MAP[update.status] ?? existing.status : existing.status, edited: is_edit || existing.edited };
-                const instance = new this.Message(merged);
-                instance.content = async () => (await this.engine.content(merged.cid, merged.id)) ?? Buffer.alloc(0);
-                this.emit(is_edit ? 'message:updated' : 'message:status', instance);
-            }
-        });
-
-        socket.ev.on('messages.delete', async (del) => {
-            if ('all' in del && del.all) {
-                const msgs = await this.engine.messages(del.jid, 0, 1000);
-                for (const m of msgs) this.emit('message:deleted', { cid: del.jid, mid: m.id });
-            } else if ('keys' in del) {
-                for (const k of del.keys) {
-                    if (k.remoteJid && k.id) this.emit('message:deleted', { cid: k.remoteJid, mid: k.id });
+            socket.ev.on('contacts.upsert', async (contacts) => {
+                console.log('[BAILEYS] contacts.upsert:', JSON.stringify(contacts, null, 2));
+                for (const c of contacts) {
+                    if (!c.id) continue;
+                    const existing = await this.engine.get(`contact/${c.id}/index`);
+                    const data: IContact = {
+                        id: c.id,
+                        me: c.id === (socket.user?.id ? jidNormalizedUser(socket.user.id) : null),
+                        name: c.notify ?? c.name ?? c.id.split('@')[0],
+                        phone: c.id.split('@')[0],
+                        photo: null,
+                    };
+                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                    this.event.emit(existing ? 'contact:updated' : 'contact:created', new this.Contact(data));
                 }
-            }
-        });
+            });
 
-        socket.ev.on('messages.reaction', async (reactions) => {
-            for (const { key } of reactions) {
-                if (!key.remoteJid || !key.id) continue;
-                const existing = await this.engine.message(key.remoteJid, key.id);
-                if (!existing) continue;
-                const instance = new this.Message(existing);
-                instance.content = async () => (await this.engine.content(existing.cid, existing.id)) ?? Buffer.alloc(0);
-                this.emit('message:reaction', instance);
-            }
-        });
+            socket.ev.on('contacts.update', async (contacts) => {
+                console.log('[BAILEYS] contacts.update:', JSON.stringify(contacts, null, 2));
+                for (const c of contacts) {
+                    if (!c.id) continue;
+                    const stored = await this.engine.get(`contact/${c.id}/index`);
+                    if (!stored) continue;
+                    const data: IContact = JSON.parse(stored, BufferJSON.reviver);
+                    if (c.notify) data.name = c.notify;
+                    if (c.name) data.name = c.name;
+                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                    this.event.emit('contact:updated', new this.Contact(data));
+                }
+            });
 
-        return promise;
-    }
+            // ═══════════════════════════════════════════════════════════════════
+            // CHATS
+            // ═══════════════════════════════════════════════════════════════════
 
-    async sync(callback?: (progress: number) => void): Promise<void> {
-        const promise = promify();
-        const handler = (p: number) => {
-            callback?.(p);
-            if (p >= 100) {
-                this.off('progress', handler);
-                promise.resolve();
-            }
+            socket.ev.on('chats.upsert', async (chats) => {
+                console.log('[BAILEYS] chats.upsert:', JSON.stringify(chats, null, 2));
+                for (const ch of chats) {
+                    const existing = await this.engine.get(`chat/${ch.id}/index`);
+                    const data: IChat = existing
+                        ? JSON.parse(existing, BufferJSON.reviver)
+                        : {
+                              id: ch.id,
+                              name: ch.name ?? ch.id.split('@')[0],
+                              type: ch.id.endsWith('@g.us') ? 'group' : 'contact',
+                              pined: null,
+                              archived: false,
+                              muted: null,
+                          };
+                    if (ch.name) data.name = ch.name;
+                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                    this.event.emit(existing ? 'chat:updated' : 'chat:created', new this.Chat(data));
+                }
+            });
+
+            socket.ev.on('chats.update', async (chats) => {
+                console.log('[BAILEYS] chats.update:', JSON.stringify(chats, null, 2));
+                for (const ch of chats) {
+                    if (!ch.id) continue;
+
+                    const stored = await this.engine.get(`chat/${ch.id}/index`);
+                    const data: IChat = stored
+                        ? JSON.parse(stored, BufferJSON.reviver)
+                        : {
+                              id: ch.id,
+                              name: ch.name ?? ch.id.split('@')[0],
+                              type: ch.id.endsWith('@g.us') ? 'group' : 'contact',
+                              pined: null,
+                              archived: false,
+                              muted: null,
+                          };
+
+                    if (ch.name !== undefined) data.name = ch.name ?? data.name;
+
+                    let has_specific_event = false;
+
+                    // Pin
+                    if ('pinned' in ch) {
+                        data.pined = (ch as { pinned?: number | null }).pinned ?? null;
+                        this.event.emit('chat:pined', ch.id, data.pined);
+                        has_specific_event = true;
+                    }
+
+                    // Archive
+                    if (ch.archived !== undefined) {
+                        data.archived = ch.archived ?? false;
+                        this.event.emit('chat:archived', ch.id, data.archived);
+                        has_specific_event = true;
+                    }
+
+                    // Mute
+                    if ('muteEndTime' in ch) {
+                        data.muted = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
+                        this.event.emit('chat:muted', ch.id, data.muted);
+                        has_specific_event = true;
+                    }
+
+                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+
+                    if (!has_specific_event) {
+                        this.event.emit(stored ? 'chat:updated' : 'chat:created', new this.Chat(data));
+                    }
+                }
+            });
+
+            socket.ev.on('chats.delete', async (ids) => {
+                console.log('[BAILEYS] chats.delete:', JSON.stringify(ids, null, 2));
+                for (const cid of ids) {
+                    await this.engine.set(`chat/${cid}/index`, null);
+                    this.event.emit('chat:deleted', cid);
+                }
+            });
+
+            // ═══════════════════════════════════════════════════════════════════
+            // MESSAGES
+            // ═══════════════════════════════════════════════════════════════════
+
+            socket.ev.on('messages.upsert', async ({ messages }) => {
+                console.log('[BAILEYS] messages.upsert:', JSON.stringify(messages, null, 2));
+                for (const msg of messages) {
+                    if (!msg.key.remoteJid || !msg.key.id) continue;
+
+                    const cid = msg.key.remoteJid;
+                    const mid = msg.key.id;
+                    const content_type = getContentType(msg.message ?? {});
+
+                    // Ignorar reacciones y votos de encuesta (tienen sus propios eventos)
+                    if (content_type === 'reactionMessage' || content_type === 'pollUpdateMessage') continue;
+
+                    // ─────────────────────────────────────────────────────────────
+                    // PROTOCOL MESSAGE (ediciones y eliminaciones)
+                    // ─────────────────────────────────────────────────────────────
+                    if (content_type === 'protocolMessage') {
+                        const protocol = msg.message?.protocolMessage;
+                        if (!protocol?.key?.id) continue;
+
+                        const target_mid = protocol.key.id;
+                        const target_cid = protocol.key.remoteJid ?? cid;
+
+                        // MESSAGE_EDIT: Merge selectivo - reemplazar solo message
+                        if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+                            const edited_msg = protocol.editedMessage;
+                            if (!edited_msg) continue;
+
+                            const stored = await this.engine.get(`chat/${target_cid}/message/${target_mid}/index`);
+                            if (!stored) continue;
+
+                            const data: IMessage = JSON.parse(stored, BufferJSON.reviver);
+                            data.raw.message = edited_msg;
+                            data.edited = true;
+
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, JSON.stringify(data, BufferJSON.replacer));
+
+                            const instance = new this.Message(data.raw, data.edited);
+                            this.Message._notify(instance);
+                            this.event.emit('message:updated', instance);
+                            continue;
+                        }
+
+                        // REVOKE: Eliminar del engine
+                        if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, null);
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/content`, null);
+                            this.event.emit('message:deleted', target_cid, target_mid);
+                        }
+                        continue;
+                    }
+
+                    // ─────────────────────────────────────────────────────────────
+                    // MENSAJE NUEVO
+                    // ─────────────────────────────────────────────────────────────
+
+                    const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'text';
+
+                    // Extraer content temporal del raw
+                    const temp_content = await this._extract_content(msg, msg_type);
+
+                    // Guardar en engine
+                    const data: IMessage = { raw: msg, edited: false };
+                    await this.engine.set(`chat/${cid}/message/${mid}/index`, JSON.stringify(data, BufferJSON.replacer));
+
+                    // Pre-cache de media si está disponible
+                    if (temp_content.length > 0) {
+                        await this.engine.set(`chat/${cid}/message/${mid}/content`, temp_content.toString('base64'));
+                    }
+
+                    // Crear instancia con content temporal inyectado
+                    const instance = new this.Message(msg, false);
+                    if (temp_content.length > 0) {
+                        instance.content = async () => temp_content;
+                    }
+
+                    this.Message._notify(instance);
+                    this.event.emit('message:created', instance);
+                }
+            });
+
+            socket.ev.on('messages.update', async (updates) => {
+                console.log('[BAILEYS] messages.update:', JSON.stringify(updates, null, 2));
+                for (const { key, update } of updates) {
+                    if (!key.remoteJid || !key.id) continue;
+
+                    const stored = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/index`);
+                    if (!stored) continue;
+
+                    const data: IMessage = JSON.parse(stored, BufferJSON.reviver);
+
+                    // Edición via messages.update
+                    if ((update as { message?: { editedMessage?: { message?: proto.IMessage } } }).message?.editedMessage?.message) {
+                        data.raw.message = (update as { message: { editedMessage: { message: proto.IMessage } } }).message.editedMessage.message;
+                        data.edited = true;
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                        const instance = new this.Message(data.raw, data.edited);
+                        this.Message._notify(instance);
+                        this.event.emit('message:updated', instance);
+                        continue;
+                    }
+
+                    // Status update
+                    if ((update as { status?: number }).status !== undefined) {
+                        data.raw.status = (update as { status: number }).status;
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                    }
+                }
+            });
+
+            socket.ev.on('messages.reaction', async (reactions) => {
+                console.log('[BAILEYS] messages.reaction:', JSON.stringify(reactions, null, 2));
+                for (const { key, reaction } of reactions) {
+                    if (key.remoteJid && key.id) this.event.emit('message:reacted', key.remoteJid, key.id, reaction.text ?? '');
+                }
+            });
         };
-        this.on('progress', handler);
-        return promise;
-    }
 
-    private _emit_contact(c: Partial<BaileysContact>): void {
-        const id = c.id!;
-        const name = c.notify ?? c.name ?? id.split('@')[0];
-        this.emit('contact:upsert', new this.Contact({ id, name, phone: id.split('@')[0], photo: c.imgUrl === 'changed' ? null : c.imgUrl ?? null, custom_name: name }));
-    }
+        await connect();
+    };
 
-    private _emit_chat(ch: Partial<BaileysChat> & { id: string }): void {
-        const is_group = ch.id.endsWith('@g.us');
-        this.emit('chat:upsert', new this.Chat({ id: ch.id, name: ch.name ?? ch.id.split('@')[0], photo: null, phone: is_group ? null : ch.id.split('@')[0], type: is_group ? 'group' : 'contact' }));
-    }
-
-    private _emit_message(msg: proto.IWebMessageInfo): void {
-        if (!msg.key.remoteJid || !msg.key.id) return;
-        const cid = msg.key.remoteJid;
-        const content_type = getContentType(msg.message ?? {});
-        const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'unknown';
-        const raw = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | undefined;
-
-        const instance = new this.Message({
-            id: msg.key.id,
-            cid,
-            uid: jidNormalizedUser(cid.endsWith('@g.us') ? msg.key.participant ?? cid : cid),
-            mid: (raw?.contextInfo as proto.IContextInfo)?.stanzaId ?? null,
-            type: msg_type,
-            mime: (raw?.mimetype as string) ?? 'text/plain',
-            caption: (raw?.caption as string) ?? '',
-            me: msg.key.fromMe ?? false,
-            status: 'sent',
-            created_at: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
-            edited: !!msg.message?.editedMessage,
-        });
-
+    /**
+     * @description Extrae el contenido de un mensaje según su tipo.
+     * @param msg WAMessage de Baileys.
+     * @param msg_type Tipo de mensaje.
+     * @returns Buffer con el contenido.
+     */
+    private async _extract_content(msg: WAMessage, msg_type: string): Promise<Buffer> {
         if (msg_type === 'text') {
-            const text = typeof raw === 'string' ? raw : (raw?.text as string) ?? '';
-            instance.content = async () => Buffer.from(text);
-        } else if (msg_type === 'location') {
-            instance.content = async () => Buffer.from(JSON.stringify({ lat: raw?.degreesLatitude, lng: raw?.degreesLongitude }));
-        } else if (msg_type === 'poll') {
-            const p = raw as { name?: string; options?: Array<{ optionName: string }>; encKey?: Uint8Array } | undefined;
-            instance.content = async () => Buffer.from(JSON.stringify({ content: p?.name ?? '', items: p?.options?.map((o) => ({ content: o.optionName, voters: [] })) ?? [], sign: p?.encKey ? Buffer.from(p.encKey).toString('base64') : null }));
-        } else if (['image', 'video', 'audio'].includes(msg_type)) {
-            instance.content = async () => {
-                if (!this.socket) return Buffer.alloc(0);
-                try {
-                    const buf = await downloadMediaMessage(msg, 'buffer', {}, { logger: undefined as never, reuploadRequest: this.socket.updateMediaMessage });
-                    return Buffer.isBuffer(buf) ? buf : Buffer.alloc(0);
-                } catch {
-                    return Buffer.alloc(0);
-                }
-            };
-        } else {
-            instance.content = async () => Buffer.alloc(0);
+            const content_type = getContentType(msg.message ?? {});
+            const raw = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | string | undefined;
+            return Buffer.from(typeof raw === 'string' ? raw : (raw?.text as string) ?? (raw?.caption as string) ?? '', 'utf-8');
         }
 
-        this.emit('message:created', instance);
-    }
+        if (msg_type === 'location') {
+            const loc = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
+            return Buffer.from(JSON.stringify({ lat: loc?.degreesLatitude, lng: loc?.degreesLongitude }), 'utf-8');
+        }
 
-    private async _process_poll_vote(msg: proto.IWebMessageInfo): Promise<void> {
-        const content_type = getContentType(msg.message ?? {});
-        const raw = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | undefined;
-        const update = raw as { pollCreationMessageKey?: proto.IMessageKey; vote?: proto.Message.IPollEncValue } | undefined;
-        const key = update?.pollCreationMessageKey;
-        if (!key?.remoteJid || !key?.id || !update?.vote) return;
+        if (msg_type === 'poll') {
+            const poll = msg.message?.pollCreationMessage ?? msg.message?.pollCreationMessageV2 ?? msg.message?.pollCreationMessageV3;
+            return Buffer.from(JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((o) => ({ content: o.optionName })) ?? [] }), 'utf-8');
+        }
 
-        const buffer = await this.engine.content(key.remoteJid, key.id);
-        if (!buffer) return;
+        // Media: descargar de Baileys
+        if (['image', 'video', 'audio'].includes(msg_type) && this._socket) {
+            try {
+                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                if (Buffer.isBuffer(buffer)) return buffer;
+            } catch {}
+        }
 
-        const poll = JSON.parse(buffer.toString()) as { content: string; items: Array<{ content: string; voters: string[] }>; sign: string | null };
-        if (!poll.sign) return;
-
-        try {
-            const voter = jidNormalizedUser(msg.key.participant ?? msg.key.remoteJid!);
-            const decrypted = decryptPollVote(update.vote, { pollCreatorJid: jidNormalizedUser(key.participant ?? key.remoteJid), pollMsgId: key.id, pollEncKey: Buffer.from(poll.sign, 'base64'), voterJid: voter });
-            const selected = new Set((decrypted.selectedOptions ?? []).map((o) => Buffer.from(o).toString('hex')));
-            for (const item of poll.items) {
-                item.voters = item.voters.filter((v) => v !== voter);
-                if (selected.has(createHash('sha256').update(item.content).digest('hex'))) item.voters.push(voter);
-            }
-            await this.engine.content(key.remoteJid, key.id, Buffer.from(JSON.stringify(poll)));
-        } catch {}
+        return Buffer.alloc(0);
     }
 }
