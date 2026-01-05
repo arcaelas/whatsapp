@@ -2,224 +2,252 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
     <url>
         <loc>https://arcaelas.github.io/whatsapp/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/baileys-payloads/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/baileys-payloads/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/baileys-payloads/"/>
     </url>
     <url>
+        <loc>https://arcaelas.github.io/whatsapp/engine/</loc>
+        <lastmod>2026-01-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/engine/"/>
+        <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/engine/"/>
+    </url>
+    <url>
         <loc>https://arcaelas.github.io/whatsapp/getting-started/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/getting-started/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/getting-started/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/installation/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/installation/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/installation/"/>
     </url>
     <url>
+        <loc>https://arcaelas.github.io/whatsapp/schema/</loc>
+        <lastmod>2026-01-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/schema/"/>
+        <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/schema/"/>
+    </url>
+    <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/basic-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/basic-bot/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/basic-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/command-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/command-bot/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/command-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/groups/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/groups/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/groups/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/media/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/media/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/media/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/polls/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/polls/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/polls/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/examples/s3-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/s3-bot/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/s3-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/chat/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/chat/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/chat/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/contact/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/contact/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/contact/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/engines/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/engines/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/engines/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/events/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/events/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/events/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/message/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/message/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/message/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/references/whatsapp/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/whatsapp/"/>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/whatsapp/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/baileys-payloads/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/baileys-payloads/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/baileys-payloads/"/>
     </url>
     <url>
+        <loc>https://arcaelas.github.io/whatsapp/es/engine/</loc>
+        <lastmod>2026-01-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/engine/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/engine/"/>
+    </url>
+    <url>
         <loc>https://arcaelas.github.io/whatsapp/es/getting-started/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/getting-started/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/getting-started/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/installation/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/installation/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/installation/"/>
     </url>
     <url>
+        <loc>https://arcaelas.github.io/whatsapp/es/schema/</loc>
+        <lastmod>2026-01-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/schema/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/schema/"/>
+    </url>
+    <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/basic-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/basic-bot/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/basic-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/command-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/command-bot/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/command-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/groups/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/groups/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/groups/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/media/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/media/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/media/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/polls/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/polls/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/polls/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/examples/s3-bot/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/examples/s3-bot/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/examples/s3-bot/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/chat/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/chat/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/chat/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/contact/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/contact/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/contact/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/engines/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/engines/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/engines/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/events/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/events/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/events/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/message/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/message/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/message/"/>
     </url>
     <url>
         <loc>https://arcaelas.github.io/whatsapp/es/references/whatsapp/</loc>
-        <lastmod>2026-01-03</lastmod>
+        <lastmod>2026-01-05</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="es" href="https://arcaelas.github.io/whatsapp/es/references/whatsapp/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://arcaelas.github.io/whatsapp/references/whatsapp/"/>
