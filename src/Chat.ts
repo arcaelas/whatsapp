@@ -163,13 +163,28 @@ export class Chat {
  * @returns Clase _Chat que extiende Chat.
  */
 export function chat(wa: WhatsApp) {
-    return class _Chat extends Chat {
+    /** Obtiene el último mensaje raw del chat para chatModify */
+    async function _last_messages(cid: string): Promise<{ key: { remoteJid: string; id: string; fromMe: boolean }; messageTimestamp: number }[]> {
+        const messages_index = await wa.engine.get(`chat/${cid}/messages`);
+        if (!messages_index) return [];
+
+        const first_line = messages_index.trim().split('\n')[0];
+        if (!first_line) return [];
+
+        const [timestamp, mid] = first_line.split(' ');
+        const msg = await wa.Message.get(cid, mid);
+        if (!msg) return [];
+
+        return [{ key: { remoteJid: cid, id: msg.id, fromMe: msg.me }, messageTimestamp: Math.floor(Number(timestamp) / 1000) }];
+    }
+
+    const _Chat = class extends Chat {
         /**
          * @description Obtiene un chat por su ID.
          * @param cid ID del chat (JID).
          * @returns Chat o null si no existe.
          */
-        static async get(cid: string): Promise<_Chat | null> {
+        static async get(cid: string) {
             const stored = await wa.engine.get(`chat/${cid}/index`);
             if (stored) return new _Chat(JSON.parse(stored, BufferJSON.reviver));
 
@@ -187,7 +202,7 @@ export function chat(wa: WhatsApp) {
          * @param cid ID del chat.
          * @returns Chat actualizado o null.
          */
-        static async refresh(cid: string): Promise<_Chat | null> {
+        static async refresh(cid: string) {
             if (!wa.socket) return null;
 
             const stored = await wa.engine.get(`chat/${cid}/index`);
@@ -224,8 +239,8 @@ export function chat(wa: WhatsApp) {
          * @param limit Cantidad máxima de resultados.
          * @returns Array de chats.
          */
-        static async paginate(offset = 0, limit = 50): Promise<_Chat[]> {
-            const chats: _Chat[] = [];
+        static async paginate(offset = 0, limit = 50) {
+            const chats: InstanceType<typeof _Chat>[] = [];
             for (const key of await wa.engine.list('chat/', offset, limit, '/index')) {
                 const stored = await wa.engine.get(key);
                 if (stored) chats.push(new _Chat(JSON.parse(stored, BufferJSON.reviver)));
@@ -241,7 +256,8 @@ export function chat(wa: WhatsApp) {
          */
         static async pin(cid: string, value: boolean): Promise<boolean> {
             if (!wa.socket) return false;
-            await wa.socket.chatModify({ pin: value }, cid);
+            const last_messages = await _last_messages(cid);
+            await wa.socket.chatModify({ pin: value, lastMessages: last_messages }, cid);
 
             const stored = await wa.engine.get(`chat/${cid}/index`);
             if (!stored) return true;
@@ -261,7 +277,8 @@ export function chat(wa: WhatsApp) {
          */
         static async archive(cid: string, value: boolean): Promise<boolean> {
             if (!wa.socket) return false;
-            await wa.socket.chatModify({ archive: value, lastMessages: [] }, cid);
+            const last_messages = await _last_messages(cid);
+            await wa.socket.chatModify({ archive: value, lastMessages: last_messages }, cid);
 
             const stored = await wa.engine.get(`chat/${cid}/index`);
             if (!stored) return true;
@@ -282,7 +299,8 @@ export function chat(wa: WhatsApp) {
         static async mute(cid: string, duration: number | null): Promise<boolean> {
             if (!wa.socket) return false;
             const mute_end = duration ? Date.now() + duration : null;
-            await wa.socket.chatModify({ mute: mute_end }, cid);
+            const last_messages = await _last_messages(cid);
+            await wa.socket.chatModify({ mute: mute_end, lastMessages: last_messages }, cid);
 
             const stored = await wa.engine.get(`chat/${cid}/index`);
             if (!stored) return true;
@@ -302,18 +320,11 @@ export function chat(wa: WhatsApp) {
         static async seen(cid: string): Promise<boolean> {
             if (!wa.socket) return false;
 
-            // Obtener último mensaje desde el índice
-            const messages_index = await wa.engine.get(`chat/${cid}/messages`);
-            if (!messages_index) return false;
+            const last_messages = await _last_messages(cid);
+            if (!last_messages.length) return false;
 
-            const first_line = messages_index.trim().split('\n')[0];
-            if (!first_line) return false;
-
-            const mid = first_line.split(' ')[1];
-            const msg = await wa.Message.get(cid, mid);
-            if (!msg) return false;
-
-            await wa.socket.readMessages([{ remoteJid: cid, id: msg.id, participant: msg.me ? undefined : msg.author }]);
+            const msg = last_messages[0];
+            await wa.socket.readMessages([{ remoteJid: cid, id: msg.key.id, participant: msg.key.fromMe ? undefined : msg.key.remoteJid }]);
 
             // Actualizar estado del chat
             const stored = await wa.engine.get(`chat/${cid}/index`);
@@ -474,6 +485,8 @@ export function chat(wa: WhatsApp) {
             return this;
         }
     };
+
+    return _Chat;
 }
 
 // Import para la factory
