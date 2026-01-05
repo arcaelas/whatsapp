@@ -23,14 +23,18 @@ Each Message instance has the following properties:
 |----------|------|-------------|
 | `id` | `string` | Unique message ID |
 | `cid` | `string` | Chat ID (JID) |
+| `mid` | `string \| null` | Parent message ID (for replies) |
 | `me` | `boolean` | `true` if sent by the connected account |
+| `author` | `string` | Message author JID |
 | `type` | `MessageType` | Message type |
 | `mime` | `string` | MIME type for media |
-| `caption` | `string \| undefined` | Caption for images/videos |
+| `caption` | `string` | Caption/text content |
 | `status` | `MESSAGE_STATUS` | Message status |
 | `starred` | `boolean` | Starred message |
 | `forwarded` | `boolean` | Forwarded message |
 | `edited` | `boolean` | Edited message |
+| `created_at` | `number` | Creation timestamp (ms) |
+| `deleted_at` | `number \| null` | Expiration timestamp (ms) for ephemeral messages |
 
 ### MessageType
 
@@ -42,11 +46,12 @@ type MessageType = "text" | "image" | "video" | "audio" | "location" | "poll";
 
 ```typescript
 enum MESSAGE_STATUS {
-  PENDING = 0,
-  SENT = 1,
-  RECEIVED = 2,
-  READ = 3,
-  PLAYED = 4
+  ERROR = 0,
+  PENDING = 1,
+  SERVER_ACK = 2,
+  DELIVERED = 3,
+  READ = 4,
+  PLAYED = 5
 }
 ```
 
@@ -106,8 +111,7 @@ Sends a text message.
 ```typescript
 const msg = await wa.Message.text(
   cid: string,
-  text: string,
-  quoted?: string
+  text: string
 ): Promise<Message | null>
 ```
 
@@ -117,16 +121,11 @@ const msg = await wa.Message.text(
 |-----------|------|-------------|
 | `cid` | `string` | Chat ID |
 | `text` | `string` | Message text |
-| `quoted` | `string` | (Optional) ID of message to quote |
 
 **Example:**
 
 ```typescript
-// Simple text
 await wa.Message.text("5491112345678@s.whatsapp.net", "Hello!");
-
-// Quoting a message
-await wa.Message.text(msg.cid, "This is my reply", msg.id);
 ```
 
 ### image()
@@ -255,11 +254,11 @@ await wa.Message.poll("123456789@g.us", {
 Reacts to a message.
 
 ```typescript
-await wa.Message.react(
+const success = await wa.Message.react(
   cid: string,
   mid: string,
   emoji: string
-): Promise<void>
+): Promise<boolean>
 ```
 
 **Example:**
@@ -277,19 +276,19 @@ await wa.Message.react(msg.cid, msg.id, "");
 Deletes a message.
 
 ```typescript
-await wa.Message.remove(cid: string, mid: string): Promise<void>
+const success = await wa.Message.remove(cid: string, mid: string): Promise<boolean>
 ```
 
 ### forward()
 
-Forwards a message.
+Forwards a message to another chat.
 
 ```typescript
-await wa.Message.forward(
+const success = await wa.Message.forward(
   cid: string,
   mid: string,
-  to: string
-): Promise<Message | null>
+  to_cid: string
+): Promise<boolean>
 ```
 
 **Parameters:**
@@ -298,18 +297,18 @@ await wa.Message.forward(
 |-----------|------|-------------|
 | `cid` | `string` | Original chat ID |
 | `mid` | `string` | Message ID to forward |
-| `to` | `string` | Destination chat ID |
+| `to_cid` | `string` | Destination chat ID |
 
 ### edit()
 
 Edits a text message.
 
 ```typescript
-await wa.Message.edit(
+const success = await wa.Message.edit(
   cid: string,
   mid: string,
   text: string
-): Promise<void>
+): Promise<boolean>
 ```
 
 !!! warning "Limitation"
@@ -317,23 +316,44 @@ await wa.Message.edit(
 
 ### watch()
 
-Lists messages from a chat with pagination.
+Observes changes on a specific message.
 
 ```typescript
-const messages = await wa.Message.watch(
+const unsubscribe = wa.Message.watch(
   cid: string,
-  offset?: number,
-  limit?: number
-): Promise<Message[]>
+  mid: string,
+  handler: (msg: Message) => void
+): () => void
 ```
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cid` | `string` | - | Chat ID |
-| `offset` | `number` | `0` | Starting position |
-| `limit` | `number` | `50` | Maximum messages |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `cid` | `string` | Chat ID |
+| `mid` | `string` | Message ID |
+| `handler` | `(msg: Message) => void` | Callback called when message changes |
+
+**Returns:** `() => void` - Unsubscribe function
+
+**Example:**
+
+```typescript
+const unsubscribe = wa.Message.watch(msg.cid, msg.id, (updated) => {
+  console.log(`Message status: ${updated.status}`);
+});
+
+// Stop watching
+unsubscribe();
+```
+
+### notify()
+
+Notifies watchers of a message update (internal use).
+
+```typescript
+wa.Message.notify(cid: string, mid: string): void
+```
 
 ---
 

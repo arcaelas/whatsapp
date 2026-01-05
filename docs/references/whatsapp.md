@@ -157,10 +157,11 @@ wa.event.on("event_name", (payload) => {
 | `contact:deleted` | `Contact` | Contact deleted |
 | `chat:created` | `Chat` | New chat |
 | `chat:updated` | `Chat` | Chat updated |
-| `chat:deleted` | `Chat` | Chat deleted |
+| `chat:deleted` | `string` | Chat deleted (cid) |
 | `message:created` | `Message` | New message |
 | `message:updated` | `Message` | Message updated |
-| `message:deleted` | `Message` | Message deleted |
+| `message:deleted` | `[string, string]` | Message deleted (cid, mid) |
+| `message:reacted` | `[string, string, string]` | Reaction (cid, mid, emoji) |
 
 ### Examples
 

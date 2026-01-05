@@ -3,11 +3,19 @@
  * @description Punto de entrada público de la librería @arcaelas/whatsapp
  */
 
-export { FileEngine } from './store';
-export { WhatsApp } from './WhatsApp';
+// Enums
+export { MESSAGE_STATUS } from './Message';
 
-export type { IChat } from './Chat';
-export type { IContact } from './Contact';
-export type { IMessage, LocationOptions, MessageType, PollOptions } from './Message';
+// Types
+export type { LocationOptions, MessageType, PollOptions } from './Message';
 export type { Engine } from './store';
+
+// Interfaces
+export type { IChat, IChatRaw, IGroupParticipant } from './Chat';
+export type { IContact, IContactRaw } from './Contact';
+export type { IMessage, IMessageIndex } from './Message';
 export type { IWhatsApp } from './WhatsApp';
+
+// Classes
+export { FileEngine, RedisEngine } from './store';
+export { WhatsApp } from './WhatsApp';

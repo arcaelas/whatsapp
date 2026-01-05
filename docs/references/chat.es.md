@@ -22,9 +22,12 @@ wa.Chat // Clase Chat enlazada
 | `id` | `string` | JID del chat (ej: `123@s.whatsapp.net` o `123@g.us`) |
 | `name` | `string` | Nombre del chat o grupo |
 | `type` | `'contact' \| 'group'` | Tipo de chat |
-| `pined` | `number \| null` | Timestamp cuando se fijo o `null` |
+| `content` | `string` | Descripcion del chat/grupo |
+| `pined` | `boolean` | `true` si el chat esta fijado |
 | `archived` | `boolean` | `true` si el chat esta archivado |
-| `muted` | `number \| null` | Timestamp cuando expira el silencio o `null` |
+| `muted` | `number \| false` | Timestamp de expiracion del silencio o `false` |
+| `readed` | `boolean` | `true` si el chat esta leido |
+| `readonly` | `boolean` | `true` si el chat es solo lectura |
 
 ---
 
@@ -130,6 +133,57 @@ for (const member of members) {
 const contacts = await wa.Chat.members("5491112345678@s.whatsapp.net", 0, 1);
 ```
 
+### `Chat.paginate(offset?, limit?)`
+
+Obtiene chats con paginacion.
+
+```typescript
+const chats = await wa.Chat.paginate(0, 100);
+for (const chat of chats) {
+  console.log(`${chat.name} (${chat.type})`);
+}
+```
+
+### `Chat.cascade_delete(cid)`
+
+Elimina todos los datos del chat del storage sin notificar a WhatsApp.
+
+```typescript
+await wa.Chat.cascade_delete("5491112345678@s.whatsapp.net");
+```
+
+### `Chat.add_message(cid, mid, timestamp)`
+
+Agrega un mensaje al indice del chat.
+
+```typescript
+await wa.Chat.add_message(cid, mid, timestamp);
+```
+
+### `Chat.remove_message(cid, mid)`
+
+Elimina un mensaje del indice del chat.
+
+```typescript
+await wa.Chat.remove_message(cid, mid);
+```
+
+### `Chat.list_messages(cid, offset?, limit?)`
+
+Lista IDs de mensajes del chat (paginado).
+
+```typescript
+const ids = await wa.Chat.list_messages(cid, 0, 50);
+```
+
+### `Chat.count_messages(cid)`
+
+Cuenta mensajes de un chat.
+
+```typescript
+const count = await wa.Chat.count_messages(cid);
+```
+
 ---
 
 ## Eventos de Chat
@@ -203,6 +257,29 @@ wa.event.on("chat:deleted", (cid) => {
   console.log(`Chat eliminado: ${cid}`);
 });
 ```
+
+---
+
+## Metodos de instancia
+
+### `messages(offset?, limit?)`
+
+Obtiene los mensajes del chat con paginacion.
+
+```typescript
+const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
+if (chat) {
+  const messages = await chat.messages(0, 100);
+  for (const msg of messages) {
+    console.log(`${msg.type}: ${msg.caption}`);
+  }
+}
+```
+
+| Parametro | Tipo | Default | Descripcion |
+|-----------|------|---------|-------------|
+| `offset` | `number` | `0` | Posicion inicial |
+| `limit` | `number` | `50` | Cantidad maxima de mensajes |
 
 ---
 
@@ -287,9 +364,14 @@ interface IChat {
   id: string;
   name: string;
   type: "contact" | "group";
-  pined: number | null;
+  content: string;
+  pined: boolean;
   archived: boolean;
-  muted: number | null;
+  muted: number | false;
+  readed: boolean;
+  readonly: boolean;
+  labels: string[];
+  raw: IChatRaw;
 }
 ```
 

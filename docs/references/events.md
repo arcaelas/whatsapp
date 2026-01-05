@@ -156,12 +156,12 @@ wa.event.on("chat:updated", (chat) => {
 Emitted when a chat is deleted.
 
 ```typescript
-wa.event.on("chat:deleted", (chat) => {
-  console.log(`Chat deleted: ${chat.id}`);
+wa.event.on("chat:deleted", (cid) => {
+  console.log(`Chat deleted: ${cid}`);
 });
 ```
 
-**Payload:** `Chat`
+**Payload:** `string` (chat ID)
 
 ---
 
@@ -211,13 +211,25 @@ wa.event.on("message:updated", (msg) => {
 Emitted when a message is deleted.
 
 ```typescript
-wa.event.on("message:deleted", (msg) => {
-  console.log(`Message deleted: ${msg.id}`);
-  console.log(`From chat: ${msg.cid}`);
+wa.event.on("message:deleted", (cid, mid) => {
+  console.log(`Message deleted: ${mid}`);
+  console.log(`From chat: ${cid}`);
 });
 ```
 
-**Payload:** `Message`
+**Payload:** `[cid: string, mid: string]`
+
+### message:reacted
+
+Emitted when a message receives a reaction.
+
+```typescript
+wa.event.on("message:reacted", (cid, mid, emoji) => {
+  console.log(`Reaction ${emoji} on message ${mid} in chat ${cid}`);
+});
+```
+
+**Payload:** `[cid: string, mid: string, emoji: string]`
 
 ---
 
@@ -225,18 +237,19 @@ wa.event.on("message:deleted", (msg) => {
 
 ```typescript
 interface WhatsAppEventMap {
-  open: void;
-  close: void;
-  error: Error;
-  "contact:created": Contact;
-  "contact:updated": Contact;
-  "contact:deleted": Contact;
-  "chat:created": Chat;
-  "chat:updated": Chat;
-  "chat:deleted": Chat;
-  "message:created": Message;
-  "message:updated": Message;
-  "message:deleted": Message;
+  open: [];
+  close: [];
+  error: [error: Error];
+  "contact:created": [contact: Contact];
+  "contact:updated": [contact: Contact];
+  "contact:deleted": [contact: Contact];
+  "chat:created": [chat: Chat];
+  "chat:updated": [chat: Chat];
+  "chat:deleted": [cid: string];
+  "message:created": [message: Message];
+  "message:updated": [message: Message];
+  "message:deleted": [cid: string, mid: string];
+  "message:reacted": [cid: string, mid: string, emoji: string];
 }
 ```
 

@@ -12,7 +12,6 @@ import {
     fetchLatestBaileysVersion,
     getContentType,
     initAuthCreds,
-    jidNormalizedUser,
     makeWASocket,
     proto,
     type AuthenticationCreds,
@@ -23,9 +22,9 @@ import {
 import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { chat, type IChat } from './Chat';
-import { contact, type IContact } from './Contact';
-import { message, MESSAGE_TYPE_MAP, type IMessage } from './Message';
+import { build_chat, chat, type IChat, type IChatRaw } from './Chat';
+import { build_contact, contact, type IContact, type IContactRaw } from './Contact';
+import { build_message_index, message, MESSAGE_STATUS, type IMessageIndex } from './Message';
 import { FileEngine, type Engine } from './store';
 
 /**
@@ -174,31 +173,39 @@ export class WhatsApp {
             // ═══════════════════════════════════════════════════════════════════
 
             socket.ev.on('contacts.upsert', async (contacts) => {
-                console.log('[BAILEYS] contacts.upsert:', JSON.stringify(contacts, null, 2));
                 for (const c of contacts) {
                     if (!c.id) continue;
                     const existing = await this.engine.get(`contact/${c.id}/index`);
-                    const data: IContact = {
+                    const raw: IContactRaw = {
                         id: c.id,
-                        me: c.id === (socket.user?.id ? jidNormalizedUser(socket.user.id) : null),
-                        name: c.notify ?? c.name ?? c.id.split('@')[0],
-                        phone: c.id.split('@')[0],
-                        photo: null,
+                        lid: (c as { lid?: string }).lid ?? null,
+                        name: c.name ?? null,
+                        notify: c.notify ?? null,
+                        verifiedName: (c as { verifiedName?: string }).verifiedName ?? null,
+                        imgUrl: (c as { imgUrl?: string }).imgUrl ?? null,
+                        status: (c as { status?: string }).status ?? null,
                     };
+                    const data = build_contact(raw);
                     await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
                     this.event.emit(existing ? 'contact:updated' : 'contact:created', new this.Contact(data));
                 }
             });
 
             socket.ev.on('contacts.update', async (contacts) => {
-                console.log('[BAILEYS] contacts.update:', JSON.stringify(contacts, null, 2));
                 for (const c of contacts) {
                     if (!c.id) continue;
                     const stored = await this.engine.get(`contact/${c.id}/index`);
                     if (!stored) continue;
+
                     const data: IContact = JSON.parse(stored, BufferJSON.reviver);
-                    if (c.notify) data.name = c.notify;
-                    if (c.name) data.name = c.name;
+                    c.notify && (data.raw.notify = c.notify);
+                    c.name && (data.raw.name = c.name);
+                    (c as { imgUrl?: string }).imgUrl && (data.raw.imgUrl = (c as { imgUrl?: string }).imgUrl);
+                    (c as { status?: string }).status && (data.raw.status = (c as { status?: string }).status);
+
+                    data.name = data.raw.name ?? data.raw.notify ?? data.raw.id.split('@')[0];
+                    data.photo = data.raw.imgUrl ?? null;
+                    data.content = data.raw.status ?? '';
                     await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
                     this.event.emit('contact:updated', new this.Contact(data));
                 }
@@ -209,65 +216,68 @@ export class WhatsApp {
             // ═══════════════════════════════════════════════════════════════════
 
             socket.ev.on('chats.upsert', async (chats) => {
-                console.log('[BAILEYS] chats.upsert:', JSON.stringify(chats, null, 2));
                 for (const ch of chats) {
                     const existing = await this.engine.get(`chat/${ch.id}/index`);
-                    const data: IChat = existing
-                        ? JSON.parse(existing, BufferJSON.reviver)
+                    const raw: IChatRaw = existing
+                        ? (JSON.parse(existing, BufferJSON.reviver) as IChat).raw
                         : {
                               id: ch.id,
-                              name: ch.name ?? ch.id.split('@')[0],
-                              type: ch.id.endsWith('@g.us') ? 'group' : 'contact',
-                              pined: null,
-                              archived: false,
-                              muted: null,
+                              name: ch.name ?? null,
+                              archived: ch.archived ?? null,
+                              pinned: (ch as { pinned?: number }).pinned ?? null,
+                              muteEndTime: (ch as { muteEndTime?: number }).muteEndTime ?? null,
+                              unreadCount: ch.unreadCount ?? null,
+                              readOnly: (ch as { readOnly?: boolean }).readOnly ?? null,
                           };
-                    if (ch.name) data.name = ch.name;
+                    if (ch.name) raw.name = ch.name;
+                    const data = build_chat(raw);
                     await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
                     this.event.emit(existing ? 'chat:updated' : 'chat:created', new this.Chat(data));
                 }
             });
 
             socket.ev.on('chats.update', async (chats) => {
-                console.log('[BAILEYS] chats.update:', JSON.stringify(chats, null, 2));
                 for (const ch of chats) {
                     if (!ch.id) continue;
 
                     const stored = await this.engine.get(`chat/${ch.id}/index`);
-                    const data: IChat = stored
-                        ? JSON.parse(stored, BufferJSON.reviver)
-                        : {
-                              id: ch.id,
-                              name: ch.name ?? ch.id.split('@')[0],
-                              type: ch.id.endsWith('@g.us') ? 'group' : 'contact',
-                              pined: null,
-                              archived: false,
-                              muted: null,
-                          };
+                    const data: IChat = stored ? JSON.parse(stored, BufferJSON.reviver) : build_chat({ id: ch.id, name: ch.name ?? null });
 
-                    if (ch.name !== undefined) data.name = ch.name ?? data.name;
+                    if (ch.name !== undefined) {
+                        data.raw.name = ch.name ?? data.raw.name;
+                        data.name = data.raw.name ?? data.raw.displayName ?? ch.id.split('@')[0];
+                    }
 
                     let has_specific_event = false;
 
                     // Pin
                     if ('pinned' in ch) {
-                        data.pined = (ch as { pinned?: number | null }).pinned ?? null;
-                        this.event.emit('chat:pined', ch.id, data.pined);
+                        data.raw.pinned = (ch as { pinned?: number | null }).pinned ?? null;
+                        data.pined = data.raw.pinned !== null;
+                        this.event.emit('chat:pined', ch.id, data.raw.pinned);
                         has_specific_event = true;
                     }
 
                     // Archive
                     if (ch.archived !== undefined) {
-                        data.archived = ch.archived ?? false;
+                        data.raw.archived = ch.archived ?? false;
+                        data.archived = data.raw.archived;
                         this.event.emit('chat:archived', ch.id, data.archived);
                         has_specific_event = true;
                     }
 
                     // Mute
                     if ('muteEndTime' in ch) {
-                        data.muted = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
-                        this.event.emit('chat:muted', ch.id, data.muted);
+                        data.raw.muteEndTime = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
+                        data.muted = data.raw.muteEndTime ?? false;
+                        this.event.emit('chat:muted', ch.id, data.raw.muteEndTime);
                         has_specific_event = true;
+                    }
+
+                    // UnreadCount
+                    if (ch.unreadCount !== undefined) {
+                        data.raw.unreadCount = ch.unreadCount;
+                        data.readed = (data.raw.unreadCount === 0 || data.raw.unreadCount === null) && !data.raw.markedAsUnread;
                     }
 
                     await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
@@ -279,9 +289,8 @@ export class WhatsApp {
             });
 
             socket.ev.on('chats.delete', async (ids) => {
-                console.log('[BAILEYS] chats.delete:', JSON.stringify(ids, null, 2));
                 for (const cid of ids) {
-                    await this.engine.set(`chat/${cid}/index`, null);
+                    await this.Chat.cascade_delete(cid);
                     this.event.emit('chat:deleted', cid);
                 }
             });
@@ -291,7 +300,6 @@ export class WhatsApp {
             // ═══════════════════════════════════════════════════════════════════
 
             socket.ev.on('messages.upsert', async ({ messages }) => {
-                console.log('[BAILEYS] messages.upsert:', JSON.stringify(messages, null, 2));
                 for (const msg of messages) {
                     if (!msg.key.remoteJid || !msg.key.id) continue;
 
@@ -317,25 +325,35 @@ export class WhatsApp {
                             const edited_msg = protocol.editedMessage;
                             if (!edited_msg) continue;
 
-                            const stored = await this.engine.get(`chat/${target_cid}/message/${target_mid}/index`);
-                            if (!stored) continue;
+                            // Obtener index y raw
+                            const stored_index = await this.engine.get(`chat/${target_cid}/message/${target_mid}/index`);
+                            const stored_raw = await this.engine.get(`chat/${target_cid}/message/${target_mid}/raw`);
+                            if (!stored_index || !stored_raw) continue;
 
-                            const data: IMessage = JSON.parse(stored, BufferJSON.reviver);
-                            data.raw.message = edited_msg;
-                            data.edited = true;
+                            const index: IMessageIndex = JSON.parse(stored_index, BufferJSON.reviver);
+                            const raw: WAMessage = JSON.parse(stored_raw, BufferJSON.reviver);
 
-                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, JSON.stringify(data, BufferJSON.replacer));
+                            raw.message = edited_msg;
+                            index.edited = true;
+                            index.caption = build_message_index(raw).caption;
 
-                            const instance = new this.Message(data.raw, data.edited);
-                            this.Message._notify(instance);
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, JSON.stringify(index, BufferJSON.replacer));
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/raw`, JSON.stringify(raw, BufferJSON.replacer));
+
+                            const instance = new this.Message({ index, raw });
+                            this.Message.notify(target_cid, target_mid);
                             this.event.emit('message:updated', instance);
                             continue;
                         }
 
                         // REVOKE: Eliminar del engine
                         if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+                            // Eliminar del índice del chat
+                            await this.Chat.remove_message(target_cid, target_mid);
+                            // Eliminar archivos
                             await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, null);
                             await this.engine.set(`chat/${target_cid}/message/${target_mid}/content`, null);
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/raw`, null);
                             this.event.emit('message:deleted', target_cid, target_mid);
                         }
                         continue;
@@ -345,62 +363,78 @@ export class WhatsApp {
                     // MENSAJE NUEVO
                     // ─────────────────────────────────────────────────────────────
 
-                    const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'text';
+                    // Construir index desde raw y guardar
+                    const index = build_message_index(msg);
+                    await this.engine.set(`chat/${cid}/message/${mid}/index`, JSON.stringify(index, BufferJSON.replacer));
+                    await this.engine.set(`chat/${cid}/message/${mid}/raw`, JSON.stringify(msg, BufferJSON.replacer));
 
-                    // Extraer content temporal del raw
-                    const temp_content = await this._extract_content(msg, msg_type);
-
-                    // Guardar en engine
-                    const data: IMessage = { raw: msg, edited: false };
-                    await this.engine.set(`chat/${cid}/message/${mid}/index`, JSON.stringify(data, BufferJSON.replacer));
-
-                    // Pre-cache de media si está disponible
-                    if (temp_content.length > 0) {
-                        await this.engine.set(`chat/${cid}/message/${mid}/content`, temp_content.toString('base64'));
+                    // Extraer content inline según tipo
+                    let content = Buffer.alloc(0);
+                    if (index.type === 'text') {
+                        const raw_content = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | string | undefined;
+                        content = Buffer.from(typeof raw_content === 'string' ? raw_content : (raw_content?.text as string) ?? (raw_content?.caption as string) ?? '', 'utf-8');
+                    } else if (index.type === 'location') {
+                        const loc = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
+                        content = Buffer.from(JSON.stringify({ lat: loc?.degreesLatitude, lng: loc?.degreesLongitude }), 'utf-8');
+                    } else if (index.type === 'poll') {
+                        const poll = msg.message?.pollCreationMessage ?? msg.message?.pollCreationMessageV2 ?? msg.message?.pollCreationMessageV3;
+                        content = Buffer.from(JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((o) => ({ content: o.optionName })) ?? [] }), 'utf-8');
+                    } else if (['image', 'video', 'audio'].includes(index.type) && this._socket) {
+                        try {
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                            if (Buffer.isBuffer(buffer)) content = buffer;
+                        } catch {}
                     }
 
-                    // Crear instancia con content temporal inyectado
-                    const instance = new this.Message(msg, false);
-                    if (temp_content.length > 0) {
-                        instance.content = async () => temp_content;
+                    if (content.length) {
+                        await this.engine.set(`chat/${cid}/message/${mid}/content`, content.toString('base64'));
                     }
 
-                    this.Message._notify(instance);
+                    // Agregar al índice del chat y emitir
+                    await this.Chat.add_message(cid, mid, index.created_at);
+                    const instance = new this.Message({ index, raw: msg });
+                    content.length && (instance.content = async () => content);
+                    this.Message.notify(cid, mid);
                     this.event.emit('message:created', instance);
                 }
             });
 
             socket.ev.on('messages.update', async (updates) => {
-                console.log('[BAILEYS] messages.update:', JSON.stringify(updates, null, 2));
                 for (const { key, update } of updates) {
                     if (!key.remoteJid || !key.id) continue;
 
-                    const stored = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/index`);
-                    if (!stored) continue;
+                    const stored_index = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/index`);
+                    const stored_raw = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/raw`);
+                    if (!stored_index) continue;
 
-                    const data: IMessage = JSON.parse(stored, BufferJSON.reviver);
+                    const index: IMessageIndex = JSON.parse(stored_index, BufferJSON.reviver);
+                    const raw: WAMessage = stored_raw ? JSON.parse(stored_raw, BufferJSON.reviver) : { key };
 
                     // Edición via messages.update
                     if ((update as { message?: { editedMessage?: { message?: proto.IMessage } } }).message?.editedMessage?.message) {
-                        data.raw.message = (update as { message: { editedMessage: { message: proto.IMessage } } }).message.editedMessage.message;
-                        data.edited = true;
-                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-                        const instance = new this.Message(data.raw, data.edited);
-                        this.Message._notify(instance);
+                        raw.message = (update as { message: { editedMessage: { message: proto.IMessage } } }).message.editedMessage.message;
+                        index.edited = true;
+                        index.caption = build_message_index(raw).caption;
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
+
+                        const instance = new this.Message({ index, raw });
+                        this.Message.notify(key.remoteJid, key.id);
                         this.event.emit('message:updated', instance);
                         continue;
                     }
 
                     // Status update
                     if ((update as { status?: number }).status !== undefined) {
-                        data.raw.status = (update as { status: number }).status;
-                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(data, BufferJSON.replacer));
+                        raw.status = (update as { status: number }).status;
+                        index.status = raw.status as unknown as MESSAGE_STATUS;
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
+                        await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
                     }
                 }
             });
 
             socket.ev.on('messages.reaction', async (reactions) => {
-                console.log('[BAILEYS] messages.reaction:', JSON.stringify(reactions, null, 2));
                 for (const { key, reaction } of reactions) {
                     if (key.remoteJid && key.id) this.event.emit('message:reacted', key.remoteJid, key.id, reaction.text ?? '');
                 }
@@ -409,38 +443,4 @@ export class WhatsApp {
 
         await connect();
     };
-
-    /**
-     * @description Extrae el contenido de un mensaje según su tipo.
-     * @param msg WAMessage de Baileys.
-     * @param msg_type Tipo de mensaje.
-     * @returns Buffer con el contenido.
-     */
-    private async _extract_content(msg: WAMessage, msg_type: string): Promise<Buffer> {
-        if (msg_type === 'text') {
-            const content_type = getContentType(msg.message ?? {});
-            const raw = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | string | undefined;
-            return Buffer.from(typeof raw === 'string' ? raw : (raw?.text as string) ?? (raw?.caption as string) ?? '', 'utf-8');
-        }
-
-        if (msg_type === 'location') {
-            const loc = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
-            return Buffer.from(JSON.stringify({ lat: loc?.degreesLatitude, lng: loc?.degreesLongitude }), 'utf-8');
-        }
-
-        if (msg_type === 'poll') {
-            const poll = msg.message?.pollCreationMessage ?? msg.message?.pollCreationMessageV2 ?? msg.message?.pollCreationMessageV3;
-            return Buffer.from(JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((o) => ({ content: o.optionName })) ?? [] }), 'utf-8');
-        }
-
-        // Media: descargar de Baileys
-        if (['image', 'video', 'audio'].includes(msg_type) && this._socket) {
-            try {
-                const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                if (Buffer.isBuffer(buffer)) return buffer;
-            } catch {}
-        }
-
-        return Buffer.alloc(0);
-    }
 }

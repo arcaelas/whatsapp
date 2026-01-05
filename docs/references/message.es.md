@@ -36,11 +36,12 @@ Propiedades disponibles en instancias de Message:
 
 ```typescript
 enum MESSAGE_STATUS {
-  PENDING = 0,    // Pendiente de envio
-  SERVER_ACK = 1, // Servidor recibio el mensaje
-  DELIVERED = 2,  // Entregado al destinatario
-  READ = 3,       // Leido por el destinatario
-  PLAYED = 4,     // Reproducido (audio/video)
+  ERROR = 0,      // Error al enviar
+  PENDING = 1,    // Pendiente de envio
+  SERVER_ACK = 2, // Servidor confirmo recepcion
+  DELIVERED = 3,  // Entregado al destinatario
+  READ = 4,       // Leido por el destinatario
+  PLAYED = 5,     // Reproducido (audio/video)
 }
 ```
 

@@ -44,7 +44,15 @@ export interface Engine {
      * @param prefix Prefijo de búsqueda (ej: 'contact/', 'chat/123/message/').
      * @param offset Inicio de paginación (default: 0).
      * @param limit Cantidad máxima (default: 50).
+     * @param suffix Sufijo requerido para filtrar keys (ej: '/index').
      * @returns Array de keys.
      */
-    list(prefix: string, offset?: number, limit?: number): Promise<string[]>;
+    list(prefix: string, offset?: number, limit?: number, suffix?: string): Promise<string[]>;
+
+    /**
+     * @description Elimina todas las keys bajo un prefijo.
+     * @param prefix Prefijo a eliminar (ej: 'chat/123/').
+     * @returns Cantidad de keys eliminadas.
+     */
+    delete_prefix(prefix: string): Promise<number>;
 }

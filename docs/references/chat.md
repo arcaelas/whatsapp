@@ -23,10 +23,13 @@ Each Chat instance has the following properties:
 |----------|------|-------------|
 | `id` | `string` | Chat ID (JID) |
 | `name` | `string` | Chat name |
-| `type` | `"chat" \| "group"` | Chat type |
+| `type` | `"contact" \| "group"` | Chat type |
+| `content` | `string` | Chat/group description |
 | `pined` | `boolean` | Pinned chat |
 | `archived` | `boolean` | Archived chat |
-| `muted` | `number` | Mute timestamp (0 = unmuted) |
+| `muted` | `number \| false` | Mute end timestamp or `false` if unmuted |
+| `readed` | `boolean` | If chat is read |
+| `readonly` | `boolean` | If chat is read-only |
 
 ---
 
@@ -50,26 +53,50 @@ if (chat) {
 }
 ```
 
-### pin()
+### paginate()
 
-Pins or unpins a chat.
+Gets chats with pagination.
 
 ```typescript
-await wa.Chat.pin(cid: string, pin?: boolean): Promise<void>
+const chats = await wa.Chat.paginate(offset?: number, limit?: number): Promise<Chat[]>
 ```
 
 **Parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `cid` | `string` | - | Chat ID |
-| `pin` | `boolean` | `true` | `true` to pin, `false` to unpin |
+| `offset` | `number` | `0` | Starting position |
+| `limit` | `number` | `50` | Maximum chats |
+
+**Example:**
+
+```typescript
+const chats = await wa.Chat.paginate(0, 100);
+for (const chat of chats) {
+  console.log(`${chat.name} (${chat.type})`);
+}
+```
+
+### pin()
+
+Pins or unpins a chat.
+
+```typescript
+const success = await wa.Chat.pin(cid: string, value: boolean): Promise<boolean>
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `cid` | `string` | Chat ID |
+| `value` | `boolean` | `true` to pin, `false` to unpin |
 
 **Example:**
 
 ```typescript
 // Pin
-await wa.Chat.pin("5491112345678@s.whatsapp.net");
+await wa.Chat.pin("5491112345678@s.whatsapp.net", true);
 
 // Unpin
 await wa.Chat.pin("5491112345678@s.whatsapp.net", false);
@@ -80,14 +107,14 @@ await wa.Chat.pin("5491112345678@s.whatsapp.net", false);
 Archives or unarchives a chat.
 
 ```typescript
-await wa.Chat.archive(cid: string, archive?: boolean): Promise<void>
+const success = await wa.Chat.archive(cid: string, value: boolean): Promise<boolean>
 ```
 
 **Example:**
 
 ```typescript
 // Archive
-await wa.Chat.archive("5491112345678@s.whatsapp.net");
+await wa.Chat.archive("5491112345678@s.whatsapp.net", true);
 
 // Unarchive
 await wa.Chat.archive("5491112345678@s.whatsapp.net", false);
@@ -98,7 +125,7 @@ await wa.Chat.archive("5491112345678@s.whatsapp.net", false);
 Mutes or unmutes a chat.
 
 ```typescript
-await wa.Chat.mute(cid: string, until?: number): Promise<void>
+const success = await wa.Chat.mute(cid: string, duration: number | null): Promise<boolean>
 ```
 
 **Parameters:**
@@ -106,17 +133,16 @@ await wa.Chat.mute(cid: string, until?: number): Promise<void>
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `cid` | `string` | Chat ID |
-| `until` | `number` | Unix timestamp when mute expires (0 or omit to unmute) |
+| `duration` | `number \| null` | Duration in milliseconds or `null` to unmute |
 
 **Example:**
 
 ```typescript
 // Mute for 8 hours
-const eight_hours = Date.now() + (8 * 60 * 60 * 1000);
-await wa.Chat.mute("5491112345678@s.whatsapp.net", eight_hours);
+await wa.Chat.mute("5491112345678@s.whatsapp.net", 8 * 60 * 60 * 1000);
 
 // Unmute
-await wa.Chat.mute("5491112345678@s.whatsapp.net", 0);
+await wa.Chat.mute("5491112345678@s.whatsapp.net", null);
 ```
 
 ### seen()
@@ -124,7 +150,7 @@ await wa.Chat.mute("5491112345678@s.whatsapp.net", 0);
 Marks a chat as read.
 
 ```typescript
-await wa.Chat.seen(cid: string): Promise<void>
+const success = await wa.Chat.seen(cid: string): Promise<boolean>
 ```
 
 **Example:**
@@ -135,10 +161,52 @@ await wa.Chat.seen("5491112345678@s.whatsapp.net");
 
 ### remove()
 
-Deletes a chat.
+Deletes a chat (with cascade delete of all messages).
 
 ```typescript
-await wa.Chat.remove(cid: string): Promise<void>
+const success = await wa.Chat.remove(cid: string): Promise<boolean>
+```
+
+### cascade_delete()
+
+Deletes all chat data from storage without notifying WhatsApp.
+
+```typescript
+await wa.Chat.cascade_delete(cid: string): Promise<void>
+```
+
+**Note:** This only removes local storage data. Use `remove()` to also notify WhatsApp.
+
+### add_message()
+
+Adds a message to the chat's message index.
+
+```typescript
+await wa.Chat.add_message(cid: string, mid: string, timestamp: number): Promise<void>
+```
+
+### remove_message()
+
+Removes a message from the chat's message index.
+
+```typescript
+await wa.Chat.remove_message(cid: string, mid: string): Promise<void>
+```
+
+### list_messages()
+
+Lists message IDs from the chat (paginated).
+
+```typescript
+const ids = await wa.Chat.list_messages(cid: string, offset?: number, limit?: number): Promise<string[]>
+```
+
+### count_messages()
+
+Counts messages in a chat.
+
+```typescript
+const count = await wa.Chat.count_messages(cid: string): Promise<number>
 ```
 
 ### members()
@@ -173,6 +241,37 @@ for (const member of members) {
 
 ---
 
+## Instance methods
+
+### messages()
+
+Gets messages from this chat with pagination.
+
+```typescript
+const messages = await chat.messages(offset?: number, limit?: number): Promise<Message[]>
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `offset` | `number` | `0` | Starting position |
+| `limit` | `number` | `50` | Maximum messages |
+
+**Example:**
+
+```typescript
+const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
+if (chat) {
+  const messages = await chat.messages(0, 100);
+  for (const msg of messages) {
+    console.log(`${msg.type}: ${msg.caption}`);
+  }
+}
+```
+
+---
+
 ## Chat types
 
 ### Individual chat
@@ -181,7 +280,7 @@ JID format: `{phone}@s.whatsapp.net`
 
 ```typescript
 const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat?.type === "chat") {
+if (chat?.type === "contact") {
   console.log("Individual chat");
 }
 ```
@@ -226,7 +325,7 @@ async function archive_old_chats() {
   // Get chat from storage and archive if needed
   const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
   if (chat && !chat.archived) {
-    await wa.Chat.archive(chat.id);
+    await wa.Chat.archive(chat.id, true);
     console.log(`Archived: ${chat.name}`);
   }
 }
