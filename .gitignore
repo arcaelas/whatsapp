@@ -57,3 +57,4 @@ __SESSIONS__
 **.node-persist**
 **_IGNORE_**
 # end managed by open-wa
+.claude/.arko/
