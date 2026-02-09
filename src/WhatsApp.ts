@@ -221,14 +221,14 @@ export class WhatsApp {
                     const raw: IChatRaw = existing
                         ? (JSON.parse(existing, BufferJSON.reviver) as IChat).raw
                         : {
-                              id: ch.id,
-                              name: ch.name ?? null,
-                              archived: ch.archived ?? null,
-                              pinned: (ch as { pinned?: number }).pinned ?? null,
-                              muteEndTime: (ch as { muteEndTime?: number }).muteEndTime ?? null,
-                              unreadCount: ch.unreadCount ?? null,
-                              readOnly: (ch as { readOnly?: boolean }).readOnly ?? null,
-                          };
+                            id: ch.id,
+                            name: ch.name ?? null,
+                            archived: ch.archived ?? null,
+                            pinned: (ch as { pinned?: number }).pinned ?? null,
+                            muteEndTime: (ch as { muteEndTime?: number }).muteEndTime ?? null,
+                            unreadCount: ch.unreadCount ?? null,
+                            readOnly: (ch as { readOnly?: boolean }).readOnly ?? null,
+                        };
                     if (ch.name) raw.name = ch.name;
                     const data = build_chat(raw);
                     await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
@@ -382,8 +382,8 @@ export class WhatsApp {
                     } else if (['image', 'video', 'audio'].includes(index.type) && this._socket) {
                         try {
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                            if (Buffer.isBuffer(buffer)) content = buffer;
-                        } catch {}
+                            if (Buffer.isBuffer(buffer)) content = buffer as Buffer;
+                        } catch { }
                     }
 
                     if (content.length) {
