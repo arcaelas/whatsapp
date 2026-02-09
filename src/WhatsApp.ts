@@ -382,7 +382,7 @@ export class WhatsApp {
                     } else if (['image', 'video', 'audio'].includes(index.type) && this._socket) {
                         try {
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                            if (Buffer.isBuffer(buffer)) content = buffer as Buffer;
+                            if (Buffer.isBuffer(buffer)) content = buffer as Buffer<ArrayBuffer>;
                         } catch { }
                     }
 
