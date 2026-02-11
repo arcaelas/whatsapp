@@ -5,6 +5,7 @@
 
 import type { WAMessage } from 'baileys';
 import { BufferJSON, downloadMediaMessage, generateForwardMessageContent, generateWAMessageFromContent, getContentType, proto } from 'baileys';
+import { Readable } from 'node:stream';
 import type { WhatsApp } from './WhatsApp';
 
 /**
@@ -246,6 +247,14 @@ export class Message {
     /** Timestamp de expiración (ms) o null */
     get deleted_at(): number | null {
         return this.index.deleted_at;
+    }
+
+    /**
+     * @description Obtiene el contenido como Readable stream.
+     * @returns Readable stream (vacío en clase base).
+     */
+    stream(): Promise<Readable> {
+        return Promise.resolve(Readable.from(Buffer.alloc(0)));
     }
 
     /**
@@ -506,34 +515,48 @@ export function message(wa: WhatsApp) {
         }
 
         /**
+         * @description Obtiene el contenido como Readable stream.
+         * Para media (image/video/audio) retorna stream directo de Baileys sin cargar en memoria.
+         * Para text/location/poll retorna stream desde buffer pequeño.
+         * @returns Readable stream con el contenido.
+         */
+        async stream(): Promise<Readable> {
+            if (this.type === 'text') {
+                return Readable.from(Buffer.from(this.caption, 'utf-8'));
+            }
+            if (this.type === 'location') {
+                const loc = this.raw.message?.locationMessage ?? this.raw.message?.liveLocationMessage;
+                return Readable.from(Buffer.from(JSON.stringify({ lat: loc?.degreesLatitude, lng: loc?.degreesLongitude }), 'utf-8'));
+            }
+            if (this.type === 'poll') {
+                const poll = this.raw.message?.pollCreationMessage ?? this.raw.message?.pollCreationMessageV2 ?? this.raw.message?.pollCreationMessageV3;
+                return Readable.from(Buffer.from(JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((o) => ({ content: o.optionName })) ?? [] }), 'utf-8'));
+            }
+            if (wa.socket) {
+                try {
+                    return await downloadMediaMessage(this.raw, 'stream', {}) as unknown as Readable;
+                } catch {
+                    return Readable.from(Buffer.alloc(0));
+                }
+            }
+            return Readable.from(Buffer.alloc(0));
+        }
+
+        /**
          * @description Obtiene el contenido del mensaje como Buffer.
-         * Siempre retorna Buffer, el usuario decide cómo parsear según `type` y `mime`.
+         * Usa stream() internamente y cachea el resultado en el engine.
          * @returns Buffer con el contenido.
          */
         async content(): Promise<Buffer> {
             const cached = await wa.engine.get(`chat/${this.cid}/message/${this.id}/content`);
             if (cached) return Buffer.from(cached, 'base64');
 
-            let buffer: Buffer;
-
-            if (this.type === 'text') {
-                buffer = Buffer.from(this.caption, 'utf-8');
-            } else if (this.type === 'location') {
-                const loc = this.raw.message?.locationMessage ?? this.raw.message?.liveLocationMessage;
-                buffer = Buffer.from(JSON.stringify({ lat: loc?.degreesLatitude, lng: loc?.degreesLongitude }), 'utf-8');
-            } else if (this.type === 'poll') {
-                const poll = this.raw.message?.pollCreationMessage ?? this.raw.message?.pollCreationMessageV2 ?? this.raw.message?.pollCreationMessageV3;
-                buffer = Buffer.from(JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((o) => ({ content: o.optionName })) ?? [] }), 'utf-8');
-            } else if (wa.socket) {
-                try {
-                    const media = await downloadMediaMessage(this.raw, 'buffer', {});
-                    buffer = Buffer.isBuffer(media) ? media : Buffer.alloc(0);
-                } catch {
-                    return Buffer.alloc(0);
-                }
-            } else {
-                return Buffer.alloc(0);
+            const readable = await this.stream();
+            const chunks: Buffer[] = [];
+            for await (const chunk of readable) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
             }
+            const buffer = Buffer.concat(chunks);
 
             if (buffer.length) await wa.engine.set(`chat/${this.cid}/message/${this.id}/content`, buffer.toString('base64'));
             return buffer;
