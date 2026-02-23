@@ -4,7 +4,7 @@
  */
 
 import { BufferJSON } from 'baileys';
-import type { WhatsApp } from './WhatsApp';
+import type { WhatsApp } from '~/WhatsApp';
 
 /**
  * @description Participante de grupo.
@@ -219,7 +219,7 @@ export function chat(wa: WhatsApp) {
                     data.raw.createdAt = meta.creation ?? null;
                     data.name = meta.subject;
                     data.content = meta.desc ?? '';
-                } catch {}
+                } catch { /* group metadata may fail */ }
             } else {
                 // Para contactos individuales, actualizar desde Contact
                 const contact = await wa.Contact.refresh(cid);

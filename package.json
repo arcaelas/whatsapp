@@ -1,64 +1,63 @@
 {
-    "license": "ISC",
-    "version": "1.2.3",
-    "name": "@arcaelas/whatsapp",
-    "homepage": "https://github.com/arcaelas/whatsapp",
-    "description": "A small box of tools, which are implemented in different factions of the library.",
-    "keywords": [
-        "whatsapp",
-        "tools",
-        "arcaelas",
-        "arcaelas insiders",
-        "arcaelas-insiders",
-        "javascript"
-    ],
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/arcaelas/whatsapp.git"
-    },
-    "bugs": {
-        "email": "community@arcaelas.com",
-        "url": "https://github.com/arcaelas/whatsapp/issues"
-    },
-    "main": "build/index.js",
-    "files": [
-        "build/",
-        "*.md",
-        "*.json"
-    ],
-    "author": {
-        "name": "Arcaelas Insiders",
-        "email": "comunity@arcaelas.com",
-        "url": "https://github.com/arcaelas"
-    },
-    "publishConfig": {
-        "access": "public",
-        "registry": "https://registry.npmjs.org/"
-    },
-    "scripts": {
-        "build": "tsc && node esbuild.js",
-        "prepublishOnly": "yarn build && npm version patch",
-        "publish": "npm publish --access=public",
-        "lint": "eslint src/",
-        "lint:fix": "eslint src/ --fix",
-        "postpublish": "rm -rf build"
-    },
-    "devDependencies": {
-        "@eslint/js": "^9.0.0",
-        "@types/node": "^25.0.3",
-        "@types/qrcode": "^1.5.6",
-        "esbuild": "^0.17.18",
-        "eslint": "^9.0.0",
-        "typescript": "^5.0.4",
-        "typescript-eslint": "^8.0.0"
-    },
-    "dependencies": {
-        "@arcaelas/dynamite": "^1.0.9",
-        "@arcaelas/utils": "^2.0.5",
-        "@hapi/boom": "^10.0.1",
-        "baileys": "6.7.18",
-        "pino": "^10.1.0",
-        "pino-pretty": "^13.1.3",
-        "qrcode": "^1.5.4"
-    }
+  "name": "@arcaelas/whatsapp",
+  "version": "1.2.3",
+  "description": "A small box of tools, which are implemented in different factions of the library.",
+  "license": "ISC",
+  "main": "build/index.js",
+  "author": {
+    "name": "Arcaelas Insiders",
+    "email": "comunity@arcaelas.com",
+    "url": "https://github.com/arcaelas"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arcaelas/whatsapp.git"
+  },
+  "bugs": {
+    "email": "community@arcaelas.com",
+    "url": "https://github.com/arcaelas/whatsapp/issues"
+  },
+  "homepage": "https://github.com/arcaelas/whatsapp",
+  "keywords": [
+    "whatsapp",
+    "tools",
+    "arcaelas",
+    "arcaelas insiders",
+    "arcaelas-insiders",
+    "javascript"
+  ],
+  "files": [
+    "build/"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsc && tsc-alias",
+    "docs": "mkdocs gh-deploy --force",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "prepublishOnly": "yarn build && npm version minor",
+    "postpublish": "rm -rf build/"
+  },
+  "dependencies": {
+    "@arcaelas/dynamite": "^1.0.9",
+    "@arcaelas/utils": "^2.0.5",
+    "@hapi/boom": "^10.0.1",
+    "baileys": "6.7.18",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.3",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^25.0.3",
+    "@types/qrcode": "^1.5.6",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^5.0.4",
+    "typescript-eslint": "^8.0.0"
+  }
 }

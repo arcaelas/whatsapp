@@ -3,7 +3,7 @@
  * @description Engine de persistencia con Redis
  */
 
-import type { Engine } from '../engine';
+import type { Engine } from '~/store/engine';
 
 /**
  * @description Interface mínima del cliente Redis (compatible con ioredis y redis).
