@@ -3,7 +3,7 @@
  * @description Exportaciones del módulo de persistencia
  */
 
-export { FileEngine } from './driver/FileEngine';
-export { RedisEngine } from './driver/RedisEngine';
-export type { RedisClient } from './driver/RedisEngine';
-export type { Engine } from './engine';
+export { FileEngine } from '~/store/driver/FileEngine';
+export { RedisEngine } from '~/store/driver/RedisEngine';
+export type { RedisClient } from '~/store/driver/RedisEngine';
+export type { Engine } from '~/store/engine';

@@ -5,7 +5,7 @@
 
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Engine } from '../engine';
+import type { Engine } from '~/store/engine';
 
 /**
  * @description
@@ -36,7 +36,7 @@ export class FileEngine implements Engine {
         } else {
             try {
                 await rm(path, { force: true });
-            } catch {}
+            } catch { /* file may already be deleted */ }
         }
     }
 
@@ -58,7 +58,7 @@ export class FileEngine implements Engine {
                         key: path.slice(this._base.length + 1).replace(/_at_/g, '@'),
                         mtime: (await stat(path)).mtimeMs,
                     });
-                } catch {}
+                } catch { /* stat may fail for transient files */ }
             }
             return items
                 .sort((a, b) => b.mtime - a.mtime)

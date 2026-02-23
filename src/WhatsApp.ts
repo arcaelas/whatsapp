@@ -22,10 +22,10 @@ import {
 import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { build_chat, chat, type IChat, type IChatRaw } from './Chat';
-import { build_contact, contact, type IContact, type IContactRaw } from './Contact';
-import { build_message_index, message, MESSAGE_STATUS, type IMessageIndex } from './Message';
-import { FileEngine, type Engine } from './store';
+import { build_chat, chat, type IChat, type IChatRaw } from '~/Chat';
+import { build_contact, contact, type IContact, type IContactRaw } from '~/Contact';
+import { build_message_index, message, MESSAGE_STATUS, type IMessageIndex } from '~/Message';
+import { FileEngine, type Engine } from '~/store';
 
 /**
  * @description Opciones de configuración de WhatsApp.
@@ -198,10 +198,10 @@ export class WhatsApp {
                     if (!stored) continue;
 
                     const data: IContact = JSON.parse(stored, BufferJSON.reviver);
-                    c.notify && (data.raw.notify = c.notify);
-                    c.name && (data.raw.name = c.name);
-                    (c as { imgUrl?: string }).imgUrl && (data.raw.imgUrl = (c as { imgUrl?: string }).imgUrl);
-                    (c as { status?: string }).status && (data.raw.status = (c as { status?: string }).status);
+                    if (c.notify) data.raw.notify = c.notify;
+                    if (c.name) data.raw.name = c.name;
+                    if ((c as { imgUrl?: string }).imgUrl) data.raw.imgUrl = (c as { imgUrl?: string }).imgUrl;
+                    if ((c as { status?: string }).status) data.raw.status = (c as { status?: string }).status;
 
                     data.name = data.raw.name ?? data.raw.notify ?? data.raw.id.split('@')[0];
                     data.photo = data.raw.imgUrl ?? null;
@@ -383,7 +383,7 @@ export class WhatsApp {
                         try {
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
                             if (Buffer.isBuffer(buffer)) content = buffer as Buffer<ArrayBuffer>;
-                        } catch { }
+                        } catch { /* media download may fail */ }
                     }
 
                     if (content.length) {
@@ -393,7 +393,7 @@ export class WhatsApp {
                     // Agregar al índice del chat y emitir
                     await this.Chat.add_message(cid, mid, index.created_at);
                     const instance = new this.Message({ index, raw: msg });
-                    content.length && (instance.content = async () => content);
+                    if (content.length) instance.content = async () => content;
                     this.Message.notify(cid, mid);
                     this.event.emit('message:created', instance);
                 }

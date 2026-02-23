@@ -4,7 +4,7 @@
  */
 
 import { BufferJSON, jidNormalizedUser } from 'baileys';
-import type { WhatsApp } from './WhatsApp';
+import type { WhatsApp } from '~/WhatsApp';
 
 /**
  * @description Objeto raw del contacto (protocolo).
@@ -125,14 +125,14 @@ export function contact(wa: WhatsApp) {
             // Obtener foto de perfil
             try {
                 raw.imgUrl = (await wa.socket.profilePictureUrl(id, 'image')) ?? null;
-            } catch {}
+            } catch { /* profile picture may not exist */ }
 
             // Obtener estado/bio
             try {
                 const result = await wa.socket.fetchStatus(id);
                 const status_data = result?.[0] as { status?: { status?: string } } | undefined;
                 raw.status = status_data?.status?.status ?? null;
-            } catch {}
+            } catch { /* status fetch may fail */ }
 
             const data = build_contact(raw);
             await wa.engine.set(`contact/${id}/index`, JSON.stringify(data, BufferJSON.replacer));
@@ -155,7 +155,7 @@ export function contact(wa: WhatsApp) {
             try {
                 data.raw.imgUrl = (await wa.socket.profilePictureUrl(jid, 'image')) ?? null;
                 data.photo = data.raw.imgUrl;
-            } catch {}
+            } catch { /* profile picture may not exist */ }
 
             // Obtener estado/bio
             try {
@@ -163,7 +163,7 @@ export function contact(wa: WhatsApp) {
                 const status_data = result?.[0] as { status?: { status?: string } } | undefined;
                 data.raw.status = status_data?.status?.status ?? null;
                 data.content = data.raw.status ?? '';
-            } catch {}
+            } catch { /* status fetch may fail */ }
 
             await wa.engine.set(`contact/${jid}/index`, JSON.stringify(data, BufferJSON.replacer));
             return new _Contact(data);
@@ -208,7 +208,7 @@ export function contact(wa: WhatsApp) {
          */
         async rename(name: string): Promise<boolean> {
             const result = await _Contact.rename(this.id, name);
-            result && (this.raw.name = name);
+            if (result) this.raw.name = name;
             return result;
         }
 

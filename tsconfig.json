@@ -1,27 +1,29 @@
 {
-    "include": ["src"],
-    "compilerOptions": {
-        "target": "esnext",
-        "module": "commonjs",
-        "moduleResolution": "node",
-        "baseUrl": "./",
-        "paths": {},
-        "esModuleInterop": true,
-        "forceConsistentCasingInFileNames": true,
-        "strict": true,
-        "noImplicitAny": false,
-        "skipLibCheck": true,
-        "outDir": "./build",
-        "declaration": true,
-        "sourceMap": true,
-        "resolveJsonModule": true,
-        "experimentalDecorators": true,
-        "emitDecoratorMetadata": true,
-        "downlevelIteration": true,
-        "lib": ["ES2022", "DOM"],
-        "allowSyntheticDefaultImports": true,
-        "useDefineForClassFields": false,
-        "strictPropertyInitialization": false
+  "include": ["src"],
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "baseUrl": "./",
+    "paths": {
+      "~/*": ["src/*"]
     },
-    "exclude": ["node_modules", "**/*.test.ts"]
+    "outDir": "./build",
+    "declaration": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "downlevelIteration": true,
+    "lib": ["ESNext"],
+    "useDefineForClassFields": false,
+    "strictPropertyInitialization": false
+  },
+  "exclude": ["node_modules", "build"]
 }

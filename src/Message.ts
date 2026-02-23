@@ -6,7 +6,7 @@
 import type { WAMessage } from 'baileys';
 import { BufferJSON, downloadMediaMessage, generateForwardMessageContent, generateWAMessageFromContent, getContentType, proto } from 'baileys';
 import { Readable } from 'node:stream';
-import type { WhatsApp } from './WhatsApp';
+import type { WhatsApp } from '~/WhatsApp';
 
 /**
  * @description Tipos de mensaje soportados.
@@ -155,7 +155,7 @@ export function build_message_index(raw: WAMessage, edited = false): IMessageInd
         status: (raw.status as unknown as MESSAGE_STATUS) ?? MESSAGE_STATUS.PENDING,
         starred: raw.starred ?? false,
         forwarded: context_info?.isForwarded ?? false,
-        created_at: (Number(raw.messageTimestamp) ?? Math.floor(Date.now() / 1000)) * 1000,
+        created_at: (Number(raw.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000,
         deleted_at,
         mime,
         caption,
@@ -496,11 +496,11 @@ export function message(wa: WhatsApp) {
          */
         static watch(cid: string, mid: string, handler: (msg: InstanceType<typeof _Message>) => void): () => void {
             const key = `${cid}:${mid}`;
-            _watchers.get(key) ?? _watchers.set(key, new Set());
+            if (!_watchers.has(key)) _watchers.set(key, new Set());
             _watchers.get(key)!.add(handler);
             return () => {
                 _watchers.get(key)?.delete(handler);
-                _watchers.get(key)?.size === 0 && _watchers.delete(key);
+                if (_watchers.get(key)?.size === 0) _watchers.delete(key);
             };
         }
 
