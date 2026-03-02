@@ -8,181 +8,99 @@ import type { WhatsApp } from '~/WhatsApp';
 
 /**
  * @description Participante de grupo.
+ * Group participant.
  */
 export interface IGroupParticipant {
-    /** JID del participante */
+    /** JID del participante / Participant JID */
     id: string;
-    /** Rol de admin: null, 'admin', 'superadmin' */
+    /** Rol de admin: null, 'admin', 'superadmin' / Admin role */
     admin: string | null;
 }
 
 /**
  * @description Objeto raw del chat (protocolo).
+ * Raw chat object (protocol).
  */
 export interface IChatRaw {
-    /** JID único del chat */
+    /** JID único del chat / Unique chat JID */
     id: string;
-    /** Nombre del chat o grupo */
+    /** Nombre del chat o grupo / Chat or group name */
     name?: string | null;
-    /** Nombre alternativo para mostrar */
+    /** Nombre alternativo para mostrar / Alternative display name */
     displayName?: string | null;
-    /** Descripción del grupo */
+    /** Descripción del grupo / Group description */
     description?: string | null;
-    /** Cantidad de mensajes no leídos */
+    /** Cantidad de mensajes no leídos / Unread message count */
     unreadCount?: number | null;
-    /** Si el chat es de solo lectura */
+    /** Si el chat es de solo lectura / Whether the chat is read-only */
     readOnly?: boolean | null;
-    /** Si el chat está archivado */
+    /** Si el chat está archivado / Whether the chat is archived */
     archived?: boolean | null;
-    /** Timestamp cuando se fijó el chat */
+    /** Timestamp cuando se fijó el chat / Pin timestamp */
     pinned?: number | null;
-    /** Timestamp cuando expira el silencio */
+    /** Timestamp cuando expira el silencio / Mute end timestamp */
     muteEndTime?: number | null;
-    /** Si fue marcado manualmente como no leído */
+    /** Si fue marcado manualmente como no leído / Whether manually marked as unread */
     markedAsUnread?: boolean | null;
-    /** Lista de participantes del grupo */
+    /** Lista de participantes del grupo / Group participant list */
     participant?: IGroupParticipant[] | null;
-    /** JID del creador del grupo */
+    /** JID del creador del grupo / Group creator JID */
     createdBy?: string | null;
-    /** Timestamp de creación */
+    /** Timestamp de creación / Creation timestamp */
     createdAt?: number | null;
-    /** Duración de mensajes temporales (segundos) */
+    /** Duración de mensajes temporales (segundos) / Ephemeral message duration (seconds) */
     ephemeralExpiration?: number | null;
-}
-
-/**
- * @description Datos persistidos de un chat.
- */
-export interface IChat {
-    /** JID del chat (ej: 123456@s.whatsapp.net o grupo@g.us) */
-    id: string;
-    /** Tipo de chat: contacto individual o grupo */
-    type: 'contact' | 'group';
-    /** Nombre del chat o contacto */
-    name: string;
-    /** Descripción del chat/grupo */
-    content: string;
-    /** Si está fijado */
-    pined: boolean;
-    /** Si está archivado */
-    archived: boolean;
-    /** Timestamp cuando expira el silencio o false */
-    muted: number | false;
-    /** Si está leído */
-    readed: boolean;
-    /** Si es solo lectura */
-    readonly: boolean;
-    /** Etiquetas del chat */
-    labels: string[];
-    /** Objeto raw del protocolo */
-    raw: IChatRaw;
-}
-
-/**
- * @description Construye IChat desde raw.
- * @param raw Objeto raw del chat.
- * @returns IChat normalizado.
- */
-export function build_chat(raw: IChatRaw): IChat {
-    return {
-        id: raw.id,
-        type: raw.id.endsWith('@g.us') ? 'group' : 'contact',
-        name: raw.name ?? raw.displayName ?? raw.id.split('@')[0],
-        content: raw.description ?? '',
-        pined: raw.pinned !== null && raw.pinned !== undefined,
-        archived: raw.archived ?? false,
-        muted: raw.muteEndTime ?? false,
-        readed: (raw.unreadCount === 0 || raw.unreadCount === null) && !raw.markedAsUnread,
-        readonly: raw.readOnly ?? false,
-        labels: [],
-        raw,
-    };
 }
 
 /**
  * @description
  * Clase base para representar una conversación de WhatsApp.
- * Usar Chat.get() para obtener instancias.
+ * Base class representing a WhatsApp conversation.
  */
 export class Chat {
-    readonly raw: IChatRaw;
+    constructor(readonly raw: IChatRaw) { }
 
-    constructor(data: IChat) {
-        this.raw = data.raw;
-    }
-
-    /** JID único del chat */
-    get id(): string {
-        return this.raw.id;
-    }
-
-    /** Tipo de chat */
-    get type(): 'contact' | 'group' {
-        return this.raw.id.endsWith('@g.us') ? 'group' : 'contact';
-    }
-
-    /** Nombre del chat */
-    get name(): string {
-        return this.raw.name ?? this.raw.displayName ?? this.raw.id.split('@')[0];
-    }
-
-    /** Descripción del chat/grupo */
-    get content(): string {
-        return this.raw.description ?? '';
-    }
-
-    /** Si está fijado */
-    get pined(): boolean {
-        return this.raw.pinned !== null && this.raw.pinned !== undefined;
-    }
-
-    /** Si está archivado */
-    get archived(): boolean {
-        return this.raw.archived ?? false;
-    }
-
-    /** Timestamp cuando expira el silencio o false */
-    get muted(): number | false {
-        return this.raw.muteEndTime ?? false;
-    }
-
-    /** Si está leído */
-    get readed(): boolean {
-        return (this.raw.unreadCount === 0 || this.raw.unreadCount === null) && !this.raw.markedAsUnread;
-    }
-
-    /** Si es solo lectura */
-    get readonly(): boolean {
-        return this.raw.readOnly ?? false;
-    }
+    /** JID único del chat / Unique chat JID */
+    get id(): string { return this.raw.id; }
+    /** Tipo de chat / Chat type */
+    get type(): 'contact' | 'group' { return this.raw.id.endsWith('@g.us') ? 'group' : 'contact'; }
+    /** Nombre del chat / Chat name */
+    get name(): string { return this.raw.name ?? this.raw.displayName ?? this.raw.id.split('@')[0]; }
+    /** Descripción del chat/grupo / Chat/group description */
+    get content(): string { return this.raw.description ?? ''; }
+    /** Si está fijado / Whether it's pinned */
+    get pined(): boolean { return this.raw.pinned !== null && this.raw.pinned !== undefined; }
+    /** Si está archivado / Whether it's archived */
+    get archived(): boolean { return this.raw.archived ?? false; }
+    /** Timestamp cuando expira el silencio o false / Mute end timestamp or false */
+    get muted(): number | false { return this.raw.muteEndTime ?? false; }
+    /** Si está leído / Whether it's read */
+    get readed(): boolean { return (this.raw.unreadCount === 0 || this.raw.unreadCount === null) && !this.raw.markedAsUnread; }
+    /** Si es solo lectura / Whether it's read-only */
+    get readonly(): boolean { return this.raw.readOnly ?? false; }
 }
 
 /**
  * @description Factory que retorna la clase Chat enlazada al contexto.
+ * Factory that returns the Chat class bound to context.
  * @param wa Instancia de WhatsApp.
- * @returns Clase _Chat que extiende Chat.
  */
 export function chat(wa: WhatsApp) {
-    /** Obtiene el último mensaje raw del chat para chatModify */
     async function _last_messages(cid: string): Promise<{ key: { remoteJid: string; id: string; fromMe: boolean }; messageTimestamp: number }[]> {
         const messages_index = await wa.engine.get(`chat/${cid}/messages`);
         if (!messages_index) return [];
-
         const first_line = messages_index.trim().split('\n')[0];
         if (!first_line) return [];
-
         const [timestamp, mid] = first_line.split(' ');
         const msg = await wa.Message.get(cid, mid);
         if (!msg) return [];
-
         return [{ key: { remoteJid: cid, id: msg.id, fromMe: msg.me }, messageTimestamp: Math.floor(Number(timestamp) / 1000) }];
     }
 
     const _Chat = class extends Chat {
         /**
          * @description Obtiene un chat por su ID.
-         * @param cid ID del chat (JID).
-         * @returns Chat o null si no existe.
+         * Retrieves a chat by its ID.
          */
         static async get(cid: string) {
             const stored = await wa.engine.get(`chat/${cid}/index`);
@@ -192,56 +110,17 @@ export function chat(wa: WhatsApp) {
             if (!contact) return null;
 
             const raw: IChatRaw = { id: cid, name: contact.name };
-            const data = build_chat(raw);
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            return new _Chat(data);
-        }
-
-        /**
-         * @description Actualiza los datos del chat desde WhatsApp.
-         * @param cid ID del chat.
-         * @returns Chat actualizado o null.
-         */
-        static async refresh(cid: string) {
-            if (!wa.socket) return null;
-
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            const data: IChat = stored ? JSON.parse(stored, BufferJSON.reviver) : build_chat({ id: cid });
-
-            // Para grupos, obtener metadata actualizada
-            if (cid.endsWith('@g.us')) {
-                try {
-                    const meta = await wa.socket.groupMetadata(cid);
-                    data.raw.name = meta.subject;
-                    data.raw.description = meta.desc ?? null;
-                    data.raw.participant = meta.participants.map((p) => ({ id: p.id, admin: p.admin ?? null }));
-                    data.raw.createdBy = meta.owner ?? null;
-                    data.raw.createdAt = meta.creation ?? null;
-                    data.name = meta.subject;
-                    data.content = meta.desc ?? '';
-                } catch { /* group metadata may fail */ }
-            } else {
-                // Para contactos individuales, actualizar desde Contact
-                const contact = await wa.Contact.refresh(cid);
-                if (contact) {
-                    data.raw.name = contact.name;
-                    data.name = contact.name;
-                }
-            }
-
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            return new _Chat(data);
+            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(raw, BufferJSON.replacer));
+            return new _Chat(raw);
         }
 
         /**
          * @description Obtiene chats paginados.
-         * @param offset Inicio de paginación.
-         * @param limit Cantidad máxima de resultados.
-         * @returns Array de chats.
+         * Retrieves paginated chats.
          */
-        static async paginate(offset = 0, limit = 50) {
+        static async list(offset = 0, limit = 50) {
             const chats: InstanceType<typeof _Chat>[] = [];
-            for (const key of await wa.engine.list('chat/', offset, limit, '/index')) {
+            for (const key of await wa.engine.list('chat/', offset, limit)) {
                 const stored = await wa.engine.get(key);
                 if (stored) chats.push(new _Chat(JSON.parse(stored, BufferJSON.reviver)));
             }
@@ -249,210 +128,163 @@ export function chat(wa: WhatsApp) {
         }
 
         /**
-         * @description Fija o desfija un chat.
-         * @param cid ID del chat.
-         * @param value true para fijar, false para desfijar.
-         * @returns true si se actualizó correctamente.
+         * @description Fija o desfija un chat por su ID.
+         * Pins or unpins a chat by its ID.
          */
         static async pin(cid: string, value: boolean): Promise<boolean> {
-            if (!wa.socket) return false;
-            const last_messages = await _last_messages(cid);
-            await wa.socket.chatModify({ pin: value, lastMessages: last_messages }, cid);
-
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            if (!stored) return true;
-
-            const data: IChat = JSON.parse(stored, BufferJSON.reviver);
-            data.raw.pinned = value ? Date.now() : null;
-            data.pined = value;
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            return true;
+            const chat = await _Chat.get(cid);
+            return chat ? chat.pin(value) : false;
         }
 
         /**
-         * @description Archiva o desarchiva un chat.
-         * @param cid ID del chat.
-         * @param value true para archivar, false para desarchivar.
-         * @returns true si se actualizó correctamente.
+         * @description Archiva o desarchiva un chat por su ID.
+         * Archives or unarchives a chat by its ID.
          */
         static async archive(cid: string, value: boolean): Promise<boolean> {
-            if (!wa.socket) return false;
-            const last_messages = await _last_messages(cid);
-            await wa.socket.chatModify({ archive: value, lastMessages: last_messages }, cid);
-
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            if (!stored) return true;
-
-            const data: IChat = JSON.parse(stored, BufferJSON.reviver);
-            data.raw.archived = value;
-            data.archived = value;
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            return true;
+            const chat = await _Chat.get(cid);
+            return chat ? chat.archive(value) : false;
         }
 
         /**
-         * @description Silencia o quita silencio de un chat.
-         * @param cid ID del chat.
-         * @param duration Duración en milisegundos (0 o null para quitar silencio).
-         * @returns true si se actualizó correctamente.
+         * @description Silencia o quita silencio de un chat por su ID.
+         * Mutes or unmutes a chat by its ID.
          */
         static async mute(cid: string, duration: number | null): Promise<boolean> {
-            if (!wa.socket) return false;
-            const mute_end = duration ? Date.now() + duration : null;
-            const last_messages = await _last_messages(cid);
-            await wa.socket.chatModify({ mute: mute_end, lastMessages: last_messages }, cid);
-
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            if (!stored) return true;
-
-            const data: IChat = JSON.parse(stored, BufferJSON.reviver);
-            data.raw.muteEndTime = mute_end;
-            data.muted = mute_end ?? false;
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            return true;
+            const chat = await _Chat.get(cid);
+            return chat ? chat.mute(duration) : false;
         }
 
         /**
-         * @description Marca un chat como leído.
-         * @param cid ID del chat.
-         * @returns true si se marcó correctamente.
+         * @description Marca un chat como leido por su ID.
+         * Marks a chat as read by its ID.
          */
         static async seen(cid: string): Promise<boolean> {
-            if (!wa.socket) return false;
-
-            const last_messages = await _last_messages(cid);
-            if (!last_messages.length) return false;
-
-            const msg = last_messages[0];
-            await wa.socket.readMessages([{ remoteJid: cid, id: msg.key.id, participant: msg.key.fromMe ? undefined : msg.key.remoteJid }]);
-
-            // Actualizar estado del chat
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            if (stored) {
-                const data: IChat = JSON.parse(stored, BufferJSON.reviver);
-                data.raw.unreadCount = 0;
-                data.raw.markedAsUnread = false;
-                data.readed = true;
-                await wa.engine.set(`chat/${cid}/index`, JSON.stringify(data, BufferJSON.replacer));
-            }
-            return true;
+            const chat = await _Chat.get(cid);
+            return chat ? chat.seen() : false;
         }
 
         /**
-         * @description Limpia todos los datos del chat del storage (cascade delete).
-         * @param cid ID del chat.
-         */
-        static async cascade_delete(cid: string): Promise<void> {
-            await wa.engine.delete_prefix(`chat/${cid}/`);
-        }
-
-        /**
-         * @description Elimina un chat con cascade delete.
-         * @param cid ID del chat.
-         * @returns true si se eliminó correctamente.
+         * @description Elimina un chat por su ID.
+         * Removes a chat by its ID.
          */
         static async remove(cid: string): Promise<boolean> {
-            if (!wa.socket) return false;
+            const chat = await _Chat.get(cid);
+            return chat ? chat.remove() : false;
+        }
 
-            const stored = await wa.engine.get(`chat/${cid}/index`);
-            if (!stored) return false;
-
-            const data: IChat = JSON.parse(stored, BufferJSON.reviver);
-            if (data.type === 'group') {
-                await wa.socket.groupLeave(cid);
+        /**
+         * @description Actualiza los datos del chat desde WhatsApp.
+         * Refreshes chat data from WhatsApp.
+         */
+        async refresh(): Promise<this | null> {
+            if (!wa.socket) return null;
+            if (this.id.endsWith('@g.us')) {
+                try {
+                    const meta = await wa.socket.groupMetadata(this.id);
+                    this.raw.name = meta.subject;
+                    this.raw.description = meta.desc ?? null;
+                    this.raw.participant = meta.participants.map((p) => ({ id: p.id, admin: p.admin ?? null }));
+                    this.raw.createdBy = meta.owner ?? null;
+                    this.raw.createdAt = meta.creation ?? null;
+                } catch { /* group metadata may fail */ }
             } else {
-                await wa.socket.chatModify({ delete: true, lastMessages: [] }, cid);
+                const contact = await wa.Contact.get(this.id);
+                if (contact) {
+                    await contact.refresh();
+                    this.raw.name = contact.name;
+                }
             }
+            await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return this;
+        }
 
-            await _Chat.cascade_delete(cid);
+        /**
+         * @description Elimina el chat con cascade delete.
+         * Deletes the chat with cascade delete.
+         */
+        async remove(): Promise<boolean> {
+            if (!wa.socket) return false;
+            if (this.type === 'group') await wa.socket.groupLeave(this.id);
+            else await wa.socket.chatModify({ delete: true, lastMessages: [] }, this.id);
+            await wa.engine.set(`chat/${this.id}`, null);
             return true;
         }
 
         /**
-         * @description Agrega un mensaje al índice del chat.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @param timestamp Timestamp de creación.
+         * @description Fija o desfija el chat.
+         * Pins or unpins the chat.
          */
-        static async add_message(cid: string, mid: string, timestamp: number): Promise<void> {
-            const key = `chat/${cid}/messages`;
-            const line = `${timestamp} ${mid}`;
-            const current = await wa.engine.get(key);
-            await wa.engine.set(key, current ? `${line}\n${current}` : line);
+        async pin(value: boolean): Promise<boolean> {
+            if (!wa.socket) return false;
+            const last_messages = await _last_messages(this.id);
+            await wa.socket.chatModify({ pin: value, lastMessages: last_messages }, this.id);
+            this.raw.pinned = value ? Date.now() : null;
+            await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return true;
         }
 
         /**
-         * @description Elimina un mensaje del índice del chat.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
+         * @description Archiva o desarchiva el chat.
+         * Archives or unarchives the chat.
          */
-        static async remove_message(cid: string, mid: string): Promise<void> {
-            const key = `chat/${cid}/messages`;
-            const content = await wa.engine.get(key);
-            if (!content) return;
-
-            const filtered = content
-                .trim()
-                .split('\n')
-                .filter((line) => !line.endsWith(` ${mid}`))
-                .join('\n');
-
-            await wa.engine.set(key, filtered || null);
+        async archive(value: boolean): Promise<boolean> {
+            if (!wa.socket) return false;
+            const last_messages = await _last_messages(this.id);
+            await wa.socket.chatModify({ archive: value, lastMessages: last_messages }, this.id);
+            this.raw.archived = value;
+            await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return true;
         }
 
         /**
-         * @description Lista IDs de mensajes del chat (paginado).
-         * @param cid ID del chat.
-         * @param offset Inicio de paginación.
-         * @param limit Cantidad máxima.
-         * @returns Array de IDs de mensajes.
+         * @description Silencia o quita silencio del chat.
+         * Mutes or unmutes the chat.
+         * @param duration Duración en ms (0 o null para quitar silencio) / Duration in ms (0 or null to unmute).
          */
-        static async list_messages(cid: string, offset = 0, limit = 50): Promise<string[]> {
-            const content = await wa.engine.get(`chat/${cid}/messages`);
-            if (!content) return [];
-
-            return content
-                .trim()
-                .split('\n')
-                .slice(offset, offset + limit)
-                .map((line) => line.split(' ')[1])
-                .filter(Boolean);
+        async mute(duration: number | null): Promise<boolean> {
+            if (!wa.socket) return false;
+            const mute_end = duration ? Date.now() + duration : null;
+            const last_messages = await _last_messages(this.id);
+            await wa.socket.chatModify({ mute: mute_end, lastMessages: last_messages }, this.id);
+            this.raw.muteEndTime = mute_end;
+            await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return true;
         }
 
         /**
-         * @description Cuenta mensajes del chat.
-         * @param cid ID del chat.
-         * @returns Cantidad de mensajes.
+         * @description Marca el chat como leído.
+         * Marks the chat as read.
          */
-        static async count_messages(cid: string): Promise<number> {
-            const content = await wa.engine.get(`chat/${cid}/messages`);
-            if (!content) return 0;
-            return content.trim().split('\n').filter(Boolean).length;
+        async seen(): Promise<boolean> {
+            if (!wa.socket) return false;
+            const last_messages = await _last_messages(this.id);
+            if (!last_messages.length) return false;
+            const msg = last_messages[0];
+            await wa.socket.readMessages([{ remoteJid: this.id, id: msg.key.id, participant: msg.key.fromMe ? undefined : msg.key.remoteJid }]);
+            this.raw.unreadCount = 0;
+            this.raw.markedAsUnread = false;
+            await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return true;
         }
 
         /**
-         * @description Obtiene los miembros de un chat.
-         * @param cid ID del chat.
-         * @param offset Inicio de paginación.
-         * @param limit Cantidad máxima de resultados.
-         * @returns Array de contactos.
+         * @description Obtiene los miembros del chat.
+         * Gets chat members.
          */
-        static async members(cid: string, offset = 0, limit = 50): Promise<InstanceType<typeof wa.Contact>[]> {
-            if (!cid.endsWith('@g.us') || !wa.socket) {
-                const contact = await wa.Contact.get(cid);
+        async members(offset = 0, limit = 50): Promise<InstanceType<typeof wa.Contact>[]> {
+            if (!this.id.endsWith('@g.us') || !wa.socket) {
+                const contact = await wa.Contact.get(this.id);
                 return contact ? [contact] : [];
             }
-
             const members: InstanceType<typeof wa.Contact>[] = [];
-            for (const p of (await wa.socket.groupMetadata(cid)).participants.slice(offset, offset + limit)) {
+            for (const p of (await wa.socket.groupMetadata(this.id)).participants.slice(offset, offset + limit)) {
                 const existing = await wa.Contact.get(p.id);
                 if (existing) {
                     members.push(existing);
                 } else {
-                    const raw: IContactRaw = { id: p.id };
-                    const data = build_contact(raw);
-                    await wa.engine.set(`contact/${p.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-                    members.push(new wa.Contact(data));
+                    const raw = { id: p.id };
+                    await wa.engine.set(`contact/${p.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
+                    members.push(new wa.Contact(raw));
                 }
             }
             return members;
@@ -460,34 +292,21 @@ export function chat(wa: WhatsApp) {
 
         /**
          * @description Obtiene mensajes del chat (paginados).
-         * @param offset Inicio de paginación.
-         * @param limit Cantidad máxima de resultados.
-         * @returns Array de mensajes.
+         * Gets chat messages (paginated).
          */
         async messages(offset = 0, limit = 50): Promise<InstanceType<typeof wa.Message>[]> {
-            const ids = await _Chat.list_messages(this.id, offset, limit);
-            const messages: InstanceType<typeof wa.Message>[] = [];
-            for (const mid of ids) {
-                const msg = await wa.Message.get(this.id, mid);
-                if (msg) messages.push(msg);
-            }
-            return messages;
+            return wa.Message.list(this.id, offset, limit);
         }
 
         /**
-         * @description Actualiza los datos del chat desde WhatsApp.
-         * @returns this con datos actualizados, o null si falla.
+         * @description Obtiene el contacto asociado al chat (solo chats individuales).
+         * Gets the contact associated with the chat (individual chats only).
          */
-        async refresh(): Promise<this | null> {
-            const updated = await _Chat.refresh(this.id);
-            if (!updated) return null;
-            Object.assign(this.raw, updated.raw);
-            return this;
+        async contact(): Promise<InstanceType<typeof wa.Contact> | null> {
+            if (this.type === 'group') return null;
+            return wa.Contact.get(this.id);
         }
     };
 
     return _Chat;
 }
-
-// Import para la factory
-import { build_contact, type IContactRaw } from './Contact';
