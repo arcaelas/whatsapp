@@ -3,7 +3,16 @@
   "version": "1.2.3",
   "description": "A small box of tools, which are implemented in different factions of the library.",
   "license": "ISC",
-  "main": "build/index.js",
+  "main": "./build/cjs/index.js",
+  "module": "./build/esm/index.js",
+  "types": "./build/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/esm/index.d.ts",
+      "import": "./build/esm/index.js",
+      "require": "./build/cjs/index.js"
+    }
+  },
   "author": {
     "name": "Arcaelas Insiders",
     "email": "comunity@arcaelas.com",
@@ -34,11 +43,12 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "tsc && tsc-alias",
+    "build:esm": "tsc --module ESNext --moduleResolution bundler --outDir build/esm && tsc-alias --outDir build/esm && echo '{\"type\":\"module\"}' > build/esm/package.json",
+    "build:cjs": "tsc --module commonjs --moduleResolution node --outDir build/cjs && tsc-alias --outDir build/cjs && echo '{\"type\":\"commonjs\"}' > build/cjs/package.json",
+    "build": "yarn build:esm && yarn build:cjs",
     "docs": "mkdocs gh-deploy --force",
-    "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix",
-    "prepublishOnly": "yarn build && npm version minor",
+    "lint": "eslint src/ --fix",
+    "release": "npm version minor && yarn build && npm publish --access public",
     "postpublish": "rm -rf build/"
   },
   "dependencies": {
