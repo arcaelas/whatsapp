@@ -67,7 +67,8 @@ async function main() {
   console.log("Iniciando bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      const fs = await import("fs");
+      fs.writeFileSync("qr.png", data);
       console.log("Escanea el QR en qr.png");
     } else {
       console.log("Codigo de emparejamiento:", data);
@@ -106,9 +107,9 @@ wa.event.on("message:created", async (msg) => {
 
   // Reaccionar segun contenido
   if (text.includes("gracias")) {
-    await wa.Message.react(msg.cid, msg.id, "❤️");
+    await msg.react("❤️");
   } else if (text.includes("jaja")) {
-    await wa.Message.react(msg.cid, msg.id, "😂");
+    await msg.react("😂");
   }
 });
 ```
@@ -122,8 +123,8 @@ wa.event.on("message:created", async (msg) => {
   const text = (await msg.content()).toString().toLowerCase();
 
   if (text === "eco") {
-    // Responder citando el mensaje original
-    await wa.Message.text(msg.cid, "Esto es un eco!");
+    // Responder citando el mensaje original (msg.id como tercer argumento)
+    await wa.Message.text(msg.cid, "Esto es un eco!", msg.id);
   }
 });
 ```

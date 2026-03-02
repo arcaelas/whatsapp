@@ -74,26 +74,26 @@ EventEmitter tipado para escuchar eventos.
 ### `Chat`
 
 ```typescript
-readonly Chat: typeof _Chat
+readonly Chat: ReturnType<typeof chat>
 ```
 
-Clase Chat enlazada a esta instancia.
+Clase Chat enlazada a esta instancia. Es el resultado del factory `chat(wa)`, que extiende la clase base `Chat` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
 
 ### `Contact`
 
 ```typescript
-readonly Contact: typeof _Contact
+readonly Contact: ReturnType<typeof contact>
 ```
 
-Clase Contact enlazada a esta instancia.
+Clase Contact enlazada a esta instancia. Es el resultado del factory `contact(wa)`, que extiende la clase base `Contact` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
 
 ### `Message`
 
 ```typescript
-readonly Message: typeof _Message
+readonly Message: ReturnType<typeof message>
 ```
 
-Clase Message enlazada a esta instancia.
+Clase Message enlazada a esta instancia. Es el resultado del factory `message(wa)`, que extiende la clase base `Message` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
 
 ---
 

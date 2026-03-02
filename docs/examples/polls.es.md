@@ -89,6 +89,8 @@ wa.event.on("message:created", async (msg) => {
 ## Encuesta con temporizador
 
 ```typescript
+import type { WhatsApp } from "@arcaelas/whatsapp";
+
 async function create_timed_poll(
   wa: WhatsApp,
   chat_id: string,

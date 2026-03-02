@@ -1,17 +1,19 @@
-# Bot con Engine Personalizado
+# Bot con Engine Personalizado (Redis)
 
-Bot de produccion usando un engine personalizado para almacenamiento.
+Bot de produccion usando un engine personalizado para almacenamiento con Redis.
 
 ---
 
 ## Descripcion
 
 Este ejemplo muestra como crear un bot que usa un engine personalizado
-(Redis, PostgreSQL, S3, etc.) en lugar del FileEngine por defecto.
+en lugar del FileEngine por defecto. La libreria ya incluye `RedisEngine`
+como export oficial, pero aqui se muestra como implementar uno propio
+para entender la interfaz `Engine`.
 
 ---
 
-## Ejemplo: Redis Engine
+## Ejemplo: Redis Engine personalizado
 
 ### Crear el engine
 
@@ -110,7 +112,8 @@ async function main() {
   console.log("[INFO] Iniciando bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("/tmp/qr.png", data);
+      const fs = await import("fs");
+      fs.writeFileSync("/tmp/qr.png", data);
       console.log("[INFO] QR guardado en /tmp/qr.png");
     } else {
       console.log("[INFO] Codigo:", data);
@@ -209,5 +212,17 @@ BOT_PREFIX=!
 
 ## Otros engines
 
-Consulta la documentacion de [Engines](../references/engines.md) para ver
+La libreria ya exporta `RedisEngine` listo para usar con `ioredis` o `redis`:
+
+```typescript
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+import Redis from "ioredis";
+
+const client = new Redis();
+const wa = new WhatsApp({
+  engine: new RedisEngine(client, "wa:mi-bot"),
+});
+```
+
+Consulta la documentacion de [Engines](../references/engines.es.md) para ver
 ejemplos de PostgreSQL, MongoDB, y otros.

@@ -20,6 +20,7 @@ npm install @arcaelas/whatsapp typescript tsx
 Create the main file:
 
 ```typescript title="index.ts"
+import { writeFileSync } from "fs";
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
@@ -36,8 +37,7 @@ async function main() {
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
       // Save QR as image
-      const fs = await import("fs");
-      fs.writeFileSync("qr.png", data);
+      writeFileSync("qr.png", data);
       console.log("QR saved to qr.png - Scan with your phone");
     } else {
       // 8 digit code (if using phone)
@@ -73,6 +73,7 @@ npx tsx index.ts
 Add a listener for incoming messages:
 
 ```typescript title="index.ts" hl_lines="20-35"
+import { writeFileSync } from "fs";
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
@@ -118,7 +119,7 @@ async function main() {
   // Connect
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      writeFileSync("qr.png", data);
       console.log("Scan qr.png");
     }
   });
@@ -154,6 +155,8 @@ await wa.pair(async (data) => {
 ## 6. Handle different message types
 
 ```typescript
+import { writeFileSync } from "fs";
+
 wa.event.on("message:created", async (msg) => {
   if (msg.me) return;
 
@@ -172,7 +175,7 @@ wa.event.on("message:created", async (msg) => {
       console.log(`Caption: ${msg.caption}`);
     }
     // Save image
-    require("fs").writeFileSync("image.jpg", buffer);
+    writeFileSync("image.jpg", buffer);
   }
 
   // Video
@@ -207,6 +210,8 @@ wa.event.on("message:created", async (msg) => {
 ## 7. Send messages
 
 ```typescript
+import { readFileSync } from "fs";
+
 const cid = "5491198765432@s.whatsapp.net";
 
 // Text
@@ -216,15 +221,15 @@ await wa.Message.text(cid, "Hello!");
 await wa.Message.text(cid, "Reply", "MESSAGE_ID_TO_QUOTE");
 
 // Image with caption
-const img = require("fs").readFileSync("photo.jpg");
+const img = readFileSync("photo.jpg");
 await wa.Message.image(cid, img, "Check out this photo!");
 
 // Video
-const vid = require("fs").readFileSync("video.mp4");
+const vid = readFileSync("video.mp4");
 await wa.Message.video(cid, vid, "Interesting video");
 
 // Audio (voice note)
-const aud = require("fs").readFileSync("audio.ogg");
+const aud = readFileSync("audio.ogg");
 await wa.Message.audio(cid, aud);
 
 // Location
@@ -257,15 +262,15 @@ wa.event.on("message:created", async (msg) => {
 
   // React with emoji
   if (text.includes("thanks")) {
-    await wa.Message.react(msg.cid, msg.id, "❤️");
+    await msg.react("❤️");
   }
 
   if (text.includes("haha")) {
-    await wa.Message.react(msg.cid, msg.id, "😂");
+    await msg.react("😂");
   }
 
   // Remove reaction
-  // await wa.Message.react(msg.cid, msg.id, "");
+  // await msg.react("");
 });
 ```
 
@@ -286,7 +291,4 @@ wa.event.on("message:created", async (msg) => {
 
 Now that you have a basic bot running, explore the detailed documentation:
 
-- [WhatsApp Reference](references/whatsapp.md) - Configuration and events
-- [Chat Reference](references/chat.md) - Conversation management
-- [Message Reference](references/message.md) - Message types
 - [Advanced examples](examples/basic-bot.md) - Recommended patterns
