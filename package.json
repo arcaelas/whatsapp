@@ -1,6 +1,6 @@
 {
   "name": "@arcaelas/whatsapp",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A small box of tools, which are implemented in different factions of the library.",
   "license": "ISC",
   "main": "./build/cjs/index.js",
