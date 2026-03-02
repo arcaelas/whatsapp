@@ -7,7 +7,7 @@ repo_name: arcaelas/whatsapp
 repo_url: https://github.com/arcaelas/whatsapp
 edit_uri: edit/main/docs/
 
-copyright: Copyright &copy; 2025 Arcaelas Insiders
+copyright: Copyright &copy; 2025-2026 Arcaelas Insiders
 
 theme:
   name: material
@@ -80,9 +80,16 @@ plugins:
             Installation: Instalación
             Getting Started: Primeros Pasos
             References: Referencias
-            Chat & Group: Chat y Group
+            WhatsApp: WhatsApp
+            Chat & Group: Chat y Grupo
+            Contact: Contacto
             Messages: Mensajes
+            Engines: Engines
             Events: Eventos
+            Data Schemas: Schemas de Datos
+            Advanced: Avanzado
+            Engine System: Sistema de Engine
+            Baileys Payloads: Payloads de Baileys
             Examples: Ejemplos
             Basic Bot: Bot Básico
             Command Bot: Bot de Comandos
@@ -110,11 +117,16 @@ nav:
     - Messages: references/message.md
     - Engines: references/engines.md
     - Events: references/events.md
+    - Data Schemas: schema.md
+
+  - Advanced:
+    - Engine System: engine.md
+    - Baileys Payloads: baileys-payloads.md
 
   - Examples:
     - Basic Bot: examples/basic-bot.md
     - Command Bot: examples/command-bot.md
-    - Custom Engine Bot: examples/s3-bot.md
+    - Custom Engine Bot: examples/custom-engine.md
     - Media Sending: examples/media.md
     - Group Management: examples/groups.md
     - Polls: examples/polls.md
