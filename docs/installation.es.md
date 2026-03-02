@@ -54,17 +54,19 @@ Cuando uses `FileEngine` (default), la libreria crea la siguiente estructura:
 .baileys/
   default/                    # o el nombre que especifiques
     session/
-      {key}/index             # Datos de sesion (creds, keys, etc.)
+      creds                   # Credenciales de sesion
+      {type}/{id}             # Keys de senales (ej: session/pre-key/1)
     contact/
       {jid}/index             # Datos de contacto
     chat/
       {jid}/
         index                 # Datos del chat
+        messages              # Indice "TIMESTAMP MID" por linea
         message/
-          index               # Indice "MID TIMESTAMP" por linea
           {mid}/
             index             # Metadata del mensaje (JSON)
-            content           # Contenido binario (media)
+            raw               # WAMessage raw del protocolo (JSON)
+            content           # Contenido binario (base64)
 ```
 
 !!! note "Normalizacion de IDs"
@@ -135,4 +137,4 @@ El directorio se crea automaticamente en la primera conexion. Si persiste, verif
 
 ## Siguiente paso
 
-[:octicons-arrow-right-24: Primeros pasos](getting-started.md)
+[:octicons-arrow-right-24: Primeros pasos](getting-started.es.md)

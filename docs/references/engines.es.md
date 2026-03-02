@@ -7,7 +7,8 @@ Los engines determinan donde se almacenan la sesion, contactos, chats y mensajes
 ## Importacion
 
 ```typescript
-import { Engine, FileEngine } from "@arcaelas/whatsapp";
+import { Engine, FileEngine, RedisEngine } from "@arcaelas/whatsapp";
+import type { RedisClient } from "@arcaelas/whatsapp";
 ```
 
 ---
@@ -17,7 +18,7 @@ import { Engine, FileEngine } from "@arcaelas/whatsapp";
 El sistema de persistencia usa un patron simple:
 
 ```
-WhatsApp -> Engine (FileEngine o custom)
+WhatsApp -> Engine (FileEngine, RedisEngine o custom)
 ```
 
 Los engines implementan una interfaz generica de `get/set/list` para almacenamiento key-value de texto (JSON stringified).
@@ -52,19 +53,23 @@ if (data) {
 
 #### `set(key, value)`
 
-Guarda o elimina un valor.
+Guarda o elimina un valor. Si `value` es `null`, elimina la key y todas las sub-keys recursivamente (cascade delete).
 
 ```typescript
 // Guardar
 await engine.set("contact/123/index", JSON.stringify({ name: "John" }));
 
-// Eliminar (pasar null)
-await engine.set("contact/123/index", null);
+// Eliminar con cascade (elimina la key y todo lo que este bajo ese prefijo)
+await engine.set("chat/123@s.whatsapp.net", null);
+// Esto elimina: chat/123@s.whatsapp.net/index, chat/123@s.whatsapp.net/messages,
+// chat/123@s.whatsapp.net/message/*/index, etc.
 ```
+
+> **Cascade delete:** Cuando se pasa `null` como valor, el engine debe eliminar no solo la key exacta sino tambien todas las sub-keys. Por ejemplo, `set("chat/123", null)` elimina `chat/123`, `chat/123/index`, `chat/123/messages`, `chat/123/message/ABC/index`, etc. Tanto FileEngine (via `rm -rf`) como RedisEngine (via SCAN + DEL) implementan este comportamiento.
 
 #### `list(prefix, offset?, limit?)`
 
-Lista keys bajo un prefijo, ordenados por mas reciente.
+Lista keys bajo un prefijo.
 
 ```typescript
 // Listar contactos
@@ -75,6 +80,8 @@ for (const key of keys) {
 }
 ```
 
+> **Orden:** FileEngine ordena por fecha de modificacion (mas reciente primero). RedisEngine usa SCAN que no garantiza orden. Las implementaciones custom deben documentar su comportamiento de orden.
+
 ### Estructura de keys
 
 Los keys siguen una convencion de paths:
@@ -84,9 +91,16 @@ Los keys siguen una convencion de paths:
 | Session | `session/{key}` | `session/creds` |
 | Signal keys | `session/{type}/{id}` | `session/pre-key/1` |
 | Contact | `contact/{jid}/index` | `contact/5491112345678@s.whatsapp.net/index` |
-| Chat | `chat/{jid}/index` | `chat/5491112345678@s.whatsapp.net/index` |
-| Message | `chat/{cid}/message/{mid}/index` | `chat/123@s.whatsapp.net/message/ABC123/index` |
-| Content | `chat/{cid}/message/{mid}/content` | `chat/123@s.whatsapp.net/message/ABC123/content` |
+| LID mapping | `lid/{lid}` | `lid/some-lid@lid` |
+| Chat | `chat/{cid}/index` | `chat/5491112345678@s.whatsapp.net/index` |
+| Chat messages index | `chat/{cid}/messages` | `chat/123@s.whatsapp.net/messages` |
+| Message index | `chat/{cid}/message/{mid}/index` | `chat/123@s.whatsapp.net/message/ABC123/index` |
+| Message raw | `chat/{cid}/message/{mid}/raw` | `chat/123@s.whatsapp.net/message/ABC123/raw` |
+| Message content | `chat/{cid}/message/{mid}/content` | `chat/123@s.whatsapp.net/message/ABC123/content` |
+
+La key `chat/{cid}/messages` es un archivo de texto con lineas en formato `{timestamp} {mid}`, ordenadas de mas reciente a mas antiguo. Se usa como indice para listar y paginar mensajes.
+
+La key `lid/{lid}` almacena el JID real de un contacto, permitiendo resolver Linked IDs a JIDs estandar.
 
 ---
 
@@ -119,15 +133,22 @@ new FileEngine(basePath?: string)
   chat/
     5491112345678_at_s.whatsapp.net/
       index            # Chat JSON
+      messages         # Indice de mensajes (texto plano)
       message/
         ABC123/
-          index        # Mensaje JSON
+          index        # Mensaje index JSON
+          raw          # WAMessage JSON
           content      # Contenido (base64 para media)
 ```
 
-!!! note "Sanitizacion de keys"
-    El caracter `@` se reemplaza por `_at_` en los nombres de archivos
-    para compatibilidad con sistemas de archivos.
+> **Sanitizacion de keys:** El caracter `@` se reemplaza por `_at_` en los nombres de archivos para compatibilidad con sistemas de archivos.
+
+### Comportamiento
+
+- `get(key)` lee el archivo como texto UTF-8
+- `set(key, value)` crea directorios intermedios automaticamente y escribe el archivo
+- `set(key, null)` ejecuta `rm -rf` sobre la key (archivo y directorio, recursivo)
+- `list(prefix)` lista archivos recursivamente, ordena por fecha de modificacion (mas reciente primero)
 
 ### Ejemplo
 
@@ -152,67 +173,79 @@ const wa_dev = new WhatsApp({
 });
 ```
 
-### Notas
+> **Backup:** Puedes hacer backup copiando el directorio completo.
 
-!!! tip "Backup"
-    Puedes hacer backup copiando el directorio completo.
+> **Permisos:** Asegurate de tener permisos de escritura en el directorio.
 
-!!! warning "Permisos"
-    Asegurate de tener permisos de escritura en el directorio.
+---
+
+## RedisEngine
+
+Engine de persistencia con Redis. Recibe una conexion existente compatible con ioredis o redis.
+
+### Constructor
+
+```typescript
+new RedisEngine(client: RedisClient, prefix?: string)
+```
+
+| Parametro | Tipo | Default | Descripcion |
+|-----------|------|---------|-------------|
+| `client` | `RedisClient` | - | Cliente Redis existente |
+| `prefix` | `string` | `"wa:default"` | Prefijo para todas las keys |
+
+### Interfaz RedisClient
+
+Interface minima que el cliente Redis debe implementar. Compatible con ioredis y redis:
+
+```typescript
+interface RedisClient {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<unknown>;
+  del(key: string | string[]): Promise<unknown>;
+  scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
+}
+```
+
+### Comportamiento
+
+- `get(key)` obtiene `{prefix}:{key}` del Redis
+- `set(key, value)` establece `{prefix}:{key}` en Redis
+- `set(key, null)` elimina la key exacta y usa SCAN + DEL para eliminar todas las sub-keys con patron `{prefix}:{key}/*` (cascade delete)
+- `list(prefix)` usa SCAN para encontrar keys con patron `{prefix}:{prefix}*`. No garantiza orden (limitacion de Redis SCAN)
+
+### Ejemplo con ioredis
+
+```typescript
+import Redis from "ioredis";
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const client = new Redis();
+const engine = new RedisEngine(client, "wa:5491112345678");
+
+const wa = new WhatsApp({ engine, phone: "5491112345678" });
+```
+
+### Ejemplo con redis
+
+```typescript
+import { createClient } from "redis";
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const client = createClient();
+await client.connect();
+
+const engine = new RedisEngine(client, "wa:mi-bot");
+const wa = new WhatsApp({ engine });
+```
+
+> **Orden:** A diferencia de FileEngine, `list()` en RedisEngine no ordena los resultados por fecha. Redis SCAN no garantiza orden. Si necesitas orden, considera manejar la logica en tu aplicacion.
 
 ---
 
 ## Crear un Engine personalizado
 
-Puedes crear tu propio engine para usar con Redis, MongoDB, PostgreSQL, etc.
-
-### Ejemplo: Redis Engine
-
-```typescript
-import type { Engine } from "@arcaelas/whatsapp";
-import { createClient } from "redis";
-
-export class RedisEngine implements Engine {
-  private client: ReturnType<typeof createClient>;
-
-  constructor(url: string) {
-    this.client = createClient({ url });
-  }
-
-  async connect() {
-    await this.client.connect();
-  }
-
-  async get(key: string): Promise<string | null> {
-    return await this.client.get(key);
-  }
-
-  async set(key: string, value: string | null): Promise<void> {
-    if (value === null) {
-      await this.client.del(key);
-    } else {
-      await this.client.set(key, value);
-    }
-  }
-
-  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-    const keys = await this.client.keys(`${prefix}*`);
-    return keys.slice(offset, offset + limit);
-  }
-}
-```
-
-### Uso
-
-```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
-import { RedisEngine } from "./RedisEngine";
-
-const engine = new RedisEngine("redis://localhost:6379");
-await engine.connect();
-
-const wa = new WhatsApp({ engine });
-```
+Puedes crear tu propio engine para usar con MongoDB, PostgreSQL, etc.
 
 ### Ejemplo: PostgreSQL Engine
 
@@ -237,7 +270,11 @@ export class PostgresEngine implements Engine {
 
   async set(key: string, value: string | null): Promise<void> {
     if (value === null) {
-      await this.pool.query("DELETE FROM storage WHERE key = $1", [key]);
+      // Cascade delete: eliminar key exacta y sub-keys
+      await this.pool.query(
+        "DELETE FROM storage WHERE key = $1 OR key LIKE $2",
+        [key, `${key}/%`]
+      );
     } else {
       await this.pool.query(
         `INSERT INTO storage (key, data, updated_at)
@@ -290,7 +327,11 @@ export class MemoryEngine implements Engine {
 
   async set(key: string, value: string | null): Promise<void> {
     if (value === null) {
+      // Cascade delete
       this.store.delete(key);
+      for (const k of this.store.keys()) {
+        if (k.startsWith(`${key}/`)) this.store.delete(k);
+      }
     } else {
       this.store.set(key, { data: value, time: Date.now() });
     }
@@ -306,29 +347,27 @@ export class MemoryEngine implements Engine {
 }
 ```
 
-!!! warning "Solo para testing"
-    Los datos se pierden al reiniciar. Deberas escanear el QR nuevamente.
+> **Solo para testing:** Los datos se pierden al reiniciar. Deberas escanear el QR nuevamente.
 
 ---
 
 ## Comparacion de Engines
 
-| Caracteristica | FileEngine | Redis | PostgreSQL | Memory |
-|---------------|------------|-------|------------|--------|
+| Caracteristica | FileEngine | RedisEngine | PostgreSQL | Memory |
+|---------------|------------|-------------|------------|--------|
 | Persistencia | Si | Si | Si | No |
 | Escalabilidad | Baja | Alta | Alta | N/A |
 | Latencia | Baja | Muy baja | Media | Muy baja |
 | Multi-instancia | No | Si | Si | No |
+| Orden en list() | Por mtime | Sin garantia | Por updated_at | Por tiempo |
 | Ideal para | Desarrollo | Cache + Prod | Produccion | Testing |
 
 ---
 
 ## Notas
 
-!!! info "Serializacion"
-    Todos los valores se almacenan como texto. Usa `JSON.stringify()` para
-    objetos y `BufferJSON` de Baileys para datos binarios.
+> **Serializacion:** Todos los valores se almacenan como texto. Usa `JSON.stringify()` para objetos y `BufferJSON` de Baileys para datos binarios.
 
-!!! tip "BufferJSON"
-    Baileys incluye `BufferJSON.replacer` y `BufferJSON.reviver` para
-    serializar/deserializar Buffers como base64 en JSON.
+> **BufferJSON:** Baileys incluye `BufferJSON.replacer` y `BufferJSON.reviver` para serializar/deserializar Buffers como base64 en JSON.
+
+> **Cascade delete critico:** Las implementaciones custom DEBEN soportar cascade delete en `set(key, null)`. Si solo eliminan la key exacta, la eliminacion de chats y mensajes dejara datos huerfanos en el engine.

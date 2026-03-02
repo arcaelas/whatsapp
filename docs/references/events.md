@@ -24,7 +24,7 @@ wa.event.once("open", () => {
 });
 
 // Remove listener
-const handler = (msg: Message) => console.log(msg);
+const handler = (msg: InstanceType<typeof wa.Message>) => console.log(msg);
 wa.event.on("message:created", handler);
 wa.event.off("message:created", handler);
 ```
@@ -47,7 +47,7 @@ wa.event.on("open", () => {
 
 ### close
 
-Emitted when connection is closed.
+Emitted when connection is closed. The library auto-reconnects after 3 seconds unless logged out.
 
 ```typescript
 wa.event.on("close", () => {
@@ -59,7 +59,7 @@ wa.event.on("close", () => {
 
 ### error
 
-Emitted on connection error.
+Emitted on connection error (e.g. logged out).
 
 ```typescript
 wa.event.on("error", (error) => {
@@ -98,18 +98,6 @@ wa.event.on("contact:updated", (contact) => {
 
 **Payload:** `Contact`
 
-### contact:deleted
-
-Emitted when a contact is deleted.
-
-```typescript
-wa.event.on("contact:deleted", (contact) => {
-  console.log(`Contact deleted: ${contact.id}`);
-});
-```
-
-**Payload:** `Contact`
-
 ---
 
 ## Chat events
@@ -119,12 +107,13 @@ wa.event.on("contact:deleted", (contact) => {
 Emitted when a new chat is created.
 
 ```typescript
-wa.event.on("chat:created", (chat) => {
+wa.event.on("chat:created", async (chat) => {
   console.log(`New chat: ${chat.name}`);
   console.log(`Type: ${chat.type}`);
 
   if (chat.type === "group") {
-    console.log("New group!");
+    const members = await chat.members(0, 100);
+    console.log(`Members: ${members.length}`);
   }
 });
 ```
@@ -133,23 +122,59 @@ wa.event.on("chat:created", (chat) => {
 
 ### chat:updated
 
-Emitted when a chat is updated.
+Emitted when a chat is updated (name change, unread count, etc.). Not emitted when pin/archive/mute changes occur -- those have their own dedicated events.
 
 ```typescript
 wa.event.on("chat:updated", (chat) => {
   console.log(`Chat updated: ${chat.name}`);
-
-  if (chat.archived) {
-    console.log("Chat was archived");
-  }
-
-  if (chat.muted > 0) {
-    console.log(`Muted until: ${new Date(chat.muted)}`);
-  }
 });
 ```
 
 **Payload:** `Chat`
+
+### chat:pined
+
+Emitted when a chat is pinned or unpinned.
+
+```typescript
+wa.event.on("chat:pined", (cid, pined) => {
+  if (pined) {
+    console.log(`Chat ${cid} pinned at ${new Date(pined)}`);
+  } else {
+    console.log(`Chat ${cid} unpinned`);
+  }
+});
+```
+
+**Payload:** `[cid: string, pined: number | null]`
+
+### chat:archived
+
+Emitted when a chat is archived or unarchived.
+
+```typescript
+wa.event.on("chat:archived", (cid, archived) => {
+  console.log(`Chat ${cid} ${archived ? "archived" : "unarchived"}`);
+});
+```
+
+**Payload:** `[cid: string, archived: boolean]`
+
+### chat:muted
+
+Emitted when a chat is muted or unmuted.
+
+```typescript
+wa.event.on("chat:muted", (cid, muted) => {
+  if (muted) {
+    console.log(`Chat ${cid} muted until ${new Date(muted)}`);
+  } else {
+    console.log(`Chat ${cid} unmuted`);
+  }
+});
+```
+
+**Payload:** `[cid: string, muted: number | null]`
 
 ### chat:deleted
 
@@ -242,9 +267,11 @@ interface WhatsAppEventMap {
   error: [error: Error];
   "contact:created": [contact: Contact];
   "contact:updated": [contact: Contact];
-  "contact:deleted": [contact: Contact];
   "chat:created": [chat: Chat];
   "chat:updated": [chat: Chat];
+  "chat:pined": [cid: string, pined: number | null];
+  "chat:archived": [cid: string, archived: boolean];
+  "chat:muted": [cid: string, muted: number | null];
   "chat:deleted": [cid: string];
   "message:created": [message: Message];
   "message:updated": [message: Message];
@@ -258,7 +285,7 @@ interface WhatsAppEventMap {
 ## Complete example
 
 ```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
+import { WhatsApp, MESSAGE_STATUS } from "@arcaelas/whatsapp";
 
 async function main() {
   const wa = new WhatsApp();
@@ -290,37 +317,52 @@ async function main() {
     console.log(`[CHAT+] ${chat.name} (${chat.type})`);
 
     if (chat.type === "group") {
-      const members = await wa.Chat.members(chat.id, 0, 100);
+      const members = await chat.members(0, 100);
       console.log(`  Members: ${members.length}`);
     }
   });
 
   wa.event.on("chat:updated", (chat) => {
-    const flags = [];
-    if (chat.pined) flags.push("pinned");
-    if (chat.archived) flags.push("archived");
-    if (chat.muted > 0) flags.push("muted");
+    console.log(`[CHAT~] ${chat.name}`);
+  });
 
-    console.log(`[CHAT~] ${chat.name} [${flags.join(", ")}]`);
+  wa.event.on("chat:pined", (cid, pined) => {
+    console.log(`[PIN] ${cid} ${pined ? "pinned" : "unpinned"}`);
+  });
+
+  wa.event.on("chat:archived", (cid, archived) => {
+    console.log(`[ARCHIVE] ${cid} ${archived ? "archived" : "unarchived"}`);
+  });
+
+  wa.event.on("chat:muted", (cid, muted) => {
+    console.log(`[MUTE] ${cid} ${muted ? `until ${new Date(muted)}` : "unmuted"}`);
   });
 
   // Message events
   wa.event.on("message:created", async (msg) => {
-    const direction = msg.me ? "→" : "←";
+    const direction = msg.me ? "->" : "<-";
     console.log(`[MSG${direction}] ${msg.type} in ${msg.cid}`);
 
     if (!msg.me && msg.type === "text") {
       const text = (await msg.content()).toString();
 
       if (text.toLowerCase() === "ping") {
-        await wa.Message.text(msg.cid, "pong!");
+        await msg.text("pong!");
       }
     }
   });
 
   wa.event.on("message:updated", (msg) => {
-    const status_names = ["PENDING", "SENT", "RECEIVED", "READ", "PLAYED"];
-    console.log(`[MSG~] ${msg.id} → ${status_names[msg.status]}`);
+    const status_names = ["ERROR", "PENDING", "SERVER_ACK", "DELIVERED", "READ", "PLAYED"];
+    console.log(`[MSG~] ${msg.id} -> ${status_names[msg.status]}`);
+  });
+
+  wa.event.on("message:deleted", (cid, mid) => {
+    console.log(`[MSG-] ${mid} in ${cid}`);
+  });
+
+  wa.event.on("message:reacted", (cid, mid, emoji) => {
+    console.log(`[REACT] ${emoji} on ${mid}`);
   });
 
   // Connect
