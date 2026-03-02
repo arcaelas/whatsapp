@@ -137,6 +137,7 @@ register_command({
 ### src/index.ts
 
 ```typescript
+import { writeFileSync } from "fs";
 import { WhatsApp } from "@arcaelas/whatsapp";
 import { commands, CommandContext } from "./commands";
 
@@ -189,7 +190,7 @@ async function main() {
   // Connect
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      writeFileSync("qr.png", data);
       console.log("Scan qr.png");
     }
   });
@@ -265,7 +266,7 @@ register_command({
     const chat = await wa.Chat.get(cid);
     if (!chat) return;
 
-    const members = await wa.Chat.members(cid, 0, 1000);
+    const members = await chat.members(0, 1000);
 
     await wa.Message.text(
       cid,
@@ -289,10 +290,10 @@ npx tsx src/index.ts
 ## Usage
 
 ```
-!ping          → pong!
-!help          → Command list
-!time          → 2:30:45 PM - Monday, January 1, 2025
-!say Hello     → Hello
-!dice 20       → 20-sided dice: 15
-!group         → Group information
+!ping          -> pong!
+!help          -> Command list
+!time          -> 2:30:45 PM - Monday, January 1, 2025
+!say Hello     -> Hello
+!dice 20       -> 20-sided dice: 15
+!group         -> Group information
 ```

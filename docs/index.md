@@ -11,7 +11,7 @@
 
 - **Simplified connection** - QR or pairing code in a single call
 - **Typed events** - Full TypeScript with autocomplete
-- **Flexible persistence** - FileEngine by default, or implement your own Engine
+- **Flexible persistence** - FileEngine by default, RedisEngine included, or implement your own Engine
 - **Intuitive classes** - Chat, Contact, Message with static methods
 - **Multiple message types** - text, image, video, audio, location, poll
 - **Group management** - List members, archive, mute, pin
@@ -22,6 +22,7 @@
 ## Quick Start
 
 ```typescript
+import { writeFileSync } from "fs";
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 // Create instance
@@ -38,7 +39,7 @@ wa.event.on("error", (err) => console.error("Error:", err.message));
 await wa.pair(async (data) => {
   if (Buffer.isBuffer(data)) {
     // QR code as PNG image
-    require("fs").writeFileSync("qr.png", data);
+    writeFileSync("qr.png", data);
     console.log("Scan the QR in qr.png");
   } else {
     // Pairing code (8 digits)
@@ -105,33 +106,47 @@ wa.event.on("message:created", async (msg) => {
 
 ## Persistence Engine
 
-By default `FileEngine` is used. You can implement your own engine:
+By default `FileEngine` is used. The library also includes a `RedisEngine`, or you can implement your own:
 
-=== "FileEngine (default)"
-    ```typescript
-    import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
+**FileEngine (default)**
 
-    const wa = new WhatsApp({
-      engine: new FileEngine(".baileys/my-bot"),
-    });
-    ```
+```typescript
+import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
 
-=== "Custom engine"
-    ```typescript
-    import { WhatsApp } from "@arcaelas/whatsapp";
-    import type { Engine } from "@arcaelas/whatsapp";
+const wa = new WhatsApp({
+  engine: new FileEngine(".baileys/my-bot"),
+});
+```
 
-    // Implement the Engine interface
-    class RedisEngine implements Engine {
-      async get(key: string): Promise<string | null> { /* ... */ }
-      async set(key: string, value: string | null): Promise<void> { /* ... */ }
-      async list(prefix: string, offset?: number, limit?: number): Promise<string[]> { /* ... */ }
-    }
+**RedisEngine (included)**
 
-    const wa = new WhatsApp({
-      engine: new RedisEngine(),
-    });
-    ```
+```typescript
+import Redis from "ioredis";
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const client = new Redis();
+const wa = new WhatsApp({
+  engine: new RedisEngine(client, "wa:my-bot"),
+});
+```
+
+**Custom engine**
+
+```typescript
+import { WhatsApp } from "@arcaelas/whatsapp";
+import type { Engine } from "@arcaelas/whatsapp";
+
+// Implement the Engine interface
+class MyCustomEngine implements Engine {
+  async get(key: string): Promise<string | null> { /* ... */ }
+  async set(key: string, value: string | null): Promise<void> { /* ... */ }
+  async list(prefix: string, offset?: number, limit?: number): Promise<string[]> { /* ... */ }
+}
+
+const wa = new WhatsApp({
+  engine: new MyCustomEngine(),
+});
+```
 
 ---
 
@@ -154,14 +169,6 @@ By default `FileEngine` is used. You can implement your own engine:
     Step by step tutorial to create your first bot
 
     [:octicons-arrow-right-24: Start](getting-started.md)
-
--   :material-api:{ .lg .middle } **API References**
-
-    ---
-
-    Complete documentation of all classes
-
-    [:octicons-arrow-right-24: View API](references/whatsapp.md)
 
 -   :material-code-tags:{ .lg .middle } **Examples**
 

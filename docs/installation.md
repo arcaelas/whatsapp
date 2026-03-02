@@ -54,22 +54,27 @@ When using `FileEngine` (default), the library creates the following structure:
 .baileys/
   default/                    # or the name you specify
     session/
-      {key}/index             # Session data (creds, keys, etc.)
+      creds                   # Authentication credentials
+      {type}/
+        {id}                  # Signal keys (e.g. session/app-state-sync-key/abc123)
+    lid/
+      {lid}                   # Reverse index: LID -> JID
     contact/
-      {jid}/index             # Contact data
+      {jid}/index             # Contact data (IContactRaw JSON)
     chat/
       {jid}/
-        index                 # Chat data
+        index                 # Chat data (IChatRaw JSON)
+        messages              # Message index: "TIMESTAMP MID" per line
         message/
-          index               # Index "MID TIMESTAMP" per line
           {mid}/
-            index             # Message metadata (JSON)
-            content           # Binary content (media)
+            index             # Message metadata (IMessageIndex JSON)
+            raw               # Full WAMessage raw (JSON)
+            content           # Binary content base64 (media)
 ```
 
 !!! note "ID normalization"
     The `@` characters in JIDs are replaced with `_at_` in directory names.
-    Example: `5491112345678@s.whatsapp.net` → `5491112345678_at_s.whatsapp.net`
+    Example: `5491112345678@s.whatsapp.net` -> `5491112345678_at_s.whatsapp.net`
 
 !!! tip "Tip"
     Add `.baileys/` to your `.gitignore` to avoid uploading credentials to the repository.

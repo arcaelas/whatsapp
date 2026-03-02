@@ -35,6 +35,8 @@ Each Message instance has the following properties:
 | `edited` | `boolean` | Edited message |
 | `created_at` | `number` | Creation timestamp (ms) |
 | `deleted_at` | `number \| null` | Expiration timestamp (ms) for ephemeral messages |
+| `index` | `IMessageIndex` | Message index data |
+| `raw` | `WAMessage` | Protocol raw WAMessage |
 
 ### MessageType
 
@@ -55,19 +57,55 @@ enum MESSAGE_STATUS {
 }
 ```
 
+### IMessageIndex
+
+```typescript
+interface IMessageIndex {
+  id: string;
+  cid: string;
+  mid: string | null;
+  me: boolean;
+  type: MessageType;
+  author: string;
+  status: MESSAGE_STATUS;
+  starred: boolean;
+  forwarded: boolean;
+  created_at: number;
+  deleted_at: number | null;
+  mime: string;
+  caption: string;
+  edited: boolean;
+}
+```
+
+### IMessage
+
+```typescript
+interface IMessage {
+  index: IMessageIndex;
+  raw: WAMessage;
+}
+```
+
 ---
 
 ## Instance methods
 
-### content()
+### stream()
 
-Gets the message content as Buffer.
+Gets the message content as a Readable stream. For text messages returns the text as a stream, for location/poll returns JSON. For media (image, video, audio) downloads from WhatsApp.
 
 ```typescript
-const buffer = await msg.content(): Promise<Buffer>
+await msg.stream(): Promise<Readable>
 ```
 
-**Returns:** `Promise<Buffer>` - Message content
+### content()
+
+Gets the message content as Buffer. Uses cache from the engine when available, otherwise reads from `stream()`.
+
+```typescript
+await msg.content(): Promise<Buffer>
+```
 
 **Example:**
 
@@ -81,6 +119,148 @@ wa.event.on("message:created", async (msg) => {
 
   if (msg.type === "image") {
     require("fs").writeFileSync("image.jpg", buffer);
+  }
+});
+```
+
+### edit()
+
+Edits the message text or caption. Only works on own messages (`me === true`). Returns `false` if no socket or not own message.
+
+```typescript
+await msg.edit(text: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+const msg = await wa.Message.text("5491112345678@s.whatsapp.net", "Helllo!");
+if (msg) {
+  await msg.edit("Hello!");
+}
+```
+
+!!! warning "Limitation"
+    You can only edit your own messages.
+
+### remove()
+
+Deletes the message for everyone. Removes from the chat message index and performs cascade delete of stored message data.
+
+```typescript
+await msg.remove(): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+const msg = await wa.Message.get("5491112345678@s.whatsapp.net", "MESSAGE_ID");
+if (msg) {
+  await msg.remove();
+}
+```
+
+### forward()
+
+Forwards the message to another chat. Tries to use the native Baileys forward mechanism first, falls back to re-sending the content.
+
+```typescript
+await msg.forward(to_cid: string): Promise<boolean>
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `to_cid` | `string` | Destination chat ID |
+
+**Example:**
+
+```typescript
+wa.event.on("message:created", async (msg) => {
+  if (msg.type === "image") {
+    // Forward image to another chat
+    await msg.forward("123456789@g.us");
+  }
+});
+```
+
+### react()
+
+Reacts to the message with an emoji. Pass an empty string to remove the reaction.
+
+```typescript
+await msg.react(emoji: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+wa.event.on("message:created", async (msg) => {
+  if (!msg.me && msg.type === "image") {
+    await msg.react("👍");
+  }
+});
+
+// Remove reaction
+await msg.react("");
+```
+
+### Reply methods
+
+Instance methods that reply to the current message (using the current message as quoted/parent). All return `Promise<Message | null>`.
+
+#### text()
+
+```typescript
+await msg.text(content: string): Promise<Message | null>
+```
+
+#### image()
+
+```typescript
+await msg.image(buffer: Buffer, caption?: string): Promise<Message | null>
+```
+
+#### video()
+
+```typescript
+await msg.video(buffer: Buffer, caption?: string): Promise<Message | null>
+```
+
+#### audio()
+
+```typescript
+await msg.audio(buffer: Buffer, ptt?: boolean): Promise<Message | null>
+```
+
+#### location()
+
+```typescript
+await msg.location(opts: LocationOptions): Promise<Message | null>
+```
+
+#### poll()
+
+```typescript
+await msg.poll(opts: PollOptions): Promise<Message | null>
+```
+
+**Example:**
+
+```typescript
+wa.event.on("message:created", async (msg) => {
+  if (msg.me) return;
+
+  const text = (await msg.content()).toString();
+
+  if (text === "!ping") {
+    // Reply to the message
+    await msg.text("pong!");
+  }
+
+  if (text === "!location") {
+    await msg.location({ lat: -34.6037, lng: -58.3816 });
   }
 });
 ```
@@ -104,14 +284,55 @@ const msg = await wa.Message.get(cid: string, mid: string): Promise<Message | nu
 | `cid` | `string` | Chat ID |
 | `mid` | `string` | Message ID |
 
+### list()
+
+Lists messages from a chat with pagination. Messages are ordered by most recent first.
+
+```typescript
+const messages = await wa.Message.list(cid: string, offset?: number, limit?: number): Promise<Message[]>
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cid` | `string` | - | Chat ID |
+| `offset` | `number` | `0` | Starting position |
+| `limit` | `number` | `50` | Maximum messages |
+
+**Example:**
+
+```typescript
+const messages = await wa.Message.list("5491112345678@s.whatsapp.net", 0, 100);
+for (const msg of messages) {
+  console.log(`${msg.type}: ${msg.caption}`);
+}
+```
+
+### count()
+
+Counts messages in a chat.
+
+```typescript
+const count = await wa.Message.count(cid: string): Promise<number>
+```
+
+**Example:**
+
+```typescript
+const count = await wa.Message.count("5491112345678@s.whatsapp.net");
+console.log(`Total messages: ${count}`);
+```
+
 ### text()
 
-Sends a text message.
+Sends a text message. Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.text(
   cid: string,
-  text: string
+  text: string,
+  mid?: string
 ): Promise<Message | null>
 ```
 
@@ -121,22 +342,28 @@ const msg = await wa.Message.text(
 |-----------|------|-------------|
 | `cid` | `string` | Chat ID |
 | `text` | `string` | Message text |
+| `mid` | `string` | (optional) Message ID to reply to |
 
 **Example:**
 
 ```typescript
+// Simple message
 await wa.Message.text("5491112345678@s.whatsapp.net", "Hello!");
+
+// Reply to a message
+await wa.Message.text("5491112345678@s.whatsapp.net", "Reply!", "MESSAGE_ID");
 ```
 
 ### image()
 
-Sends an image.
+Sends an image. Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.image(
   cid: string,
   buffer: Buffer,
-  caption?: string
+  caption?: string,
+  mid?: string
 ): Promise<Message | null>
 ```
 
@@ -145,17 +372,21 @@ const msg = await wa.Message.image(
 ```typescript
 const img = require("fs").readFileSync("photo.jpg");
 await wa.Message.image("5491112345678@s.whatsapp.net", img, "Check this out!");
+
+// Reply with image
+await wa.Message.image("5491112345678@s.whatsapp.net", img, "Here!", "MESSAGE_ID");
 ```
 
 ### video()
 
-Sends a video.
+Sends a video. Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.video(
   cid: string,
   buffer: Buffer,
-  caption?: string
+  caption?: string,
+  mid?: string
 ): Promise<Message | null>
 ```
 
@@ -168,13 +399,14 @@ await wa.Message.video("5491112345678@s.whatsapp.net", vid, "Interesting video")
 
 ### audio()
 
-Sends an audio (voice note).
+Sends an audio (voice note by default). Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.audio(
   cid: string,
   buffer: Buffer,
-  ptt?: boolean
+  ptt?: boolean,
+  mid?: string
 ): Promise<Message | null>
 ```
 
@@ -185,6 +417,7 @@ const msg = await wa.Message.audio(
 | `cid` | `string` | - | Chat ID |
 | `buffer` | `Buffer` | - | Audio data |
 | `ptt` | `boolean` | `true` | Push-to-talk (voice note) |
+| `mid` | `string` | - | (optional) Message ID to reply to |
 
 **Example:**
 
@@ -198,13 +431,24 @@ await wa.Message.audio("5491112345678@s.whatsapp.net", audio, false);
 
 ### location()
 
-Sends a location.
+Sends a location. Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.location(
   cid: string,
-  coords: { lat: number; lng: number }
+  opts: LocationOptions,
+  mid?: string
 ): Promise<Message | null>
+```
+
+**LocationOptions:**
+
+```typescript
+interface LocationOptions {
+  lat: number;
+  lng: number;
+  live?: boolean;
+}
 ```
 
 **Example:**
@@ -218,12 +462,13 @@ await wa.Message.location("5491112345678@s.whatsapp.net", {
 
 ### poll()
 
-Creates a poll.
+Creates a poll. Pass `mid` to quote/reply to a specific message.
 
 ```typescript
 const msg = await wa.Message.poll(
   cid: string,
-  poll: PollOptions
+  opts: PollOptions,
+  mid?: string
 ): Promise<Message | null>
 ```
 
@@ -249,74 +494,9 @@ await wa.Message.poll("123456789@g.us", {
 });
 ```
 
-### react()
-
-Reacts to a message.
-
-```typescript
-const success = await wa.Message.react(
-  cid: string,
-  mid: string,
-  emoji: string
-): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-// Add reaction
-await wa.Message.react(msg.cid, msg.id, "👍");
-
-// Remove reaction
-await wa.Message.react(msg.cid, msg.id, "");
-```
-
-### remove()
-
-Deletes a message.
-
-```typescript
-const success = await wa.Message.remove(cid: string, mid: string): Promise<boolean>
-```
-
-### forward()
-
-Forwards a message to another chat.
-
-```typescript
-const success = await wa.Message.forward(
-  cid: string,
-  mid: string,
-  to_cid: string
-): Promise<boolean>
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `cid` | `string` | Original chat ID |
-| `mid` | `string` | Message ID to forward |
-| `to_cid` | `string` | Destination chat ID |
-
-### edit()
-
-Edits a text message.
-
-```typescript
-const success = await wa.Message.edit(
-  cid: string,
-  mid: string,
-  text: string
-): Promise<boolean>
-```
-
-!!! warning "Limitation"
-    You can only edit your own messages.
-
 ### watch()
 
-Observes changes on a specific message.
+Observes changes on a specific message (status updates, edits, etc.).
 
 ```typescript
 const unsubscribe = wa.Message.watch(
@@ -347,14 +527,6 @@ const unsubscribe = wa.Message.watch(msg.cid, msg.id, (updated) => {
 unsubscribe();
 ```
 
-### notify()
-
-Notifies watchers of a message update (internal use).
-
-```typescript
-wa.Message.notify(cid: string, mid: string): void
-```
-
 ---
 
 ## Complete example
@@ -369,7 +541,8 @@ wa.event.on("message:created", async (msg) => {
     console.log(`Text: ${text}`);
 
     if (text === "!ping") {
-      await wa.Message.text(msg.cid, "pong!");
+      // Reply to the message
+      await msg.text("pong!");
     }
   }
 
@@ -378,8 +551,8 @@ wa.event.on("message:created", async (msg) => {
     const buffer = await msg.content();
     console.log(`Image: ${buffer.length} bytes`);
 
-    // Reply with reaction
-    await wa.Message.react(msg.cid, msg.id, "👍");
+    // React to the message
+    await msg.react("👍");
   }
 
   // Handle polls
@@ -388,5 +561,26 @@ wa.event.on("message:created", async (msg) => {
     const poll = JSON.parse(buffer.toString());
     console.log(`Poll: ${poll.content}`);
   }
+
+  // Forward any media to a backup group
+  if (["image", "video", "audio"].includes(msg.type)) {
+    await msg.forward("123456789@g.us");
+  }
 });
+
+// Track message delivery
+wa.event.on("message:created", async (msg) => {
+  if (!msg.me) return;
+
+  const unsubscribe = wa.Message.watch(msg.cid, msg.id, (updated) => {
+    if (updated.status >= 3) {
+      console.log(`Message ${msg.id} delivered`);
+      unsubscribe();
+    }
+  });
+});
+
+// Count messages in a chat
+const count = await wa.Message.count("5491112345678@s.whatsapp.net");
+console.log(`Total messages: ${count}`);
 ```

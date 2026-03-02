@@ -189,7 +189,8 @@ async function main() {
   // Conectar
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      const fs = await import("fs");
+      fs.writeFileSync("qr.png", data);
       console.log("Escanea qr.png");
     }
   });
@@ -265,7 +266,7 @@ register_command({
     const chat = await wa.Chat.get(cid);
     if (!chat) return;
 
-    const members = await wa.Chat.members(cid, 0, 1000);
+    const members = await chat.members(0, 1000);
 
     await wa.Message.text(
       cid,

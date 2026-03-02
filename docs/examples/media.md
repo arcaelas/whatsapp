@@ -129,7 +129,7 @@ wa.event.on("message:created", async (msg) => {
     const prev_msg = await wa.Message.get(msg.cid, "PREVIOUS_MESSAGE_ID");
 
     if (prev_msg && ["image", "video", "audio"].includes(prev_msg.type)) {
-      await wa.Message.forward(msg.cid, prev_msg.id, target_jid);
+      await prev_msg.forward(target_jid);
       await wa.Message.text(msg.cid, "Media forwarded!");
     }
   }

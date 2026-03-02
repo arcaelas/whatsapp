@@ -7,6 +7,7 @@ Simple bot that responds to text messages.
 ## Complete code
 
 ```typescript title="bot.ts"
+import { writeFileSync } from "fs";
 import { WhatsApp } from "@arcaelas/whatsapp";
 
 async function main() {
@@ -62,7 +63,7 @@ async function main() {
   console.log("[INFO] Starting bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      writeFileSync("qr.png", data);
       console.log("[INFO] QR saved to qr.png");
     } else {
       console.log("[INFO] Code:", data);
@@ -99,10 +100,10 @@ npx tsx bot.ts
 Send these messages to the connected WhatsApp:
 
 ```
-hello     → Hello! How can I help you?
-ping      → pong!
-time      → Current time: 1/1/2025, 2:30:00 PM
-help      → Available commands list
+hello     -> Hello! How can I help you?
+ping      -> pong!
+time      -> Current time: 1/1/2025, 2:30:00 PM
+help      -> Available commands list
 ```
 
 ---

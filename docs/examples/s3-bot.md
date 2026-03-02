@@ -7,61 +7,31 @@ Production bot using a custom engine for storage.
 ## Description
 
 This example shows how to create a bot that uses a custom engine
-(Redis, PostgreSQL, S3, etc.) instead of the default FileEngine.
+(PostgreSQL, S3, etc.) instead of the default FileEngine.
+
+The library already includes `RedisEngine` as an official export, so you can use it directly
+without implementing your own.
 
 ---
 
-## Example: Redis Engine
-
-### Create the engine
-
-```typescript title="RedisEngine.ts"
-import type { Engine } from "@arcaelas/whatsapp";
-import { createClient } from "redis";
-
-export class RedisEngine implements Engine {
-  private client: ReturnType<typeof createClient>;
-
-  constructor(url: string) {
-    this.client = createClient({ url });
-  }
-
-  async connect() {
-    await this.client.connect();
-  }
-
-  async get(key: string): Promise<string | null> {
-    return await this.client.get(key);
-  }
-
-  async set(key: string, value: string | null): Promise<void> {
-    if (value === null) {
-      await this.client.del(key);
-    } else {
-      await this.client.set(key, value);
-    }
-  }
-
-  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-    const keys = await this.client.keys(`${prefix}*`);
-    return keys.slice(offset, offset + limit);
-  }
-}
-```
+## Example: Using the built-in RedisEngine
 
 ### Use the engine
 
 ```typescript title="bot.ts"
-import { WhatsApp } from "@arcaelas/whatsapp";
-import { RedisEngine } from "./RedisEngine";
+import { writeFileSync } from "fs";
+import Redis from "ioredis";
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
 import "dotenv/config";
 
 async function main() {
-  // Create Redis engine
-  const engine = new RedisEngine(process.env.REDIS_URL || "redis://localhost:6379");
-  await engine.connect();
+  // Create Redis connection
+  const client = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
-  // Create instance with custom engine
+  // Use the built-in RedisEngine
+  const engine = new RedisEngine(client, "wa:my-bot");
+
+  // Create instance with Redis engine
   const wa = new WhatsApp({ engine });
 
   // Logging
@@ -110,7 +80,7 @@ async function main() {
   console.log("[INFO] Starting bot...");
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("/tmp/qr.png", data);
+      writeFileSync("/tmp/qr.png", data);
       console.log("[INFO] QR saved to /tmp/qr.png");
     } else {
       console.log("[INFO] Code:", data);
@@ -130,6 +100,39 @@ main().catch((e) => {
   console.error("[FATAL]", e);
   process.exit(1);
 });
+```
+
+---
+
+## Custom Engine Example
+
+If you need a different backend, implement the `Engine` interface.
+The key contract for `set(key, null)` is that it must delete the key AND all sub-keys
+with that prefix (cascade delete).
+
+```typescript title="CustomEngine.ts"
+import type { Engine } from "@arcaelas/whatsapp";
+
+class MyEngine implements Engine {
+  async get(key: string): Promise<string | null> {
+    // Return stored value or null
+  }
+
+  async set(key: string, value: string | null): Promise<void> {
+    if (value === null) {
+      // IMPORTANT: Must cascade delete.
+      // Delete the exact key AND all keys starting with key + "/"
+      // Example: set("chat/123", null) must also delete
+      //   chat/123/index, chat/123/messages, chat/123/message/*/*, etc.
+    } else {
+      // Store the value
+    }
+  }
+
+  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
+    // Return keys matching prefix, ordered by most recent
+  }
+}
 ```
 
 ---
@@ -204,10 +207,3 @@ server.listen(3000, () => {
 REDIS_URL=redis://localhost:6379
 BOT_PREFIX=!
 ```
-
----
-
-## Other engines
-
-Check the [Engines](../references/engines.md) documentation for
-examples of PostgreSQL, MongoDB, and others.

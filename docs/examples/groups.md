@@ -14,7 +14,7 @@ if (chat && chat.type === "group") {
   console.log(`ID: ${chat.id}`);
 
   // Members
-  const members = await wa.Chat.members(chat.id, 0, 1000);
+  const members = await chat.members(0, 1000);
   console.log(`Members: ${members.length}`);
 
   for (const member of members) {
@@ -96,11 +96,15 @@ wa.event.on("message:created", async (msg) => {
 
 ```typescript
 const group_id = "123456789@g.us";
-const members = await wa.Chat.members(group_id, 0, 1000);
+const chat = await wa.Chat.get(group_id);
 
-console.log(`Group has ${members.length} members:`);
-for (const member of members) {
-  console.log(`  - ${member.name}: ${member.phone}`);
+if (chat) {
+  const members = await chat.members(0, 1000);
+
+  console.log(`Group has ${members.length} members:`);
+  for (const member of members) {
+    console.log(`  - ${member.name}: ${member.phone}`);
+  }
 }
 ```
 
@@ -117,7 +121,7 @@ async function export_group_members(wa: WhatsApp, group_id: string) {
     throw new Error("Group not found");
   }
 
-  const members = await wa.Chat.members(group_id, 0, 10000);
+  const members = await chat.members(0, 10000);
 
   const data = {
     group: {
@@ -159,7 +163,7 @@ wa.event.on("message:created", async (msg) => {
     case "info":
       const chat = await wa.Chat.get(msg.cid);
       if (chat) {
-        const members = await wa.Chat.members(msg.cid, 0, 1000);
+        const members = await chat.members(0, 1000);
         await wa.Message.text(
           msg.cid,
           `*${chat.name}*\n\n` +
@@ -170,9 +174,12 @@ wa.event.on("message:created", async (msg) => {
       break;
 
     case "members":
-      const group_members = await wa.Chat.members(msg.cid, 0, 50);
-      const list = group_members.map(m => `- ${m.name}`).join("\n");
-      await wa.Message.text(msg.cid, `*Members:*\n${list}`);
+      const group_chat = await wa.Chat.get(msg.cid);
+      if (group_chat) {
+        const group_members = await group_chat.members(0, 50);
+        const list = group_members.map(m => `- ${m.name}`).join("\n");
+        await wa.Message.text(msg.cid, `*Members:*\n${list}`);
+      }
       break;
   }
 });

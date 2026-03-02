@@ -90,7 +90,6 @@ wa.event.on("contact:created", (contact) => {
   console.log(`Nuevo contacto: ${contact.name}`);
   console.log(`  ID: ${contact.id}`);
   console.log(`  Telefono: ${contact.phone}`);
-  console.log(`  Es yo: ${contact.me}`);
 });
 ```
 
@@ -223,7 +222,13 @@ wa.event.on("message:created", async (msg) => {
   console.log(`  Chat: ${msg.cid}`);
   console.log(`  Tipo: ${msg.type}`);
   console.log(`  Mio: ${msg.me}`);
+  console.log(`  Autor: ${msg.author}`);
   console.log(`  Caption: ${msg.caption}`);
+  console.log(`  Creado: ${new Date(msg.created_at)}`);
+
+  if (msg.mid) {
+    console.log(`  Respuesta a: ${msg.mid}`);
+  }
 
   // Obtener contenido
   if (msg.type === "text") {
@@ -239,7 +244,9 @@ wa.event.on("message:created", async (msg) => {
 
 - `id` - ID del mensaje
 - `cid` - JID del chat
+- `mid` - ID del mensaje padre (reply) o `null`
 - `me` - true si es mensaje propio
+- `author` - JID del autor del mensaje
 - `type` - Tipo de mensaje (text, image, video, audio, location, poll)
 - `mime` - MIME type
 - `caption` - Caption/texto
@@ -247,6 +254,8 @@ wa.event.on("message:created", async (msg) => {
 - `starred` - true si esta destacado
 - `forwarded` - true si fue reenviado
 - `edited` - true si fue editado
+- `created_at` - Timestamp de creacion en milisegundos
+- `deleted_at` - Timestamp de expiracion en ms o `null`
 
 ---
 
@@ -344,7 +353,7 @@ function setup_logger(wa: WhatsApp) {
 
   // Mensajes
   wa.event.on("message:created", (m) =>
-    console.log(`[MSG:NEW] ${m.cid} <- ${m.type}`)
+    console.log(`[MSG:NEW] ${m.cid} <- ${m.type} by ${m.author}`)
   );
   wa.event.on("message:updated", (m) =>
     console.log(`[MSG:EDIT] ${m.id}`)
@@ -384,7 +393,7 @@ wa.event.on("message:created", async (msg) => {
 ### Cola de procesamiento
 
 ```typescript
-const queue: Message[] = [];
+const queue: Array<{ id: string; cid: string; type: string }> = [];
 let processing = false;
 
 wa.event.on("message:created", (msg) => {
@@ -408,7 +417,7 @@ async function process_queue() {
   process_queue();
 }
 
-async function handle_message(msg: Message) {
+async function handle_message(msg: any) {
   // Procesar mensaje
 }
 ```

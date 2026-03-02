@@ -118,7 +118,8 @@ async function main() {
   // Conectar
   await wa.pair(async (data) => {
     if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
+      const fs = await import("fs");
+      fs.writeFileSync("qr.png", data);
       console.log("Escanea qr.png");
     }
   });
@@ -172,7 +173,8 @@ wa.event.on("message:created", async (msg) => {
       console.log(`Caption: ${msg.caption}`);
     }
     // Guardar imagen
-    require("fs").writeFileSync("imagen.jpg", buffer);
+    const fs = await import("fs");
+    fs.writeFileSync("imagen.jpg", buffer);
   }
 
   // Video
@@ -216,15 +218,16 @@ await wa.Message.text(cid, "Hola!");
 await wa.Message.text(cid, "Respuesta", "MESSAGE_ID_TO_QUOTE");
 
 // Imagen con caption
-const img = require("fs").readFileSync("foto.jpg");
+import * as fs from "fs";
+const img = fs.readFileSync("foto.jpg");
 await wa.Message.image(cid, img, "Mira esta foto!");
 
 // Video
-const vid = require("fs").readFileSync("video.mp4");
+const vid = fs.readFileSync("video.mp4");
 await wa.Message.video(cid, vid, "Video interesante");
 
 // Audio (nota de voz)
-const aud = require("fs").readFileSync("audio.ogg");
+const aud = fs.readFileSync("audio.ogg");
 await wa.Message.audio(cid, aud);
 
 // Ubicacion
@@ -257,15 +260,15 @@ wa.event.on("message:created", async (msg) => {
 
   // Reaccionar con emoji
   if (text.includes("gracias")) {
-    await wa.Message.react(msg.cid, msg.id, "❤️");
+    await msg.react("❤️");
   }
 
   if (text.includes("jaja")) {
-    await wa.Message.react(msg.cid, msg.id, "😂");
+    await msg.react("😂");
   }
 
   // Quitar reaccion
-  // await wa.Message.react(msg.cid, msg.id, "");
+  // await msg.react("");
 });
 ```
 
@@ -286,7 +289,7 @@ wa.event.on("message:created", async (msg) => {
 
 Ahora que tienes un bot basico funcionando, explora la documentacion detallada:
 
-- [Referencia de WhatsApp](references/whatsapp.md) - Configuracion y eventos
-- [Referencia de Chat](references/chat.md) - Gestion de conversaciones
-- [Referencia de Message](references/message.md) - Tipos de mensaje
-- [Ejemplos avanzados](examples/basic-bot.md) - Patrones recomendados
+- [Referencia de WhatsApp](references/whatsapp.es.md) - Configuracion y eventos
+- [Referencia de Chat](references/chat.es.md) - Gestion de conversaciones
+- [Referencia de Message](references/message.es.md) - Tipos de mensaje
+- [Ejemplos avanzados](examples/basic-bot.es.md) - Patrones recomendados

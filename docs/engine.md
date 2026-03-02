@@ -1,140 +1,159 @@
 # Engine
 
-Documentación del sistema de persistencia para `@arcaelas/whatsapp`.
+Persistence system documentation for `@arcaelas/whatsapp`.
 
 ---
 
 ## Interface
 
-Un Engine debe implementar la siguiente interface:
+An Engine must implement the following interface:
 
 ```typescript
 interface Engine {
     /**
-     * @description Obtiene un valor por su key.
-     * @param key Ruta del documento.
-     * @returns Texto JSON o null si no existe.
+     * @description Retrieves a value by its key.
+     * @param key Document path.
+     * @returns JSON text or null if not found.
      */
     get(key: string): Promise<string | null>;
 
     /**
-     * @description Guarda o elimina un valor.
-     * @param key Ruta del documento.
-     * @param value Texto a guardar o null para eliminar.
+     * @description Saves or deletes a value.
+     * If value is null, deletes the key and all sub-keys recursively (cascade delete).
+     * @param key Document path.
+     * @param value Text to save or null to delete recursively.
      */
     set(key: string, value: string | null): Promise<void>;
 
     /**
-     * @description Lista keys bajo un prefijo, ordenados por más reciente.
-     * @param prefix Prefijo de búsqueda.
-     * @param offset Inicio de paginación (default: 0).
-     * @param limit Cantidad máxima (default: 50).
-     * @returns Array de keys.
+     * @description Lists keys under a prefix, ordered by most recent.
+     * @param prefix Search prefix.
+     * @param offset Pagination start (default: 0).
+     * @param limit Maximum count (default: 50).
+     * @returns Array of keys.
      */
     list(prefix: string, offset?: number, limit?: number): Promise<string[]>;
 }
 ```
 
-### Contratos
+### Contracts
 
-| Método | Comportamiento Esperado |
-|--------|------------------------|
-| `get(key)` | Retorna `string` si existe, `null` si no existe |
-| `set(key, value)` | Si `value` es `null`, elimina la key |
-| `set(key, value)` | Si `value` es `string`, crea/actualiza |
-| `list(prefix)` | Retorna keys que comienzan con `prefix` |
-| `list(prefix)` | Orden descendente por fecha de modificación |
+| Method | Expected Behavior |
+|--------|-------------------|
+| `get(key)` | Returns `string` if exists, `null` if not |
+| `set(key, value)` | If `value` is `null`, deletes the key AND all sub-keys recursively |
+| `set(key, value)` | If `value` is `string`, creates/updates |
+| `list(prefix)` | Returns keys starting with `prefix` |
+| `list(prefix)` | Descending order by modification date |
 
 ---
 
 ## Namespaces
 
-El sistema usa 4 namespaces principales:
+The system uses 3 namespaces:
 
-| Namespace | Descripción | Ejemplo Key |
+| Namespace | Description | Example Key |
 |-----------|-------------|-------------|
-| `session` | Credenciales y estado de conexión | `session/creds` |
-| `contact` | Información de contactos | `contact/{jid}/index` |
-| `chat` | Conversaciones y metadata | `chat/{jid}/index` |
-| `message` | Mensajes dentro de chats | `chat/{cid}/message/{id}/index` |
+| `session` | Credentials and connection state | `session/creds`, `session/{type}/{id}` |
+| `contact` | Contact information | `contact/{jid}/index` |
+| `chat` | Conversations, metadata, and messages | `chat/{jid}/index`, `chat/{cid}/message/{id}/index` |
+
+Additionally, there is a reverse index namespace:
+
+| Key | Description |
+|-----|-------------|
+| `lid/{lid}` | Maps a LID to a JID for contact lookup |
 
 ---
 
-## Estructura de Keys
+## Key Structure
 
 ### Session
 
-Estado de autenticación y conexión.
+Authentication and connection state.
 
 ```
-session/creds              → Credenciales de autenticación
-session/app-state-sync-key-{id}  → Keys de sincronización
-session/app-state-sync-version-{name}  → Versiones de estado
-session/sender-key-{jid}   → Keys de cifrado por contacto
-session/sender-key-memory-{jid}  → Memoria de keys
-session/pre-key-{id}       → Pre-keys
-session/session-{jid}      → Sesiones de cifrado
+session/creds                          -> Authentication credentials
+session/app-state-sync-key/{id}        -> Sync keys
+session/app-state-sync-version/{name}  -> State versions
+session/sender-key/{jid}               -> Encryption keys per contact
+session/sender-key-memory/{jid}        -> Key memory
+session/pre-key/{id}                   -> Pre-keys
+session/session/{jid}                  -> Encryption sessions
 ```
 
-**Formato**: JSON serializado con `BufferJSON` para manejar binarios.
+**Format**: JSON serialized with `BufferJSON` to handle binaries.
 
 ### Contact
 
-Información de contactos.
+Contact information.
 
 ```
-contact/{jid}/index        → JSON con datos del contacto
+contact/{jid}/index        -> JSON with contact data (IContactRaw)
 ```
 
-**Ejemplo**:
+**Example**:
 ```json
 {
     "id": "584144709840@s.whatsapp.net",
-    "name": "Juan Pérez",
-    "photo": "https://pps.whatsapp.net/...",
-    "phone": "584144709840",
-    "content": "Disponible 24/7",
-    "raw": { /* objeto raw completo */ }
+    "lid": "140913951141911@lid",
+    "name": "Juan Perez",
+    "notify": "Juanito",
+    "verifiedName": null,
+    "imgUrl": "https://pps.whatsapp.net/...",
+    "status": "Available 24/7"
 }
+```
+
+### LID Reverse Index
+
+```
+lid/{lid}                  -> JID string (e.g. "584144709840@s.whatsapp.net")
 ```
 
 ### Chat
 
-Conversaciones y sus índices de mensajes.
+Conversations and their message indexes.
 
 ```
-chat/{jid}/index           → JSON con datos del chat
-chat/{jid}/messages        → Índice de mensajes (ver Relaciones)
+chat/{jid}/index           -> JSON with chat data (IChatRaw)
+chat/{jid}/messages        -> Message index (see Relationships)
 ```
 
-**Ejemplo `chat/{jid}/index`**:
+**Example `chat/{jid}/index`**:
 ```json
 {
     "id": "120363123456789@g.us",
-    "type": "group",
-    "name": "Equipo Dev",
-    "content": "Descripción del grupo",
-    "pined": true,
+    "name": "Dev Team",
+    "displayName": null,
+    "description": "Group description",
+    "unreadCount": 5,
+    "readOnly": false,
     "archived": false,
-    "muted": false,
-    "readed": true,
-    "readonly": false,
-    "labels": ["trabajo"],
-    "raw": { /* objeto raw completo */ }
+    "pinned": 1767371367857,
+    "muteEndTime": null,
+    "markedAsUnread": false,
+    "participant": [
+        { "id": "584144709840@s.whatsapp.net", "admin": "superadmin" },
+        { "id": "584121234567@s.whatsapp.net", "admin": null }
+    ],
+    "createdBy": "584144709840@s.whatsapp.net",
+    "createdAt": 1700000000,
+    "ephemeralExpiration": 604800
 }
 ```
 
 ### Message
 
-Mensajes separados en metadata, contenido y raw.
+Messages separated into metadata, content, and raw.
 
 ```
-chat/{cid}/message/{id}/index    → JSON con metadata
-chat/{cid}/message/{id}/content  → Buffer base64 (media)
-chat/{cid}/message/{id}/raw      → JSON raw completo
+chat/{cid}/message/{id}/index    -> JSON with metadata (IMessageIndex)
+chat/{cid}/message/{id}/content  -> Buffer base64 (media)
+chat/{cid}/message/{id}/raw      -> Full raw JSON (WAMessage)
 ```
 
-**Ejemplo `chat/{cid}/message/{id}/index`**:
+**Example `chat/{cid}/message/{id}/index`**:
 ```json
 {
     "id": "AC07DE0D18FA8254897A26C90B2FFD98",
@@ -149,156 +168,170 @@ chat/{cid}/message/{id}/raw      → JSON raw completo
     "created_at": 1767366759000,
     "deleted_at": null,
     "mime": "text/plain",
-    "caption": ""
+    "caption": "",
+    "edited": false
 }
 ```
 
 ---
 
-## Relaciones
+## Relationships
 
-### Problema
+### Problem
 
-En bases de datos relacionales, la relación `Message → Chat` es simple:
+In relational databases, the `Message -> Chat` relationship is simple:
 ```sql
 SELECT * FROM messages WHERE cid = ?;
 ```
 
-En key-value stores, listar mensajes requiere escanear todas las keys:
+In key-value stores, listing messages requires scanning all keys:
 ```
 SCAN chat/{cid}/message/*/index
 ```
 
-Esto es ineficiente para:
-- Paginación ordenada por fecha
-- Contar mensajes sin cargarlos
-- Obtener últimos N mensajes
+This is inefficient for:
+- Paginated ordering by date
+- Counting messages without loading them
+- Getting the latest N messages
 
-### Solución: Índice de Mensajes
+### Solution: Message Index
 
-Cada chat mantiene un índice de sus mensajes:
+Each chat maintains an index of its messages:
 
 ```
 chat/{cid}/messages
 ```
 
-**Formato**: Texto plano con una línea por mensaje:
+**Format**: Plain text with one line per message:
 ```
 {TIMESTAMP} {MESSAGE_ID}
 {TIMESTAMP} {MESSAGE_ID}
 ...
 ```
 
-**Ejemplo**:
+**Example**:
 ```
 1767366759000 AC07DE0D18FA8254897A26C90B2FFD98
 1767366758000 BC18EF1D29GB9365908B37D01C3GGE09
 1767366757000 CC29FG2E30HC0476019C48E12D4HHF10
 ```
 
-### Operaciones
+### Operations
 
-Estas operaciones están implementadas como métodos estáticos de la clase `Chat`:
+These operations are available through the Message class API:
 
-**Agregar mensaje** (`Chat.add_message`):
+**List messages (paginated)** (`Message.list`):
 ```typescript
-await wa.Chat.add_message(cid, mid, timestamp);
+const messages = await wa.Message.list(cid, offset, limit);
 ```
 
-**Listar mensajes (paginado)** (`Chat.list_messages`):
+**Count messages** (`Message.count`):
 ```typescript
-const ids = await wa.Chat.list_messages(cid, offset, limit);
+const count = await wa.Message.count(cid);
 ```
 
-**Eliminar mensaje del índice** (`Chat.remove_message`):
+**Delete a message** (instance method `msg.remove()`):
 ```typescript
-await wa.Chat.remove_message(cid, mid);
+const msg = await wa.Message.get(cid, mid);
+if (msg) await msg.remove();
 ```
 
-**Contar mensajes** (`Chat.count_messages`):
-```typescript
-const count = await wa.Chat.count_messages(cid);
-```
+### Advantages
 
-### Ventajas
-
-| Aspecto | Sin Índice | Con Índice |
-|---------|-----------|------------|
-| Listar mensajes | SCAN + parse JSON | Split líneas |
-| Paginar | Cargar todos | Slice directo |
-| Contar | Cargar todos | Count líneas |
-| Ordenar | Sort en memoria | Ya ordenado |
-| Último mensaje | Cargar todos | Primera línea |
+| Aspect | Without Index | With Index |
+|--------|--------------|------------|
+| List messages | SCAN + parse JSON | Split lines |
+| Paginate | Load all | Direct slice |
+| Count | Load all | Count lines |
+| Sort | In-memory sort | Already sorted |
+| Last message | Load all | First line |
 
 ---
 
 ## Cascade Delete
 
-Al eliminar una entidad, eliminar todas sus dependencias.
+When deleting an entity, all its dependencies are deleted.
 
-### Eliminar Contacto
+### How it works
 
-```typescript
-// Solo elimina el índice del contacto
-await wa.engine.set(`contact/${jid}/index`, null);
-```
+The `set(key, null)` contract requires that when `value` is `null`, the engine deletes both the key itself AND all sub-keys with that prefix recursively. This is how cascade delete works.
 
-### Eliminar Chat
-
-Usa el método `Chat.cascade_delete()` que elimina el chat y todos sus mensajes:
+### Delete Contact
 
 ```typescript
-await wa.Chat.cascade_delete(cid);
+// Only deletes the contact index
+await wa.engine.set("contact/{jid}/index", null);
 ```
 
-Internamente ejecuta:
-1. Lee `chat/{cid}/messages` para obtener IDs
-2. Elimina `chat/{cid}/message/{mid}/index`, `/content`, `/raw` para cada mensaje
-3. Elimina `chat/{cid}/messages`
-4. Elimina `chat/{cid}/index`
+### Delete Chat
 
-### Eliminar Mensaje
-
-Usa el método `Message.remove()` que elimina del índice y storage:
+Use `Chat.remove(cid)` (static) or `chat.remove()` (instance). This calls `wa.engine.set("chat/{cid}", null)` which cascade-deletes the chat index, message index, and all message data:
 
 ```typescript
-await wa.Message.remove(cid, mid);
+// Static
+await wa.Chat.remove(cid);
+
+// Or via instance
+const chat = await wa.Chat.get(cid);
+if (chat) await chat.remove();
 ```
+
+The engine's cascade delete on `set("chat/{cid}", null)` removes:
+1. `chat/{cid}/index`
+2. `chat/{cid}/messages`
+3. `chat/{cid}/message/{mid}/index`, `/content`, `/raw` for each message
+
+### Delete Message
+
+Use the instance method `msg.remove()`:
+
+```typescript
+const msg = await wa.Message.get(cid, mid);
+if (msg) await msg.remove();
+```
+
+This removes the message from the index and calls `wa.engine.set("chat/{cid}/message/{mid}", null)` which cascade-deletes `/index`, `/content`, and `/raw`.
 
 ---
 
-## Implementación de Engines
+## Engine Implementations
 
 ### FileEngine
 
-Almacena cada key como archivo en el filesystem.
+Stores each key as a file in the filesystem.
 
 ```
 .baileys/{session}/
-├── session/
-│   └── creds
-├── contact/
-│   └── 584144709840_at_s.whatsapp.net/
-│       └── index
-└── chat/
-    └── 584144709840_at_s.whatsapp.net/
-        ├── index
-        ├── messages
-        └── message/
-            └── AC07DE.../
-                ├── index
-                ├── content
-                └── raw
+|-- session/
+|   |-- creds
+|   |-- app-state-sync-key/
+|   |   +-- {id}
+|   +-- ...
+|-- lid/
+|   +-- {lid}
+|-- contact/
+|   +-- 584144709840_at_s.whatsapp.net/
+|       +-- index
++-- chat/
+    +-- 584144709840_at_s.whatsapp.net/
+        |-- index
+        |-- messages
+        +-- message/
+            +-- AC07DE.../
+                |-- index
+                |-- content
+                +-- raw
 ```
 
-**Consideraciones**:
-- Sanitizar `@` → `_at_` para paths válidos
-- Crear directorios recursivamente
-- Ordenar por `mtime` del filesystem
+**Considerations**:
+- Sanitize `@` -> `_at_` for valid paths
+- Create directories recursively
+- Sort by `mtime` from filesystem
+- `set(key, null)` uses `rm -rf` for cascade delete
 
 ### RedisEngine
 
-Usa Redis como backend.
+Uses Redis as backend. Included in the library as an official export.
 
 ```
 wa:{session}:session/creds
@@ -306,14 +339,18 @@ wa:{session}:contact/{jid}/index
 wa:{session}:chat/{jid}/index
 wa:{session}:chat/{jid}/messages
 wa:{session}:chat/{cid}/message/{id}/index
+wa:{session}:chat/{cid}/message/{id}/raw
+wa:{session}:chat/{cid}/message/{id}/content
+wa:{session}:lid/{lid}
 ```
 
-**Consideraciones**:
-- Prefijo por sesión para multi-tenant
-- SCAN para listar keys
-- No hay orden nativo, depende del índice de mensajes
+**Considerations**:
+- Prefix per session for multi-tenant
+- Uses SCAN (not KEYS) for listing -- non-blocking
+- `set(key, null)` scans and deletes all sub-keys matching `{key}/*` for cascade delete
+- No native order, depends on message index
 
-### PostgreSQL Engine (Ejemplo)
+### PostgreSQL Engine (Example)
 
 ```typescript
 class PostgresEngine implements Engine {
@@ -336,9 +373,10 @@ class PostgresEngine implements Engine {
                 [this._session, key, value]
             );
         } else {
+            // Cascade delete: delete exact key AND all sub-keys
             await this._pool.query(
-                'DELETE FROM kv_store WHERE session = $1 AND key = $2',
-                [this._session, key]
+                'DELETE FROM kv_store WHERE session = $1 AND (key = $2 OR key LIKE $3)',
+                [this._session, key, key + '/%']
             );
         }
     }
@@ -356,7 +394,7 @@ class PostgresEngine implements Engine {
 }
 ```
 
-**Tabla requerida**:
+**Required table**:
 ```sql
 CREATE TABLE kv_store (
     session VARCHAR(100) NOT NULL,
@@ -372,25 +410,27 @@ CREATE INDEX idx_kv_updated ON kv_store (session, updated_at DESC);
 
 ---
 
-## Resumen de Keys
+## Key Summary
 
-| Key Pattern | Tipo | Descripción |
+| Key Pattern | Type | Description |
 |-------------|------|-------------|
-| `session/*` | JSON | Credenciales y estado |
-| `contact/{jid}/index` | JSON | Datos del contacto |
-| `chat/{jid}/index` | JSON | Datos del chat |
-| `chat/{jid}/messages` | TXT | Índice `{TS} {ID}\n` |
-| `chat/{cid}/message/{id}/index` | JSON | Metadata del mensaje |
-| `chat/{cid}/message/{id}/content` | Base64 | Contenido binario |
-| `chat/{cid}/message/{id}/raw` | JSON | Objeto raw completo |
+| `session/creds` | JSON | Authentication credentials |
+| `session/{type}/{id}` | JSON | Signal protocol keys |
+| `lid/{lid}` | Text | Reverse index LID -> JID |
+| `contact/{jid}/index` | JSON | Contact data (IContactRaw) |
+| `chat/{jid}/index` | JSON | Chat data (IChatRaw) |
+| `chat/{jid}/messages` | TXT | Index `{TS} {ID}\n` |
+| `chat/{cid}/message/{id}/index` | JSON | Message metadata (IMessageIndex) |
+| `chat/{cid}/message/{id}/content` | Base64 | Binary content |
+| `chat/{cid}/message/{id}/raw` | JSON | Full raw WAMessage |
 
 ---
 
-## Optimizaciones
+## Optimizations
 
 ### Batch Operations
 
-Para operaciones masivas, considerar métodos batch:
+For bulk operations, consider batch methods:
 
 ```typescript
 interface EngineBatch extends Engine {
@@ -400,7 +440,7 @@ interface EngineBatch extends Engine {
 
 ### TTL (Time-To-Live)
 
-Para mensajes efímeros:
+For ephemeral messages:
 
 ```typescript
 interface EngineTTL extends Engine {
@@ -410,7 +450,7 @@ interface EngineTTL extends Engine {
 
 ### Prefix Delete
 
-Para cascade delete eficiente:
+For efficient cascade delete:
 
 ```typescript
 interface EnginePrefix extends Engine {
@@ -418,7 +458,7 @@ interface EnginePrefix extends Engine {
 }
 ```
 
-**Implementación Redis**:
+**Redis implementation**:
 ```typescript
 async delete_prefix(prefix: string): Promise<number> {
     let count = 0;

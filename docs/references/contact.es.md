@@ -20,10 +20,10 @@ wa.Contact // Clase Contact enlazada
 | Propiedad | Tipo | Descripcion |
 |-----------|------|-------------|
 | `id` | `string` | JID del contacto (ej: `5491112345678@s.whatsapp.net`) |
-| `me` | `boolean` | `true` si es el usuario autenticado |
-| `name` | `string` | Nombre del contacto |
-| `phone` | `string \| null` | Numero de telefono |
+| `name` | `string` | Nombre del contacto (name, notify o numero) |
+| `phone` | `string` | Numero de telefono sin formato (extraido del JID) |
 | `photo` | `string \| null` | URL de la foto de perfil o `null` |
+| `content` | `string` | Bio/estado del perfil del contacto (string vacio si no tiene) |
 
 ---
 
@@ -33,34 +33,35 @@ wa.Contact // Clase Contact enlazada
 
 Obtiene un contacto por su ID o numero de telefono. Si no existe en el engine, verifica con WhatsApp (`onWhatsApp`) y lo crea automaticamente.
 
+Soporta LID: si `uid` termina en `@lid`, resuelve el JID real a traves de la key `lid/{uid}` en el engine antes de buscar el contacto.
+
 ```typescript
 // Con JID completo
 const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
 
-// O solo con numero de telefono
+// Solo con numero de telefono
 const contact2 = await wa.Contact.get("5491112345678");
+
+// Con LID (Linked ID)
+const contact3 = await wa.Contact.get("some-lid@lid");
 
 if (contact) {
   console.log(`Nombre: ${contact.name}`);
   console.log(`Telefono: ${contact.phone}`);
-  console.log(`Es yo: ${contact.me}`);
 }
 ```
 
-### `Contact.rename(uid, name)`
-
-Cambia el nombre de un contacto (solo local).
-
-```typescript
-await wa.Contact.rename("5491112345678@s.whatsapp.net", "Cliente VIP");
-```
-
-### `Contact.paginate(offset, limit)`
+### `Contact.list(offset?, limit?)`
 
 Obtiene contactos paginados.
 
+| Parametro | Tipo | Default | Descripcion |
+|-----------|------|---------|-------------|
+| `offset` | `number` | `0` | Posicion inicial |
+| `limit` | `number` | `50` | Cantidad maxima de resultados |
+
 ```typescript
-const contacts = await wa.Contact.paginate(0, 50);
+const contacts = await wa.Contact.list(0, 50);
 for (const contact of contacts) {
   console.log(`${contact.name}: ${contact.phone}`);
 }
@@ -72,13 +73,28 @@ for (const contact of contacts) {
 
 ### `rename(name)`
 
-Cambia el nombre del contacto (solo local).
+Cambia el nombre del contacto (solo local en el engine).
 
 ```typescript
 const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
 if (contact) {
   await contact.rename("Mi mejor amigo");
   console.log(contact.name); // "Mi mejor amigo"
+}
+```
+
+### `refresh()`
+
+Actualiza la foto de perfil y el estado/bio del contacto desde WhatsApp. Persiste los cambios en el engine.
+
+Retorna `this` si se actualizo correctamente, o `null` si no hay socket conectado.
+
+```typescript
+const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
+if (contact) {
+  await contact.refresh();
+  console.log(`Foto actualizada: ${contact.photo}`);
+  console.log(`Bio actualizada: ${contact.content}`);
 }
 ```
 
@@ -135,7 +151,7 @@ const limit = 50;
 const all_contacts = [];
 
 while (true) {
-  const page = await wa.Contact.paginate(offset, limit);
+  const page = await wa.Contact.list(offset, limit);
   if (page.length === 0) break;
   all_contacts.push(...page);
   offset += limit;
@@ -152,7 +168,7 @@ async function find_contact_by_name(wa: WhatsApp, name: string) {
   const limit = 50;
 
   while (true) {
-    const contacts = await wa.Contact.paginate(offset, limit);
+    const contacts = await wa.Contact.list(offset, limit);
     if (contacts.length === 0) break;
 
     const found = contacts.find(c =>
@@ -176,9 +192,6 @@ if (contact) {
 
 ```typescript
 wa.event.on("contact:created", async (contact) => {
-  // Evitar enviarse mensaje a si mismo
-  if (contact.me) return;
-
   await wa.Message.text(
     contact.id,
     "Bienvenido! Soy un bot de asistencia. Escribe !ayuda para ver comandos."
@@ -202,30 +215,40 @@ if (contact) {
 
 ---
 
-## Interfaz IContact
+## Interfaz IContactRaw
+
+Objeto raw del contacto almacenado en el engine (protocolo).
 
 ```typescript
-interface IContact {
+interface IContactRaw {
   id: string;
-  me: boolean;
-  name: string;
-  phone: string | null;
-  photo: string | null;
+  lid?: string | null;
+  name?: string | null;
+  notify?: string | null;
+  verifiedName?: string | null;
+  imgUrl?: string | null;
+  status?: string | null;
 }
 ```
+
+| Campo | Tipo | Descripcion |
+|-------|------|-------------|
+| `id` | `string` | JID unico del contacto |
+| `lid` | `string \| null` | ID alternativo en formato LID |
+| `name` | `string \| null` | Nombre guardado en la agenda del usuario |
+| `notify` | `string \| null` | Nombre de perfil (pushName) |
+| `verifiedName` | `string \| null` | Nombre de cuenta business verificada |
+| `imgUrl` | `string \| null` | URL de la foto de perfil |
+| `status` | `string \| null` | Bio/estado del perfil |
 
 ---
 
 ## Notas
 
-!!! info "JID de contacto"
-    El JID (Jabber ID) de un contacto tiene el formato `{numero}@s.whatsapp.net`.
-    Ejemplo: `5491112345678@s.whatsapp.net`
+> **JID de contacto:** El JID (Jabber ID) de un contacto tiene el formato `{numero}@s.whatsapp.net`. Ejemplo: `5491112345678@s.whatsapp.net`
 
-!!! warning "Nombre local"
-    El nombre del contacto se almacena localmente en el engine.
-    Los cambios con `rename()` solo afectan tu instancia, no lo que otros ven.
+> **Nombre local:** El nombre del contacto se almacena localmente en el engine. Los cambios con `rename()` solo afectan tu instancia, no lo que otros ven.
 
-!!! tip "Verificacion de WhatsApp"
-    `Contact.get()` verifica con WhatsApp si el numero existe.
-    Si el numero no tiene WhatsApp, retorna `null`.
+> **Verificacion de WhatsApp:** `Contact.get()` verifica con WhatsApp si el numero existe. Si el numero no tiene WhatsApp, retorna `null`.
+
+> **Soporte LID:** `Contact.get()` acepta IDs en formato `@lid` (Linked ID). Estos se resuelven internamente a traves de la key `lid/{lid}` en el engine.

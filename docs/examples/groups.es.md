@@ -14,7 +14,7 @@ if (chat && chat.type === "group") {
   console.log(`ID: ${chat.id}`);
 
   // Miembros
-  const members = await wa.Chat.members(chat.id, 0, 1000);
+  const members = await chat.members(0, 1000);
   console.log(`Miembros: ${members.length}`);
 
   for (const member of members) {
@@ -96,7 +96,9 @@ wa.event.on("message:created", async (msg) => {
 
 ```typescript
 const group_id = "123456789@g.us";
-const members = await wa.Chat.members(group_id, 0, 1000);
+const chat = await wa.Chat.get(group_id);
+if (!chat) throw new Error("Grupo no encontrado");
+const members = await chat.members(0, 1000);
 
 console.log(`Grupo tiene ${members.length} miembros:`);
 for (const member of members) {
@@ -110,6 +112,7 @@ for (const member of members) {
 
 ```typescript
 import * as fs from "fs";
+import type { WhatsApp } from "@arcaelas/whatsapp";
 
 async function export_group_members(wa: WhatsApp, group_id: string) {
   const chat = await wa.Chat.get(group_id);
@@ -117,7 +120,7 @@ async function export_group_members(wa: WhatsApp, group_id: string) {
     throw new Error("Grupo no encontrado");
   }
 
-  const members = await wa.Chat.members(group_id, 0, 10000);
+  const members = await chat.members(0, 10000);
 
   const data = {
     group: {
@@ -159,7 +162,7 @@ wa.event.on("message:created", async (msg) => {
     case "info":
       const chat = await wa.Chat.get(msg.cid);
       if (chat) {
-        const members = await wa.Chat.members(msg.cid, 0, 1000);
+        const members = await chat.members(0, 1000);
         await wa.Message.text(
           msg.cid,
           `*${chat.name}*\n\n` +
@@ -170,7 +173,9 @@ wa.event.on("message:created", async (msg) => {
       break;
 
     case "miembros":
-      const group_members = await wa.Chat.members(msg.cid, 0, 50);
+      const group_chat = await wa.Chat.get(msg.cid);
+      if (!group_chat) break;
+      const group_members = await group_chat.members(0, 50);
       const list = group_members.map(m => `- ${m.name}`).join("\n");
       await wa.Message.text(msg.cid, `*Miembros:*\n${list}`);
       break;

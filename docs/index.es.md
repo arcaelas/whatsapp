@@ -11,7 +11,7 @@
 
 - **Conexion simplificada** - QR o codigo de emparejamiento en una sola llamada
 - **Eventos tipados** - TypeScript completo con autocompletado
-- **Persistencia flexible** - FileEngine por defecto, o implementa tu propio Engine
+- **Persistencia flexible** - FileEngine por defecto, RedisEngine incluido, o implementa tu propio Engine
 - **Clases intuitivas** - Chat, Contact, Message con metodos estaticos
 - **Multiples tipos de mensaje** - text, image, video, audio, location, poll
 - **Gestion de grupos** - Listar miembros, archivar, silenciar, fijar
@@ -38,7 +38,8 @@ wa.event.on("error", (err) => console.error("Error:", err.message));
 await wa.pair(async (data) => {
   if (Buffer.isBuffer(data)) {
     // QR code como imagen PNG
-    require("fs").writeFileSync("qr.png", data);
+    const fs = await import("fs");
+    fs.writeFileSync("qr.png", data);
     console.log("Escanea el QR en qr.png");
   } else {
     // Codigo de emparejamiento (8 digitos)
@@ -116,20 +117,31 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
     });
     ```
 
+=== "RedisEngine (incluido)"
+    ```typescript
+    import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+    import Redis from "ioredis";
+
+    const client = new Redis();
+    const wa = new WhatsApp({
+      engine: new RedisEngine(client, "wa:mi-bot"),
+    });
+    ```
+
 === "Engine personalizado"
     ```typescript
     import { WhatsApp } from "@arcaelas/whatsapp";
     import type { Engine } from "@arcaelas/whatsapp";
 
     // Implementa la interfaz Engine
-    class RedisEngine implements Engine {
+    class MyEngine implements Engine {
       async get(key: string): Promise<string | null> { /* ... */ }
       async set(key: string, value: string | null): Promise<void> { /* ... */ }
       async list(prefix: string, offset?: number, limit?: number): Promise<string[]> { /* ... */ }
     }
 
     const wa = new WhatsApp({
-      engine: new RedisEngine(),
+      engine: new MyEngine(),
     });
     ```
 
@@ -145,7 +157,7 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
     Instrucciones detalladas para instalar la libreria
 
-    [:octicons-arrow-right-24: Ver guia](installation.md)
+    [:octicons-arrow-right-24: Ver guia](installation.es.md)
 
 -   :material-rocket-launch:{ .lg .middle } **Primeros Pasos**
 
@@ -153,7 +165,7 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
     Tutorial paso a paso para crear tu primer bot
 
-    [:octicons-arrow-right-24: Comenzar](getting-started.md)
+    [:octicons-arrow-right-24: Comenzar](getting-started.es.md)
 
 -   :material-api:{ .lg .middle } **Referencias API**
 
@@ -161,7 +173,7 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
     Documentacion completa de todas las clases
 
-    [:octicons-arrow-right-24: Ver API](references/whatsapp.md)
+    [:octicons-arrow-right-24: Ver API](references/whatsapp.es.md)
 
 -   :material-code-tags:{ .lg .middle } **Ejemplos**
 
@@ -169,7 +181,7 @@ Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
 
     Ejemplos practicos listos para usar
 
-    [:octicons-arrow-right-24: Ver ejemplos](examples/basic-bot.md)
+    [:octicons-arrow-right-24: Ver ejemplos](examples/basic-bot.es.md)
 
 </div>
 

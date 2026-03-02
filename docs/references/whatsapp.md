@@ -15,31 +15,38 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 ## Constructor
 
 ```typescript
-const wa = new WhatsApp(options?: WhatsAppOptions);
+const wa = new WhatsApp(options?: IWhatsApp);
 ```
 
-### Options
+### Options (IWhatsApp)
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `engine` | `Engine` | `FileEngine(".baileys/default")` | Persistence engine |
-| `phone` | `string` | `undefined` | Phone number for pairing code |
+| `engine` | `Engine` | `FileEngine(".baileys/{phone}")` or `FileEngine(".baileys/default")` | Persistence engine |
+| `phone` | `string \| number` | `undefined` | Phone number for pairing code |
+
+When `phone` is provided, the default engine path is `.baileys/{phone}`. When `phone` is omitted, the default path is `.baileys/default`.
 
 ### Examples
 
 ```typescript
-// Default (FileEngine)
+// Default (FileEngine with ".baileys/default")
 const wa = new WhatsApp();
 
-// Custom path
+// With phone (FileEngine with ".baileys/5491112345678")
+const wa = new WhatsApp({
+  phone: "5491112345678",
+});
+
+// Phone as number
+const wa = new WhatsApp({
+  phone: 5491112345678,
+});
+
+// Custom engine
 import { FileEngine } from "@arcaelas/whatsapp";
 const wa = new WhatsApp({
   engine: new FileEngine(".baileys/my-bot"),
-});
-
-// With phone for pairing code
-const wa = new WhatsApp({
-  phone: "5491112345678",
 });
 ```
 
@@ -61,39 +68,39 @@ The persistence engine used.
 wa.socket: WASocket | null
 ```
 
-The Baileys socket. `null` before connecting.
+The Baileys socket. `null` before connecting or when disconnected.
 
 ### event
 
 ```typescript
-wa.event: TypedEventEmitter<WhatsAppEventMap>
+wa.event: EventEmitter<WhatsAppEventMap>
 ```
 
-Typed event emitter for all WhatsApp events.
+Node.js `EventEmitter` (from `node:events`) with typed events for all WhatsApp events.
 
 ### Chat
 
 ```typescript
-wa.Chat: typeof Chat
+wa.Chat: ReturnType<typeof chat>
 ```
 
-Chat class bound to this instance.
+Chat class bound to this instance. Includes both static methods (`get`, `list`, `pin`, `archive`, `mute`, `seen`, `remove`) and instance methods.
 
 ### Contact
 
 ```typescript
-wa.Contact: typeof Contact
+wa.Contact: ReturnType<typeof contact>
 ```
 
-Contact class bound to this instance.
+Contact class bound to this instance. Includes both static methods (`get`, `list`) and instance methods.
 
 ### Message
 
 ```typescript
-wa.Message: typeof Message
+wa.Message: ReturnType<typeof message>
 ```
 
-Message class bound to this instance.
+Message class bound to this instance. Includes both static methods (`get`, `list`, `count`, `text`, `image`, `video`, `audio`, `location`, `poll`, `watch`) and instance methods.
 
 ---
 
@@ -103,6 +110,9 @@ Message class bound to this instance.
 
 Connects to WhatsApp and calls the callback with QR or pairing code.
 
+- With `phone`: callback receives a pairing code string (called once).
+- Without `phone`: callback receives a QR code as PNG Buffer (called periodically).
+
 ```typescript
 await wa.pair(callback: (data: Buffer | string) => void | Promise<void>): Promise<void>
 ```
@@ -111,7 +121,7 @@ await wa.pair(callback: (data: Buffer | string) => void | Promise<void>): Promis
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `callback` | `(data: Buffer \| string) => void` | Called with QR (Buffer) or code (string) |
+| `callback` | `(data: Buffer \| string) => void` | Called with QR (Buffer) or pairing code (string) |
 
 **Example:**
 
@@ -122,7 +132,7 @@ await wa.pair(async (data) => {
     require("fs").writeFileSync("qr.png", data);
     console.log("Scan QR code");
   } else {
-    // 8 digit pairing code
+    // Pairing code
     console.log("Enter code:", data);
   }
 });
@@ -145,8 +155,8 @@ wa.event.on("event_name", (payload) => {
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `open` | `void` | Connection established |
-| `close` | `void` | Connection closed |
-| `error` | `Error` | Connection error |
+| `close` | `void` | Connection closed (auto-reconnects) |
+| `error` | `Error` | Connection error (e.g. logged out) |
 
 ### Data events
 
@@ -154,12 +164,14 @@ wa.event.on("event_name", (payload) => {
 |-------|---------|-------------|
 | `contact:created` | `Contact` | New contact |
 | `contact:updated` | `Contact` | Contact updated |
-| `contact:deleted` | `Contact` | Contact deleted |
 | `chat:created` | `Chat` | New chat |
 | `chat:updated` | `Chat` | Chat updated |
 | `chat:deleted` | `string` | Chat deleted (cid) |
+| `chat:pined` | `[string, number \| null]` | Chat pinned/unpinned (cid, pin timestamp or null) |
+| `chat:archived` | `[string, boolean]` | Chat archived/unarchived (cid, archived) |
+| `chat:muted` | `[string, number \| null]` | Chat muted/unmuted (cid, mute end timestamp or null) |
 | `message:created` | `Message` | New message |
-| `message:updated` | `Message` | Message updated |
+| `message:updated` | `Message` | Message updated (status, edited) |
 | `message:deleted` | `[string, string]` | Message deleted (cid, mid) |
 | `message:reacted` | `[string, string, string]` | Reaction (cid, mid, emoji) |
 
@@ -189,6 +201,19 @@ wa.event.on("message:created", async (msg) => {
 wa.event.on("chat:updated", (chat) => {
   console.log(`Chat updated: ${chat.name}`);
 });
+
+// Chat state changes
+wa.event.on("chat:pined", (cid, pined) => {
+  console.log(`Chat ${cid} ${pined ? "pinned" : "unpinned"}`);
+});
+
+wa.event.on("chat:archived", (cid, archived) => {
+  console.log(`Chat ${cid} ${archived ? "archived" : "unarchived"}`);
+});
+
+wa.event.on("chat:muted", (cid, muted) => {
+  console.log(`Chat ${cid} ${muted ? `muted until ${new Date(muted)}` : "unmuted"}`);
+});
 ```
 
 ---
@@ -213,7 +238,7 @@ async function main() {
     const text = (await msg.content()).toString();
 
     if (text.toLowerCase() === "ping") {
-      await wa.Message.text(msg.cid, "pong!");
+      await msg.text("pong!");
     }
   });
 

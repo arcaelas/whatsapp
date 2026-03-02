@@ -1,18 +1,18 @@
 # Baileys Event Payloads Reference
 
-Documentación completa de payloads capturados de Baileys v6.7.18 para todos los tipos de mensaje:
-- **Texto** - Mensajes de texto simple y extendido
-- **Imágenes** - Con caption, thumbnails y media keys
-- **Videos** - Con streaming sidecar y duración
-- **Audios** - Notas de voz (PTT) y archivos de audio
-- **Ubicaciones** - Estáticas y en vivo
-- **Encuestas** - Creación y votos (cifrados E2E)
+Complete payload documentation captured from Baileys v6.7.18 for all message types:
+- **Text** - Simple and extended text messages
+- **Images** - With caption, thumbnails, and media keys
+- **Videos** - With streaming sidecar and duration
+- **Audio** - Voice notes (PTT) and audio files
+- **Locations** - Static and live
+- **Polls** - Creation and votes (E2E encrypted)
 
 ---
 
-## 1. Mensaje de Texto (nuevo)
+## 1. Text Message (new)
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -53,16 +53,16 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `key.remoteJid` - ID del chat (formato `@lid` o `@s.whatsapp.net`)
-- `key.fromMe` - Si el mensaje fue enviado por nosotros
-- `key.id` - ID único del mensaje
-- `pushName` - Nombre del remitente
-- `message.extendedTextMessage.text` - Contenido del texto
+**Key fields:**
+- `key.remoteJid` - Chat ID (`@lid` or `@s.whatsapp.net` format)
+- `key.fromMe` - Whether the message was sent by us
+- `key.id` - Unique message ID
+- `pushName` - Sender name
+- `message.extendedTextMessage.text` - Text content
 
 ---
 
-## 2. Edición de Mensaje
+## 2. Message Edit
 
 ### 2.1 Via `messages.upsert` (protocolMessage)
 
@@ -122,14 +122,14 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `protocolMessage.type` = `"MESSAGE_EDIT"` (o `14` como número)
-- `protocolMessage.key.id` - ID del mensaje objetivo a editar
-- `protocolMessage.editedMessage` - Nuevo contenido del mensaje
+**Key fields:**
+- `protocolMessage.type` = `"MESSAGE_EDIT"` (or `14` as number)
+- `protocolMessage.key.id` - Target message ID to edit
+- `protocolMessage.editedMessage` - New message content
 
 ---
 
-## 3. Reacción
+## 3. Reaction
 
 ### 3.1 Via `messages.upsert` (reactionMessage)
 
@@ -177,13 +177,13 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `reactionMessage.key.id` - ID del mensaje al que se reacciona
-- `reactionMessage.text` - Emoji de la reacción (vacío = quitar reacción)
+**Key fields:**
+- `reactionMessage.key.id` - ID of the message being reacted to
+- `reactionMessage.text` - Reaction emoji (empty = remove reaction)
 
 ---
 
-## 4. Eliminación (REVOKE)
+## 4. Deletion (REVOKE)
 
 ### 4.1 Via `messages.upsert` (protocolMessage)
 
@@ -230,16 +230,16 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `protocolMessage.type` = `"REVOKE"` (o `0` como número)
-- `protocolMessage.key.id` - ID del mensaje a eliminar
-- En `messages.update`: `message: null` y `messageStubType: 1`
+**Key fields:**
+- `protocolMessage.type` = `"REVOKE"` (or `0` as number)
+- `protocolMessage.key.id` - ID of the message to delete
+- In `messages.update`: `message: null` and `messageStubType: 1`
 
 ---
 
-## 5. Mensaje Reenviado
+## 5. Forwarded Message
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -252,7 +252,7 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
   "pushName": "Miguel Alejandro Guevara",
   "message": {
     "extendedTextMessage": {
-      "text": "se volvió a caer :(",
+      "text": "se volvio a caer :(",
       "previewType": "NONE",
       "contextInfo": {
         "forwardingScore": 1,
@@ -267,31 +267,31 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `contextInfo.isForwarded` = `true` - Indica que es reenviado
-- `contextInfo.forwardingScore` - Cantidad de veces reenviado (1+)
+**Key fields:**
+- `contextInfo.isForwarded` = `true` - Indicates forwarded
+- `contextInfo.forwardingScore` - Number of times forwarded (1+)
 
 ---
 
-## Resumen de Tipos de protocolMessage
+## Protocol Message Type Summary
 
-| Tipo | Valor Numérico | Descripción |
-|------|----------------|-------------|
-| `REVOKE` | 0 | Eliminar mensaje |
-| `EPHEMERAL_SETTING` | 3 | Cambio de mensajes temporales |
-| `EPHEMERAL_SYNC_RESPONSE` | 6 | Respuesta de sincronización |
-| `HISTORY_SYNC_NOTIFICATION` | 7 | Sincronización de historial |
-| `MESSAGE_EDIT` | 14 | Editar mensaje |
-
----
+| Type | Numeric Value | Description |
+|------|---------------|-------------|
+| `REVOKE` | 0 | Delete message |
+| `EPHEMERAL_SETTING` | 3 | Ephemeral message change |
+| `EPHEMERAL_SYNC_RESPONSE` | 6 | Sync response |
+| `HISTORY_SYNC_NOTIFICATION` | 7 | History sync |
+| `MESSAGE_EDIT` | 14 | Edit message |
 
 ---
 
-# Imágenes
+---
 
-## 1. Imagen Nueva
+# Images
 
-**Evento:** `messages.upsert` con `type: "notify"`
+## 1. New Image
+
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -306,7 +306,7 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
     "imageMessage": {
       "url": "https://mmg.whatsapp.net/o1/v/t24/...",
       "mimetype": "image/jpeg",
-      "caption": "Aquí está el caption.",
+      "caption": "Here is the caption.",
       "fileSha256": "AtQ/iIo7NRdmRP+aADjHBvsydhdvvL/hmnkX6e4OMUw=",
       "fileLength": "41161",
       "height": 340,
@@ -326,18 +326,18 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Campos clave:**
-- `imageMessage.url` - URL para descargar (temporal)
-- `imageMessage.mediaKey` - Clave para descifrar el archivo
-- `imageMessage.directPath` - Path directo en CDN
-- `imageMessage.caption` - Texto del caption
-- `imageMessage.jpegThumbnail` - Miniatura en base64
-- `imageMessage.mimetype` - Tipo MIME
-- `imageMessage.fileLength` - Tamaño en bytes
+**Key fields:**
+- `imageMessage.url` - Download URL (temporary)
+- `imageMessage.mediaKey` - File decryption key
+- `imageMessage.directPath` - Direct CDN path
+- `imageMessage.caption` - Caption text
+- `imageMessage.jpegThumbnail` - Base64 thumbnail
+- `imageMessage.mimetype` - MIME type
+- `imageMessage.fileLength` - Size in bytes
 
 ---
 
-## 2. Edición de Caption (Imagen)
+## 2. Caption Edit (Image)
 
 ### Via `messages.upsert` (protocolMessage)
 
@@ -353,7 +353,7 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
       "type": "MESSAGE_EDIT",
       "editedMessage": {
         "imageMessage": {
-          "caption": "Aquí está el caption editado.",
+          "caption": "Here is the edited caption.",
           "contextInfo": { ... }
         }
       },
@@ -377,7 +377,7 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
       "editedMessage": {
         "message": {
           "imageMessage": {
-            "caption": "Aquí está el caption editado.",
+            "caption": "Here is the edited caption.",
             "contextInfo": { ... }
           }
         }
@@ -388,13 +388,13 @@ Documentación completa de payloads capturados de Baileys v6.7.18 para todos los
 }
 ```
 
-**Nota:** Solo se edita el `caption`, la imagen permanece igual.
+**Note:** Only the `caption` is edited, the image remains the same.
 
 ---
 
-## 3. Reacción a Imagen
+## 3. Image Reaction
 
-Mismo formato que texto - usa `reactionMessage`:
+Same format as text - uses `reactionMessage`:
 
 ```json
 {
@@ -414,9 +414,9 @@ Mismo formato que texto - usa `reactionMessage`:
 
 ---
 
-## 4. Eliminación de Imagen
+## 4. Image Deletion
 
-Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
+Same format as text - uses `protocolMessage.type: "REVOKE"`:
 
 ```json
 {
@@ -435,7 +435,7 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
 
 ---
 
-## 5. Imagen Reenviada
+## 5. Forwarded Image
 
 ```json
 {
@@ -463,10 +463,10 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
 }
 ```
 
-**Campos clave:**
+**Key fields:**
 - `contextInfo.isForwarded` = `true`
-- `contextInfo.forwardingScore` = cantidad de reenvíos
-- `scansSidecar` y `scanLengths` - datos de escaneo de calidad
+- `contextInfo.forwardingScore` = number of forwards
+- `scansSidecar` and `scanLengths` - quality scan data
 
 ---
 
@@ -474,9 +474,9 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
 
 # Videos
 
-## 1. Video Nuevo
+## 1. New Video
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -495,7 +495,7 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
       "fileLength": "3927238",
       "seconds": 14,
       "mediaKey": "QMIVrONUp2pdFyJWtHmGyQmtqdmfEBpAJjMrdWjtCGo=",
-      "caption": "Video de 0:14 y 5.4MB",
+      "caption": "Video 0:14, 5.4MB",
       "height": 1280,
       "width": 720,
       "fileEncSha256": "w+1YcO3NgNgWrHs/Gz9x0jD3jw1Bi7HSNknsFB8iT6s=",
@@ -514,15 +514,15 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
 }
 ```
 
-**Campos clave (adicionales a imagen):**
-- `videoMessage.seconds` - Duración en segundos
-- `videoMessage.streamingSidecar` - Datos para streaming progresivo
-- `contextInfo.pairedMediaType` = `"SD_VIDEO_PARENT"` - Video SD con posible HD
+**Key fields (in addition to image):**
+- `videoMessage.seconds` - Duration in seconds
+- `videoMessage.streamingSidecar` - Progressive streaming data
+- `contextInfo.pairedMediaType` = `"SD_VIDEO_PARENT"` - SD video with possible HD
 - `contextInfo.statusSourceType` = `"VIDEO"`
 
 ---
 
-## 2. Edición de Caption (Video)
+## 2. Caption Edit (Video)
 
 ### Via `messages.update`
 
@@ -538,7 +538,7 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
       "editedMessage": {
         "message": {
           "videoMessage": {
-            "caption": "Video de 0:14 y 5.4MB editado.",
+            "caption": "Video 0:14, 5.4MB edited.",
             "contextInfo": { ... }
           }
         }
@@ -551,15 +551,15 @@ Mismo formato que texto - usa `protocolMessage.type: "REVOKE"`:
 
 ---
 
-## 3. Reacción a Video
+## 3. Video Reaction
 
-Mismo formato: `reactionMessage.text: "❤️"`
+Same format: `reactionMessage.text: "❤️"`
 
 ---
 
-## 4. Eliminación de Video
+## 4. Video Deletion
 
-Mismo formato: `protocolMessage.type: "REVOKE"`
+Same format: `protocolMessage.type: "REVOKE"`
 
 ```json
 {
@@ -578,7 +578,7 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 
 ---
 
-## 5. Video Reenviado
+## 5. Forwarded Video
 
 ```json
 {
@@ -609,11 +609,11 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 
 ---
 
-# Audios
+# Audio
 
-## 1. Nota de Voz (PTT)
+## 1. Voice Note (PTT)
 
-**Evento:** `messages.upsert` con `type: "notify"` o `"append"`
+**Event:** `messages.upsert` with `type: "notify"` or `"append"`
 
 ```json
 {
@@ -646,15 +646,15 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 }
 ```
 
-**Campos clave:**
-- `audioMessage.ptt` = `true` - Push-to-Talk (nota de voz)
-- `audioMessage.seconds` - Duración en segundos
-- `audioMessage.waveform` - Forma de onda en base64 para visualización
-- `audioMessage.mimetype` = `"audio/ogg; codecs=opus"` - Formato típico
+**Key fields:**
+- `audioMessage.ptt` = `true` - Push-to-Talk (voice note)
+- `audioMessage.seconds` - Duration in seconds
+- `audioMessage.waveform` - Base64 waveform for visualization
+- `audioMessage.mimetype` = `"audio/ogg; codecs=opus"` - Typical format
 
 ---
 
-## 2. Audio Archivo (No PTT)
+## 2. Audio File (Not PTT)
 
 ```json
 {
@@ -679,27 +679,27 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 }
 ```
 
-**Diferencia clave:**
-- `audioMessage.ptt` = `false` - Archivo de audio (no nota de voz)
-- Sin visualización especial de "grabando"
+**Key difference:**
+- `audioMessage.ptt` = `false` - Audio file (not voice note)
+- No special "recording" visualization
 
 ---
 
-## 3. Reacción a Audio
+## 3. Audio Reaction
 
-Mismo formato: `reactionMessage.text: "😂"`
-
----
-
-## 4. Eliminación de Audio
-
-Mismo formato: `protocolMessage.type: "REVOKE"`
+Same format: `reactionMessage.text: "😂"`
 
 ---
 
-## 5. Audio Reenviado
+## 4. Audio Deletion
 
-El campo `contextInfo.isForwarded: true` indica reenvío (ver ejemplo en Audio Archivo arriba).
+Same format: `protocolMessage.type: "REVOKE"`
+
+---
+
+## 5. Forwarded Audio
+
+The field `contextInfo.isForwarded: true` indicates forwarding (see Audio File example above).
 
 ---
 
@@ -707,11 +707,11 @@ El campo `contextInfo.isForwarded: true` indica reenvío (ver ejemplo en Audio A
 
 ---
 
-# Ubicaciones
+# Locations
 
-## 1. Ubicación Actual
+## 1. Current Location
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -745,13 +745,13 @@ El campo `contextInfo.isForwarded: true` indica reenvío (ver ejemplo en Audio A
 }
 ```
 
-**Campos clave:**
-- `locationMessage.degreesLatitude` - Latitud en grados decimales
-- `locationMessage.degreesLongitude` - Longitud en grados decimales
+**Key fields:**
+- `locationMessage.degreesLatitude` - Latitude in decimal degrees
+- `locationMessage.degreesLongitude` - Longitude in decimal degrees
 
 ---
 
-## 2. Ubicación en Vivo
+## 2. Live Location
 
 ```json
 {
@@ -766,7 +766,7 @@ El campo `contextInfo.isForwarded: true` indica reenvío (ver ejemplo en Audio A
     "liveLocationMessage": {
       "degreesLatitude": 8.2570838,
       "degreesLongitude": -62.7974644,
-      "caption": "Caption aqui",
+      "caption": "Caption here",
       "sequenceNumber": "1767367934423001",
       "contextInfo": {
         "expiration": 7776000,
@@ -777,21 +777,21 @@ El campo `contextInfo.isForwarded: true` indica reenvío (ver ejemplo en Audio A
 }
 ```
 
-**Campos clave adicionales:**
-- `liveLocationMessage.caption` - Texto descriptivo opcional
-- `liveLocationMessage.sequenceNumber` - Número de secuencia para actualizaciones
+**Additional key fields:**
+- `liveLocationMessage.caption` - Optional descriptive text
+- `liveLocationMessage.sequenceNumber` - Sequence number for updates
 
 ---
 
-## 3. Reacción a Ubicación
+## 3. Location Reaction
 
-Mismo formato: `reactionMessage.text: "❤️"`
+Same format: `reactionMessage.text: "❤️"`
 
 ---
 
-## 4. Eliminación de Ubicación
+## 4. Location Deletion
 
-Mismo formato: `protocolMessage.type: "REVOKE"`
+Same format: `protocolMessage.type: "REVOKE"`
 
 ```json
 {
@@ -812,11 +812,11 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 
 ---
 
-# Encuestas (Polls)
+# Polls
 
-## 1. Crear Encuesta
+## 1. Create Poll
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -834,10 +834,10 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
       "messageSecret": "PRdzIZUGahJ6JTwa2mFOsasy1jjVGzQbaoaR6NAWZBE="
     },
     "pollCreationMessageV3": {
-      "name": "Encuesta",
+      "name": "Poll",
       "options": [
-        { "optionName": "Opción a" },
-        { "optionName": "Opción B" }
+        { "optionName": "Option A" },
+        { "optionName": "Option B" }
       ],
       "selectableOptionsCount": 0,
       "contextInfo": {
@@ -849,19 +849,19 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 }
 ```
 
-**Campos clave:**
-- `pollCreationMessageV3.name` - Pregunta de la encuesta
-- `pollCreationMessageV3.options` - Array de opciones
-- `pollCreationMessageV3.options[].optionName` - Texto de cada opción
-- `pollCreationMessageV3.selectableOptionsCount` - Cantidad de opciones seleccionables (0 = todas)
+**Key fields:**
+- `pollCreationMessageV3.name` - Poll question
+- `pollCreationMessageV3.options` - Array of options
+- `pollCreationMessageV3.options[].optionName` - Option text
+- `pollCreationMessageV3.selectableOptionsCount` - Selectable options count (0 = all)
 
-**Nota:** También existe `pollCreationMessage` y `pollCreationMessageV2` (versiones anteriores).
+**Note:** `pollCreationMessage` and `pollCreationMessageV2` also exist (older versions).
 
 ---
 
-## 2. Votar en Encuesta
+## 2. Vote on Poll
 
-**Evento:** `messages.upsert` con `type: "notify"`
+**Event:** `messages.upsert` with `type: "notify"`
 
 ```json
 {
@@ -893,18 +893,18 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 }
 ```
 
-**Campos clave:**
-- `pollUpdateMessage.pollCreationMessageKey` - Referencia a la encuesta original
-- `pollUpdateMessage.vote.encPayload` - Voto encriptado (end-to-end)
-- `pollUpdateMessage.vote.encIv` - IV para descifrar el voto
+**Key fields:**
+- `pollUpdateMessage.pollCreationMessageKey` - Reference to the original poll
+- `pollUpdateMessage.vote.encPayload` - Encrypted vote (end-to-end)
+- `pollUpdateMessage.vote.encIv` - IV for decrypting the vote
 
-**Nota:** Los votos están cifrados E2E. Se necesita `messageSecret` de la encuesta original para descifrarlos.
+**Note:** Votes are E2E encrypted. The `messageSecret` from the original poll is needed to decrypt them.
 
 ---
 
-## 3. Reacción a Encuesta
+## 3. Poll Reaction
 
-Mismo formato: `reactionMessage.text: "😂"`
+Same format: `reactionMessage.text: "😂"`
 
 ```json
 {
@@ -924,9 +924,9 @@ Mismo formato: `reactionMessage.text: "😂"`
 
 ---
 
-## 4. Eliminación de Encuesta
+## 4. Poll Deletion
 
-Mismo formato: `protocolMessage.type: "REVOKE"`
+Same format: `protocolMessage.type: "REVOKE"`
 
 ```json
 {
@@ -947,26 +947,26 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 
 ---
 
-## Formatos de remoteJid
+## remoteJid Formats
 
-| Formato | Descripción |
-|---------|-------------|
-| `NUMERO@s.whatsapp.net` | Chat individual (formato antiguo) |
-| `NUMERO@lid` | Chat individual (formato nuevo) |
-| `NUMERO-TIMESTAMP@g.us` | Grupo |
-| `status@broadcast` | Estados/Historias |
-
----
+| Format | Description |
+|--------|-------------|
+| `NUMBER@s.whatsapp.net` | Individual chat (old format) |
+| `NUMBER@lid` | Individual chat (new format) |
+| `NUMBER-TIMESTAMP@g.us` | Group |
+| `status@broadcast` | Status/Stories |
 
 ---
 
-# Eventos de Chat
+---
 
-## 1. Chat Fijado (Pin)
+# Chat Events
 
-**Evento:** `chats.update`
+## 1. Chat Pinned
 
-### Fijar chat
+**Event:** `chats.update`
+
+### Pin chat
 ```json
 [
   {
@@ -977,7 +977,7 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-### Desfijar chat
+### Unpin chat
 ```json
 [
   {
@@ -987,16 +987,16 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-**Campos clave:**
-- `pinned` - Timestamp cuando se fijó (número) o `null` para desfijar
+**Key fields:**
+- `pinned` - Timestamp when pinned (number) or `null` to unpin
 
 ---
 
-## 2. Chat Archivado
+## 2. Chat Archived
 
-**Evento:** `chats.update`
+**Event:** `chats.update`
 
-### Archivar chat
+### Archive chat
 ```json
 [
   {
@@ -1007,7 +1007,7 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-### Desarchivar chat
+### Unarchive chat
 ```json
 [
   {
@@ -1017,16 +1017,16 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-**Campos clave:**
-- `archived` - `true` para archivar, `false` para desarchivar
+**Key fields:**
+- `archived` - `true` to archive, `false` to unarchive
 
 ---
 
-## 3. Chat Silenciado (Mute)
+## 3. Chat Muted
 
-**Evento:** `chats.update`
+**Event:** `chats.update`
 
-### Silenciar chat
+### Mute chat
 ```json
 [
   {
@@ -1036,7 +1036,7 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-### Quitar silencio
+### Unmute
 ```json
 [
   {
@@ -1046,14 +1046,14 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-**Campos clave:**
-- `muteEndTime` - Timestamp cuando expira el silencio (número) o `null` para quitar silencio
+**Key fields:**
+- `muteEndTime` - Mute expiration timestamp (number) or `null` to unmute
 
 ---
 
-## 4. Chat Eliminado
+## 4. Chat Deleted
 
-**Evento:** `chats.delete`
+**Event:** `chats.delete`
 
 ```json
 [
@@ -1061,13 +1061,13 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-**Nota:** Es un array de IDs de chats eliminados.
+**Note:** It's an array of deleted chat IDs.
 
 ---
 
-## 5. Mensaje Leído
+## 5. Message Read
 
-**Evento:** `messages.update`
+**Event:** `messages.update`
 
 ```json
 [
@@ -1084,20 +1084,20 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 ]
 ```
 
-**Valores de status:**
-| Status | Descripción |
+**Status values:**
+| Status | Description |
 |--------|-------------|
 | 1 | PENDING |
 | 2 | SERVER_ACK |
-| 3 | DELIVERY_ACK (entregado) |
-| 4 | READ (leído) |
-| 5 | PLAYED (reproducido - para audio/video) |
+| 3 | DELIVERY_ACK (delivered) |
+| 4 | READ |
+| 5 | PLAYED (for audio/video) |
 
 ---
 
-## 6. Presencia (Escribiendo/En línea)
+## 6. Presence (Typing/Online)
 
-**Evento:** `presence.update`
+**Event:** `presence.update`
 
 ```json
 {
@@ -1110,11 +1110,11 @@ Mismo formato: `protocolMessage.type: "REVOKE"`
 }
 ```
 
-**Valores de lastKnownPresence:**
-| Valor | Descripción |
+**lastKnownPresence values:**
+| Value | Description |
 |-------|-------------|
-| `composing` | Escribiendo |
-| `recording` | Grabando audio |
-| `paused` | Dejó de escribir |
-| `available` | En línea |
-| `unavailable` | Desconectado |
+| `composing` | Typing |
+| `recording` | Recording audio |
+| `paused` | Stopped typing |
+| `available` | Online |
+| `unavailable` | Disconnected |

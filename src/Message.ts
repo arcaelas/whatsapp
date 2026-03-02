@@ -10,95 +10,102 @@ import type { WhatsApp } from '~/WhatsApp';
 
 /**
  * @description Tipos de mensaje soportados.
+ * Supported message types.
  */
 export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'location' | 'poll';
 
 /**
  * @description Estados de un mensaje.
+ * Message delivery statuses.
  */
 export enum MESSAGE_STATUS {
-    /** Error al enviar */
+    /** Error al enviar / Send error */
     ERROR = 0,
-    /** Mensaje pendiente de envío */
+    /** Mensaje pendiente de envío / Pending send */
     PENDING = 1,
-    /** Servidor recibió el mensaje */
+    /** Servidor recibió el mensaje / Server acknowledged */
     SERVER_ACK = 2,
-    /** Mensaje entregado al destinatario */
+    /** Mensaje entregado al destinatario / Delivered */
     DELIVERED = 3,
-    /** Mensaje leído por el destinatario */
+    /** Mensaje leído por el destinatario / Read */
     READ = 4,
-    /** Mensaje reproducido (audio/video) */
+    /** Mensaje reproducido (audio/video) / Played */
     PLAYED = 5,
 }
 
 /**
  * @description Opciones para crear encuesta.
+ * Poll creation options.
  */
 export interface PollOptions {
-    /** Pregunta o título de la encuesta */
+    /** Pregunta o título de la encuesta / Poll question or title */
     content: string;
-    /** Opciones de respuesta */
+    /** Opciones de respuesta / Answer options */
     options: Array<{ content: string }>;
 }
 
 /**
  * @description Opciones para enviar ubicación.
+ * Location send options.
  */
 export interface LocationOptions {
-    /** Latitud en grados */
+    /** Latitud en grados / Latitude in degrees */
     lat: number;
-    /** Longitud en grados */
+    /** Longitud en grados / Longitude in degrees */
     lng: number;
-    /** true para ubicación en tiempo real */
+    /** true para ubicación en tiempo real / true for live location */
     live?: boolean;
 }
 
 /**
  * @description Datos del índice de mensaje (sin content ni raw completo).
+ * Message index data (without content or full raw).
  */
 export interface IMessageIndex {
-    /** ID único del mensaje */
+    /** ID único del mensaje / Unique message ID */
     id: string;
-    /** ID del chat */
+    /** ID del chat / Chat ID */
     cid: string;
-    /** ID del mensaje padre (reply) */
+    /** ID del mensaje padre (reply) / Parent message ID (reply) */
     mid: string | null;
-    /** Si el mensaje es propio */
+    /** Si el mensaje es propio / Whether the message is own */
     me: boolean;
-    /** Tipo de mensaje */
+    /** Tipo de mensaje / Message type */
     type: MessageType;
-    /** Autor del mensaje */
+    /** Autor del mensaje / Message author */
     author: string;
-    /** Estado de entrega */
+    /** Estado de entrega / Delivery status */
     status: MESSAGE_STATUS;
-    /** Si está destacado */
+    /** Si está destacado / Whether it's starred */
     starred: boolean;
-    /** Si fue reenviado */
+    /** Si fue reenviado / Whether it was forwarded */
     forwarded: boolean;
-    /** Timestamp de creación (ms) */
+    /** Timestamp de creación (ms) / Creation timestamp (ms) */
     created_at: number;
-    /** Timestamp de expiración (ms) o null */
+    /** Timestamp de expiración (ms) o null / Expiration timestamp (ms) or null */
     deleted_at: number | null;
-    /** Tipo MIME */
+    /** Tipo MIME / MIME type */
     mime: string;
-    /** Caption del mensaje */
+    /** Caption del mensaje / Message caption */
     caption: string;
-    /** true si fue editado */
+    /** true si fue editado / true if edited */
     edited: boolean;
 }
 
 /**
  * @description Datos completos del mensaje.
+ * Full message data.
  */
 export interface IMessage {
-    /** Índice del mensaje */
+    /** Índice del mensaje / Message index */
     index: IMessageIndex;
-    /** WAMessage raw del protocolo */
+    /** WAMessage raw del protocolo / Protocol raw WAMessage */
     raw: WAMessage;
 }
 
 /**
  * @description Mapeo de tipos de contenido de Baileys a MessageType.
+ * Baileys content type to MessageType mapping.
  */
 export const MESSAGE_TYPE_MAP: Record<string, MessageType> = {
     conversation: 'text',
@@ -115,35 +122,23 @@ export const MESSAGE_TYPE_MAP: Record<string, MessageType> = {
 
 /**
  * @description Construye IMessageIndex desde WAMessage.
- * @param raw WAMessage del protocolo.
- * @param edited Si el mensaje fue editado.
- * @returns IMessageIndex normalizado.
+ * Builds IMessageIndex from WAMessage.
  */
-export function build_message_index(raw: WAMessage, edited = false): IMessageIndex {
+function build_message_index(raw: WAMessage, edited = false): IMessageIndex {
     const content_type = getContentType(raw.message ?? {});
     const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'text';
     const msg_content = raw.message?.[content_type as keyof typeof raw.message] as Record<string, unknown> | string | undefined;
     const context_info = (msg_content as { contextInfo?: proto.IContextInfo } | undefined)?.contextInfo;
-
-    // Calcular MIME
-    let mime = 'text/plain';
-    if (msg_type === 'location' || msg_type === 'poll') {
-        mime = 'application/json';
-    } else if (msg_type !== 'text' && typeof msg_content === 'object') {
-        mime = (msg_content?.mimetype as string) ?? 'application/octet-stream';
-    }
-
-    // Calcular caption
-    let caption = '';
-    if (typeof msg_content === 'string') {
-        caption = msg_content;
-    } else if (msg_content) {
-        caption = (msg_content.caption as string) ?? (msg_content.text as string) ?? (msg_content.name as string) ?? '';
-    }
-
-    // Calcular deleted_at
     const ephemeral_duration = raw.ephemeralDuration ?? context_info?.expiration;
     const deleted_at = raw.ephemeralStartTimestamp && ephemeral_duration ? (Number(raw.ephemeralStartTimestamp) + ephemeral_duration) * 1000 : null;
+
+    let mime = 'text/plain';
+    if (msg_type === 'location' || msg_type === 'poll') mime = 'application/json';
+    else if (msg_type !== 'text' && typeof msg_content === 'object') mime = (msg_content?.mimetype as string) ?? 'application/octet-stream';
+
+    let caption = '';
+    if (typeof msg_content === 'string') caption = msg_content;
+    else if (msg_content) caption = (msg_content.caption as string) ?? (msg_content.text as string) ?? (msg_content.name as string) ?? '';
 
     return {
         id: raw.key.id!,
@@ -166,12 +161,12 @@ export function build_message_index(raw: WAMessage, edited = false): IMessageInd
 /**
  * @description
  * Clase base para representar un mensaje de WhatsApp.
- * Expone getters sobre el índice, raw accesible para operaciones avanzadas.
+ * Base class representing a WhatsApp message.
  */
 export class Message {
-    /** Índice del mensaje */
+    /** Índice del mensaje / Message index */
     readonly index: IMessageIndex;
-    /** WAMessage raw del protocolo */
+    /** WAMessage raw del protocolo / Protocol raw WAMessage */
     readonly raw: WAMessage;
 
     constructor(data: IMessage) {
@@ -179,79 +174,38 @@ export class Message {
         this.raw = data.raw;
     }
 
-    /** ID único del mensaje */
-    get id(): string {
-        return this.index.id;
-    }
-
-    /** JID del chat al que pertenece */
-    get cid(): string {
-        return this.index.cid;
-    }
-
-    /** ID del mensaje padre (reply) */
-    get mid(): string | null {
-        return this.index.mid;
-    }
-
-    /** true si el mensaje fue enviado por el usuario autenticado */
-    get me(): boolean {
-        return this.index.me;
-    }
-
-    /** Autor del mensaje */
-    get author(): string {
-        return this.index.author;
-    }
-
-    /** true si el mensaje fue editado */
-    get edited(): boolean {
-        return this.index.edited;
-    }
-
-    /** Tipo de contenido del mensaje */
-    get type(): MessageType {
-        return this.index.type;
-    }
-
-    /** Texto o caption del mensaje */
-    get caption(): string {
-        return this.index.caption;
-    }
-
-    /** Tipo MIME del contenido */
-    get mime(): string {
-        return this.index.mime;
-    }
-
-    /** Estado del mensaje */
-    get status(): MESSAGE_STATUS {
-        return this.index.status;
-    }
-
-    /** true si el mensaje está destacado */
-    get starred(): boolean {
-        return this.index.starred;
-    }
-
-    /** true si el mensaje fue reenviado */
-    get forwarded(): boolean {
-        return this.index.forwarded;
-    }
-
-    /** Timestamp de creación (ms) */
-    get created_at(): number {
-        return this.index.created_at;
-    }
-
-    /** Timestamp de expiración (ms) o null */
-    get deleted_at(): number | null {
-        return this.index.deleted_at;
-    }
+    /** ID único del mensaje / Unique message ID */
+    get id(): string { return this.index.id; }
+    /** JID del chat al que pertenece / Chat JID */
+    get cid(): string { return this.index.cid; }
+    /** ID del mensaje padre (reply) / Parent message ID (reply) */
+    get mid(): string | null { return this.index.mid; }
+    /** true si el mensaje fue enviado por el usuario autenticado / true if sent by authenticated user */
+    get me(): boolean { return this.index.me; }
+    /** Autor del mensaje / Message author */
+    get author(): string { return this.index.author; }
+    /** true si el mensaje fue editado / true if edited */
+    get edited(): boolean { return this.index.edited; }
+    /** Tipo de contenido del mensaje / Message content type */
+    get type(): MessageType { return this.index.type; }
+    /** Texto o caption del mensaje / Message text or caption */
+    get caption(): string { return this.index.caption; }
+    /** Tipo MIME del contenido / Content MIME type */
+    get mime(): string { return this.index.mime; }
+    /** Estado del mensaje / Message status */
+    get status(): MESSAGE_STATUS { return this.index.status; }
+    /** true si el mensaje está destacado / true if starred */
+    get starred(): boolean { return this.index.starred; }
+    /** true si el mensaje fue reenviado / true if forwarded */
+    get forwarded(): boolean { return this.index.forwarded; }
+    /** Timestamp de creación (ms) / Creation timestamp (ms) */
+    get created_at(): number { return this.index.created_at; }
+    /** Timestamp de expiración (ms) o null / Expiration timestamp (ms) or null */
+    get deleted_at(): number | null { return this.index.deleted_at; }
 
     /**
      * @description Obtiene el contenido como Readable stream.
-     * @returns Readable stream (vacío en clase base).
+     * Gets content as Readable stream.
      */
     stream(): Promise<Readable> {
         return Promise.resolve(Readable.from(Buffer.alloc(0)));
@@ -259,7 +213,7 @@ export class Message {
 
     /**
      * @description Obtiene el contenido del mensaje como Buffer.
-     * @returns Buffer con el contenido (vacío en clase base).
+     * Gets message content as Buffer.
      */
     content(): Promise<Buffer> {
         return Promise.resolve(Buffer.alloc(0));
@@ -268,231 +222,155 @@ export class Message {
 
 /**
  * @description Factory que retorna la clase Message enlazada al contexto.
+ * Factory that returns the Message class bound to context.
  * @param wa Instancia de WhatsApp.
- * @returns Clase _Message que extiende Message.
  */
 export function message(wa: WhatsApp) {
-    /** Subscribers para watch() */
-    const _watchers = new Map<string, Set<(msg: Message) => void>>();
+    const _watchers = new Map<string, Set<(msg: any) => void>>();
 
-    /** Función interna para envío de mensajes */
-    async function _send(cid: string, content: Record<string, unknown>, binary?: Buffer): Promise<InstanceType<typeof _Message> | null> {
+    /**
+     * @description Agrega un mensaje al índice del chat (interno).
+     * Adds a message to the chat index (internal).
+     */
+    async function _add_to_index(cid: string, mid: string, timestamp: number): Promise<void> {
+        const key = `chat/${cid}/messages`;
+        const line = `${timestamp} ${mid}`;
+        const current = await wa.engine.get(key);
+        await wa.engine.set(key, current ? `${line}\n${current}` : line);
+    }
+
+    /**
+     * @description Elimina un mensaje del índice del chat (interno).
+     * Removes a message from the chat index (internal).
+     */
+    async function _remove_from_index(cid: string, mid: string): Promise<void> {
+        const key = `chat/${cid}/messages`;
+        const content = await wa.engine.get(key);
+        if (!content) return;
+        const filtered = content.trim().split('\n').filter((line) => !line.endsWith(` ${mid}`)).join('\n');
+        await wa.engine.set(key, filtered || null);
+    }
+
+    /**
+     * @description Notifica a los watchers de un mensaje (interno).
+     * Notifies message watchers (internal).
+     */
+    function _notify(cid: string, mid: string): void {
+        const handlers = _watchers.get(`${cid}:${mid}`);
+        handlers?.forEach((h) => _Message.get(cid, mid).then((msg) => msg && h(msg)));
+    }
+
+    async function _send(cid: string, content: Record<string, unknown>, binary?: Buffer, mid?: string): Promise<InstanceType<typeof _Message> | null> {
         if (!wa.socket) return null;
-        const raw = await wa.socket.sendMessage(cid, content as never);
+        let quoted: WAMessage | undefined;
+        if (mid) {
+            const ref = await _Message.get(cid, mid);
+            if (ref) quoted = ref.raw;
+        }
+        const raw = await wa.socket.sendMessage(cid, { ...content, ...(quoted && { quoted }) } as never);
         if (!raw?.key?.id) return null;
 
         const index = build_message_index(raw);
         await wa.engine.set(`chat/${cid}/message/${raw.key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
         await wa.engine.set(`chat/${cid}/message/${raw.key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
         if (binary) await wa.engine.set(`chat/${cid}/message/${raw.key.id}/content`, binary.toString('base64'));
-        await wa.Chat.add_message(cid, raw.key.id, index.created_at);
+        await _add_to_index(cid, raw.key.id, index.created_at);
         return new _Message({ index, raw });
     }
 
     const _Message = class extends Message {
         /**
          * @description Obtiene un mensaje por CID y MID.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @returns Mensaje o null si no existe.
+         * Retrieves a message by CID and MID.
          */
         static async get(cid: string, mid: string): Promise<InstanceType<typeof _Message> | null> {
             const stored_index = await wa.engine.get(`chat/${cid}/message/${mid}/index`);
             if (!stored_index) return null;
-
             const index: IMessageIndex = JSON.parse(stored_index, BufferJSON.reviver);
-
-            // Obtener raw si existe
             const stored_raw = await wa.engine.get(`chat/${cid}/message/${mid}/raw`);
             const raw: WAMessage = stored_raw ? JSON.parse(stored_raw, BufferJSON.reviver) : { key: { remoteJid: cid, id: mid, fromMe: index.me } };
-
             return new _Message({ index, raw });
         }
 
         /**
-         * @description Reacciona a un mensaje.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @param emoji Emoji de reacción (vacío para quitar).
-         * @returns true si se envió correctamente.
+         * @description Lista mensajes de un chat (paginado).
+         * Lists messages from a chat (paginated).
          */
-        static async react(cid: string, mid: string, emoji: string): Promise<boolean> {
-            if (!wa.socket) return false;
-            const msg = await _Message.get(cid, mid);
-            if (!msg) return false;
-            await wa.socket.sendMessage(cid, {
-                react: { text: emoji, key: { remoteJid: cid, id: mid, fromMe: msg.me } },
-            });
-            return true;
+        static async list(cid: string, offset = 0, limit = 50): Promise<InstanceType<typeof _Message>[]> {
+            const content = await wa.engine.get(`chat/${cid}/messages`);
+            if (!content) return [];
+            const ids = content.trim().split('\n').slice(offset, offset + limit).map((line) => line.split(' ')[1]).filter(Boolean);
+            const messages: InstanceType<typeof _Message>[] = [];
+            for (const mid of ids) {
+                const msg = await _Message.get(cid, mid);
+                if (msg) messages.push(msg);
+            }
+            return messages;
         }
 
         /**
-         * @description Elimina un mensaje para todos.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @returns true si se eliminó correctamente.
+         * @description Cuenta mensajes de un chat.
+         * Counts messages in a chat.
          */
-        static async remove(cid: string, mid: string): Promise<boolean> {
-            if (!wa.socket) return false;
-            const msg = await _Message.get(cid, mid);
-            if (!msg) return false;
-
-            await wa.socket.sendMessage(cid, { delete: { remoteJid: cid, id: mid, fromMe: msg.me } });
-
-            // Eliminar del índice del chat
-            await wa.Chat.remove_message(cid, mid);
-
-            // Eliminar archivos
-            await wa.engine.set(`chat/${cid}/message/${mid}/index`, null);
-            await wa.engine.set(`chat/${cid}/message/${mid}/content`, null);
-            await wa.engine.set(`chat/${cid}/message/${mid}/raw`, null);
-            return true;
-        }
-
-        /**
-         * @description Reenvía un mensaje a otro chat.
-         * @param cid ID del chat origen.
-         * @param mid ID del mensaje.
-         * @param to_cid ID del chat destino.
-         * @returns true si se reenvió correctamente.
-         */
-        static async forward(cid: string, mid: string, to_cid: string): Promise<boolean> {
-            if (!wa.socket) return false;
-
-            const msg = await _Message.get(cid, mid);
-            if (!msg) return false;
-
-            // Forward nativo con raw
-            if (msg.raw.message) {
-                try {
-                    const wa_msg = generateWAMessageFromContent(to_cid, generateForwardMessageContent(msg.raw, false), { userJid: wa.socket.user?.id ?? '' });
-                    await wa.socket.relayMessage(to_cid, wa_msg.message!, { messageId: wa_msg.key.id! });
-                    return true;
-                } catch {
-                    // Fallback si falla el forward nativo
-                }
-            }
-
-            // Fallback: obtener contenido y reenviar
-            const content = await msg.content();
-            if (!content.length) return false;
-
-            if (msg.type === 'text') return (await _Message.text(to_cid, content.toString())) !== null;
-            if (msg.type === 'image') return (await _Message.image(to_cid, content, msg.caption || undefined)) !== null;
-            if (msg.type === 'video') return (await _Message.video(to_cid, content, msg.caption || undefined)) !== null;
-            if (msg.type === 'audio') return (await _Message.audio(to_cid, content)) !== null;
-            if (msg.type === 'location') {
-                try {
-                    return (await _Message.location(to_cid, JSON.parse(content.toString()) as LocationOptions)) !== null;
-                } catch {
-                    return false;
-                }
-            }
-            return false;
-        }
-
-        /**
-         * @description Edita un mensaje (solo texto o caption).
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @param text Nuevo contenido.
-         * @returns true si se editó correctamente.
-         */
-        static async edit(cid: string, mid: string, text: string): Promise<boolean> {
-            if (!wa.socket) return false;
-            const msg = await _Message.get(cid, mid);
-            if (!msg?.me) return false;
-
-            await wa.socket.sendMessage(cid, {
-                text,
-                edit: { remoteJid: cid, id: mid, fromMe: true },
-            } as never);
-
-            // Actualizar el mensaje almacenado con el nuevo contenido
-            const content_type = getContentType(msg.raw.message ?? {});
-            if (content_type === 'conversation') {
-                msg.raw.message = { conversation: text };
-            } else if (content_type === 'extendedTextMessage') {
-                msg.raw.message = { extendedTextMessage: { text } };
-            }
-
-            // Actualizar índice
-            msg.index.caption = text;
-            msg.index.edited = true;
-            await wa.engine.set(`chat/${cid}/message/${mid}/index`, JSON.stringify(msg.index, BufferJSON.replacer));
-            await wa.engine.set(`chat/${cid}/message/${mid}/raw`, JSON.stringify(msg.raw, BufferJSON.replacer));
-            return true;
+        static async count(cid: string): Promise<number> {
+            const content = await wa.engine.get(`chat/${cid}/messages`);
+            if (!content) return 0;
+            return content.trim().split('\n').filter(Boolean).length;
         }
 
         /**
          * @description Envía un mensaje de texto.
-         * @param cid ID del chat destino.
-         * @param text Contenido del mensaje.
-         * @returns Mensaje enviado o null.
+         * Sends a text message.
          */
-        static async text(cid: string, text: string) {
-            return _send(cid, { text });
+        static async text(cid: string, text: string, mid?: string) {
+            return _send(cid, { text }, undefined, mid);
         }
 
         /**
          * @description Envía una imagen.
-         * @param cid ID del chat destino.
-         * @param buffer Buffer de la imagen.
-         * @param caption Caption opcional.
-         * @returns Mensaje enviado o null.
+         * Sends an image.
          */
-        static async image(cid: string, buffer: Buffer, caption?: string) {
-            return _send(cid, { image: buffer, caption }, buffer);
+        static async image(cid: string, buffer: Buffer, caption?: string, mid?: string) {
+            return _send(cid, { image: buffer, caption }, buffer, mid);
         }
 
         /**
          * @description Envía un video.
-         * @param cid ID del chat destino.
-         * @param buffer Buffer del video.
-         * @param caption Caption opcional.
-         * @returns Mensaje enviado o null.
+         * Sends a video.
          */
-        static async video(cid: string, buffer: Buffer, caption?: string) {
-            return _send(cid, { video: buffer, caption }, buffer);
+        static async video(cid: string, buffer: Buffer, caption?: string, mid?: string) {
+            return _send(cid, { video: buffer, caption }, buffer, mid);
         }
 
         /**
          * @description Envía un audio.
-         * @param cid ID del chat destino.
-         * @param buffer Buffer del audio.
-         * @param ptt true para nota de voz (default true).
-         * @returns Mensaje enviado o null.
+         * Sends an audio.
+         * @param ptt true para nota de voz (default true) / true for voice note (default true).
          */
-        static async audio(cid: string, buffer: Buffer, ptt = true) {
-            return _send(cid, { audio: buffer, ptt }, buffer);
+        static async audio(cid: string, buffer: Buffer, ptt = true, mid?: string) {
+            return _send(cid, { audio: buffer, ptt }, buffer, mid);
         }
 
         /**
          * @description Envía una ubicación.
-         * @param cid ID del chat destino.
-         * @param opts Opciones de ubicación (lat, lng, live).
-         * @returns Mensaje enviado o null.
+         * Sends a location.
          */
-        static async location(cid: string, opts: LocationOptions) {
-            return _send(cid, { location: { degreesLatitude: opts.lat, degreesLongitude: opts.lng } });
+        static async location(cid: string, opts: LocationOptions, mid?: string) {
+            return _send(cid, { location: { degreesLatitude: opts.lat, degreesLongitude: opts.lng } }, undefined, mid);
         }
 
         /**
          * @description Envía una encuesta.
-         * @param cid ID del chat destino.
-         * @param opts Opciones de encuesta (content, options).
-         * @returns Mensaje enviado o null.
+         * Sends a poll.
          */
-        static async poll(cid: string, opts: PollOptions) {
-            return _send(cid, { poll: { name: opts.content, values: opts.options.map((o) => o.content), selectableCount: 1 } });
+        static async poll(cid: string, opts: PollOptions, mid?: string) {
+            return _send(cid, { poll: { name: opts.content, values: opts.options.map((o) => o.content), selectableCount: 1 } }, undefined, mid);
         }
 
         /**
          * @description Observa cambios en un mensaje específico.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
-         * @param handler Callback con el mensaje actualizado.
-         * @returns Función para dejar de observar.
+         * Watches changes on a specific message.
+         * @returns Función para dejar de observar / Unsubscribe function.
          */
         static watch(cid: string, mid: string, handler: (msg: InstanceType<typeof _Message>) => void): () => void {
             const key = `${cid}:${mid}`;
@@ -505,20 +383,137 @@ export function message(wa: WhatsApp) {
         }
 
         /**
-         * @description Notifica a los watchers de un mensaje.
-         * @param cid ID del chat.
-         * @param mid ID del mensaje.
+         * @description Edita el mensaje (solo texto o caption, solo mensajes propios).
+         * Edits the message (text or caption only, own messages only).
          */
-        static notify(cid: string, mid: string): void {
-            const handlers = _watchers.get(`${cid}:${mid}`);
-            handlers?.forEach((h) => _Message.get(cid, mid).then((msg) => msg && h(msg)));
+        async edit(text: string): Promise<boolean> {
+            if (!wa.socket || !this.me) return false;
+
+            await wa.socket.sendMessage(this.cid, {
+                text,
+                edit: { remoteJid: this.cid, id: this.id, fromMe: true },
+            } as never);
+
+            const content_type = getContentType(this.raw.message ?? {});
+            if (content_type === 'conversation') {
+                this.raw.message = { conversation: text };
+            } else if (content_type === 'extendedTextMessage') {
+                this.raw.message = { extendedTextMessage: { text } };
+            }
+
+            this.index.caption = text;
+            this.index.edited = true;
+            await wa.engine.set(`chat/${this.cid}/message/${this.id}/index`, JSON.stringify(this.index, BufferJSON.replacer));
+            await wa.engine.set(`chat/${this.cid}/message/${this.id}/raw`, JSON.stringify(this.raw, BufferJSON.replacer));
+            return true;
+        }
+
+        /**
+         * @description Elimina el mensaje para todos.
+         * Deletes the message for everyone.
+         */
+        async remove(): Promise<boolean> {
+            if (!wa.socket) return false;
+            await wa.socket.sendMessage(this.cid, { delete: { remoteJid: this.cid, id: this.id, fromMe: this.me } });
+            await _remove_from_index(this.cid, this.id);
+            await wa.engine.set(`chat/${this.cid}/message/${this.id}`, null);
+            return true;
+        }
+
+        /**
+         * @description Reenvía el mensaje a otro chat.
+         * Forwards the message to another chat.
+         */
+        async forward(to_cid: string): Promise<boolean> {
+            if (!wa.socket) return false;
+
+            if (this.raw.message) {
+                try {
+                    const wa_msg = generateWAMessageFromContent(to_cid, generateForwardMessageContent(this.raw, false), { userJid: wa.socket.user?.id ?? '' });
+                    await wa.socket.relayMessage(to_cid, wa_msg.message!, { messageId: wa_msg.key.id! });
+                    return true;
+                } catch { /* fallback below */ }
+            }
+
+            const buf = await this.content();
+            if (!buf.length) return false;
+
+            if (this.type === 'text') return (await _Message.text(to_cid, buf.toString())) !== null;
+            if (this.type === 'image') return (await _Message.image(to_cid, buf, this.caption || undefined)) !== null;
+            if (this.type === 'video') return (await _Message.video(to_cid, buf, this.caption || undefined)) !== null;
+            if (this.type === 'audio') return (await _Message.audio(to_cid, buf)) !== null;
+            if (this.type === 'location') {
+                try {
+                    return (await _Message.location(to_cid, JSON.parse(buf.toString()) as LocationOptions)) !== null;
+                } catch { return false; }
+            }
+            return false;
+        }
+
+        /**
+         * @description Reacciona al mensaje.
+         * Reacts to the message.
+         * @param emoji Emoji de reacción (vacío para quitar) / Reaction emoji (empty to remove).
+         */
+        async react(emoji: string): Promise<boolean> {
+            if (!wa.socket) return false;
+            await wa.socket.sendMessage(this.cid, {
+                react: { text: emoji, key: { remoteJid: this.cid, id: this.id, fromMe: this.me } },
+            });
+            return true;
+        }
+
+        /**
+         * @description Responde con un mensaje de texto.
+         * Replies with a text message.
+         */
+        async text(content: string) {
+            return _Message.text(this.cid, content, this.id);
+        }
+
+        /**
+         * @description Responde con una imagen.
+         * Replies with an image.
+         */
+        async image(buffer: Buffer, caption?: string) {
+            return _Message.image(this.cid, buffer, caption, this.id);
+        }
+
+        /**
+         * @description Responde con un video.
+         * Replies with a video.
+         */
+        async video(buffer: Buffer, caption?: string) {
+            return _Message.video(this.cid, buffer, caption, this.id);
+        }
+
+        /**
+         * @description Responde con un audio.
+         * Replies with an audio.
+         */
+        async audio(buffer: Buffer, ptt = true) {
+            return _Message.audio(this.cid, buffer, ptt, this.id);
+        }
+
+        /**
+         * @description Responde con una ubicacion.
+         * Replies with a location.
+         */
+        async location(opts: LocationOptions) {
+            return _Message.location(this.cid, opts, this.id);
+        }
+
+        /**
+         * @description Responde con una encuesta.
+         * Replies with a poll.
+         */
+        async poll(opts: PollOptions) {
+            return _Message.poll(this.cid, opts, this.id);
         }
 
         /**
          * @description Obtiene el contenido como Readable stream.
-         * Para media (image/video/audio) retorna stream directo de Baileys sin cargar en memoria.
-         * Para text/location/poll retorna stream desde buffer pequeño.
-         * @returns Readable stream con el contenido.
+         * Gets content as Readable stream.
          */
         async stream(): Promise<Readable> {
             if (this.type === 'text') {
@@ -544,8 +539,7 @@ export function message(wa: WhatsApp) {
 
         /**
          * @description Obtiene el contenido del mensaje como Buffer.
-         * Usa stream() internamente y cachea el resultado en el engine.
-         * @returns Buffer con el contenido.
+         * Gets message content as Buffer.
          */
         async content(): Promise<Buffer> {
             const cached = await wa.engine.get(`chat/${this.cid}/message/${this.id}/content`);
@@ -563,5 +557,5 @@ export function message(wa: WhatsApp) {
         }
     };
 
-    return _Message;
+    return Object.assign(_Message, { _add_to_index, _remove_from_index, _notify, _build_index: build_message_index });
 }

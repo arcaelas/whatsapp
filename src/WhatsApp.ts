@@ -22,23 +22,25 @@ import {
 import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { build_chat, chat, type IChat, type IChatRaw } from '~/Chat';
-import { build_contact, contact, type IContact, type IContactRaw } from '~/Contact';
-import { build_message_index, message, MESSAGE_STATUS, type IMessageIndex } from '~/Message';
+import { chat, type IChatRaw } from '~/Chat';
+import { contact, type IContactRaw } from '~/Contact';
+import { message, type IMessageIndex } from '~/Message';
 import { FileEngine, type Engine } from '~/store';
 
 /**
  * @description Opciones de configuración de WhatsApp.
+ * WhatsApp configuration options.
  */
 export interface IWhatsApp {
-    /** Motor de almacenamiento personalizado */
+    /** Motor de almacenamiento personalizado / Custom storage engine */
     engine?: Engine;
-    /** Número de teléfono para emparejamiento con código */
+    /** Número de teléfono para emparejamiento con código / Phone number for code pairing */
     phone?: string | number;
 }
 
 /**
  * @description Mapa de eventos emitidos por WhatsApp.
+ * Map of events emitted by WhatsApp.
  */
 interface WhatsAppEventMap {
     open: [];
@@ -61,6 +63,7 @@ interface WhatsAppEventMap {
 /**
  * @description
  * Clase principal para gestionar la conexión con WhatsApp.
+ * Main class for managing the WhatsApp connection.
  *
  * @example
  * const { event, pair, Contact, Chat, Message } = new WhatsApp({ phone: '5491112345678' });
@@ -86,16 +89,19 @@ export class WhatsApp {
         this.Message = message(this);
     }
 
-    /** @description Retorna el socket de Baileys (null si no está conectado). */
+    /**
+     * @description Retorna el socket de Baileys (null si no está conectado).
+     * Returns the Baileys socket (null if disconnected).
+     */
     get socket(): WASocket | null {
         return this._socket;
     }
 
     /**
      * @description Conecta a WhatsApp.
+     * Connects to WhatsApp.
      * - Con phone: callback recibe código de 8 dígitos (una vez)
      * - Sin phone: callback recibe QR como Buffer PNG (periódicamente)
-     * @param callback Función que recibe el código o QR.
      */
     pair = async (callback: (code: string | Buffer) => void | Promise<void>): Promise<void> => {
         const { version } = await fetchLatestBaileysVersion();
@@ -103,7 +109,6 @@ export class WhatsApp {
         const creds: AuthenticationCreds = stored ? JSON.parse(stored, BufferJSON.reviver) : initAuthCreds();
 
         let code_sent = false;
-
         const connect = async (): Promise<void> => {
             this._socket = makeWASocket({
                 version,
@@ -140,9 +145,7 @@ export class WhatsApp {
             });
 
             const socket = this._socket;
-
             socket.ev.on('creds.update', () => this.engine.set('session/creds', JSON.stringify(creds, BufferJSON.replacer)));
-
             socket.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect, qr } = update;
 
@@ -185,9 +188,9 @@ export class WhatsApp {
                         imgUrl: (c as { imgUrl?: string }).imgUrl ?? null,
                         status: (c as { status?: string }).status ?? null,
                     };
-                    const data = build_contact(raw);
-                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-                    this.event.emit(existing ? 'contact:updated' : 'contact:created', new this.Contact(data));
+                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
+                    if (raw.lid) await this.engine.set(`lid/${raw.lid}`, raw.id);
+                    this.event.emit(existing ? 'contact:updated' : 'contact:created', new this.Contact(raw));
                 }
             });
 
@@ -197,17 +200,16 @@ export class WhatsApp {
                     const stored = await this.engine.get(`contact/${c.id}/index`);
                     if (!stored) continue;
 
-                    const data: IContact = JSON.parse(stored, BufferJSON.reviver);
-                    if (c.notify) data.raw.notify = c.notify;
-                    if (c.name) data.raw.name = c.name;
-                    if ((c as { imgUrl?: string }).imgUrl) data.raw.imgUrl = (c as { imgUrl?: string }).imgUrl;
-                    if ((c as { status?: string }).status) data.raw.status = (c as { status?: string }).status;
+                    const raw: IContactRaw = JSON.parse(stored, BufferJSON.reviver);
+                    if (c.notify) raw.notify = c.notify;
+                    if (c.name) raw.name = c.name;
+                    if ((c as { imgUrl?: string }).imgUrl) raw.imgUrl = (c as { imgUrl?: string }).imgUrl;
+                    if ((c as { status?: string }).status) raw.status = (c as { status?: string }).status;
+                    if ((c as { lid?: string }).lid) raw.lid = (c as { lid?: string }).lid;
 
-                    data.name = data.raw.name ?? data.raw.notify ?? data.raw.id.split('@')[0];
-                    data.photo = data.raw.imgUrl ?? null;
-                    data.content = data.raw.status ?? '';
-                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-                    this.event.emit('contact:updated', new this.Contact(data));
+                    await this.engine.set(`contact/${c.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
+                    if (raw.lid) await this.engine.set(`lid/${raw.lid}`, raw.id);
+                    this.event.emit('contact:updated', new this.Contact(raw));
                 }
             });
 
@@ -219,7 +221,7 @@ export class WhatsApp {
                 for (const ch of chats) {
                     const existing = await this.engine.get(`chat/${ch.id}/index`);
                     const raw: IChatRaw = existing
-                        ? (JSON.parse(existing, BufferJSON.reviver) as IChat).raw
+                        ? JSON.parse(existing, BufferJSON.reviver)
                         : {
                             id: ch.id,
                             name: ch.name ?? null,
@@ -230,9 +232,8 @@ export class WhatsApp {
                             readOnly: (ch as { readOnly?: boolean }).readOnly ?? null,
                         };
                     if (ch.name) raw.name = ch.name;
-                    const data = build_chat(raw);
-                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-                    this.event.emit(existing ? 'chat:updated' : 'chat:created', new this.Chat(data));
+                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
+                    this.event.emit(existing ? 'chat:updated' : 'chat:created', new this.Chat(raw));
                 }
             });
 
@@ -241,56 +242,34 @@ export class WhatsApp {
                     if (!ch.id) continue;
 
                     const stored = await this.engine.get(`chat/${ch.id}/index`);
-                    const data: IChat = stored ? JSON.parse(stored, BufferJSON.reviver) : build_chat({ id: ch.id, name: ch.name ?? null });
-
-                    if (ch.name !== undefined) {
-                        data.raw.name = ch.name ?? data.raw.name;
-                        data.name = data.raw.name ?? data.raw.displayName ?? ch.id.split('@')[0];
-                    }
-
+                    const raw: IChatRaw = stored ? JSON.parse(stored, BufferJSON.reviver) : { id: ch.id, name: ch.name ?? null };
                     let has_specific_event = false;
 
-                    // Pin
+                    if (ch.name !== undefined) raw.name = ch.name ?? raw.name;
                     if ('pinned' in ch) {
-                        data.raw.pinned = (ch as { pinned?: number | null }).pinned ?? null;
-                        data.pined = data.raw.pinned !== null;
-                        this.event.emit('chat:pined', ch.id, data.raw.pinned);
+                        raw.pinned = (ch as { pinned?: number | null }).pinned ?? null;
+                        this.event.emit('chat:pined', ch.id, raw.pinned);
                         has_specific_event = true;
                     }
-
-                    // Archive
                     if (ch.archived !== undefined) {
-                        data.raw.archived = ch.archived ?? false;
-                        data.archived = data.raw.archived;
-                        this.event.emit('chat:archived', ch.id, data.archived);
+                        raw.archived = ch.archived ?? false;
+                        this.event.emit('chat:archived', ch.id, raw.archived);
                         has_specific_event = true;
                     }
-
-                    // Mute
                     if ('muteEndTime' in ch) {
-                        data.raw.muteEndTime = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
-                        data.muted = data.raw.muteEndTime ?? false;
-                        this.event.emit('chat:muted', ch.id, data.raw.muteEndTime);
+                        raw.muteEndTime = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
+                        this.event.emit('chat:muted', ch.id, raw.muteEndTime);
                         has_specific_event = true;
                     }
-
-                    // UnreadCount
-                    if (ch.unreadCount !== undefined) {
-                        data.raw.unreadCount = ch.unreadCount;
-                        data.readed = (data.raw.unreadCount === 0 || data.raw.unreadCount === null) && !data.raw.markedAsUnread;
-                    }
-
-                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(data, BufferJSON.replacer));
-
-                    if (!has_specific_event) {
-                        this.event.emit(stored ? 'chat:updated' : 'chat:created', new this.Chat(data));
-                    }
+                    if (ch.unreadCount !== undefined) raw.unreadCount = ch.unreadCount;
+                    await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
+                    if (!has_specific_event) this.event.emit(stored ? 'chat:updated' : 'chat:created', new this.Chat(raw));
                 }
             });
 
             socket.ev.on('chats.delete', async (ids) => {
                 for (const cid of ids) {
-                    await this.Chat.cascade_delete(cid);
+                    await this.engine.set(`chat/${cid}`, null);
                     this.event.emit('chat:deleted', cid);
                 }
             });
@@ -307,12 +286,9 @@ export class WhatsApp {
                     const mid = msg.key.id;
                     const content_type = getContentType(msg.message ?? {});
 
-                    // Ignorar reacciones y votos de encuesta (tienen sus propios eventos)
                     if (content_type === 'reactionMessage' || content_type === 'pollUpdateMessage') continue;
 
-                    // ─────────────────────────────────────────────────────────────
-                    // PROTOCOL MESSAGE (ediciones y eliminaciones)
-                    // ─────────────────────────────────────────────────────────────
+                    // ─── PROTOCOL MESSAGE (ediciones y eliminaciones) ───
                     if (content_type === 'protocolMessage') {
                         const protocol = msg.message?.protocolMessage;
                         if (!protocol?.key?.id) continue;
@@ -320,12 +296,10 @@ export class WhatsApp {
                         const target_mid = protocol.key.id;
                         const target_cid = protocol.key.remoteJid ?? cid;
 
-                        // MESSAGE_EDIT: Merge selectivo - reemplazar solo message
                         if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
                             const edited_msg = protocol.editedMessage;
                             if (!edited_msg) continue;
 
-                            // Obtener index y raw
                             const stored_index = await this.engine.get(`chat/${target_cid}/message/${target_mid}/index`);
                             const stored_raw = await this.engine.get(`chat/${target_cid}/message/${target_mid}/raw`);
                             if (!stored_index || !stored_raw) continue;
@@ -335,40 +309,30 @@ export class WhatsApp {
 
                             raw.message = edited_msg;
                             index.edited = true;
-                            index.caption = build_message_index(raw).caption;
+                            index.caption = this.Message._build_index(raw).caption;
 
                             await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, JSON.stringify(index, BufferJSON.replacer));
                             await this.engine.set(`chat/${target_cid}/message/${target_mid}/raw`, JSON.stringify(raw, BufferJSON.replacer));
 
                             const instance = new this.Message({ index, raw });
-                            this.Message.notify(target_cid, target_mid);
+                            this.Message._notify(target_cid, target_mid);
                             this.event.emit('message:updated', instance);
                             continue;
                         }
 
-                        // REVOKE: Eliminar del engine
                         if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
-                            // Eliminar del índice del chat
-                            await this.Chat.remove_message(target_cid, target_mid);
-                            // Eliminar archivos
-                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/index`, null);
-                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/content`, null);
-                            await this.engine.set(`chat/${target_cid}/message/${target_mid}/raw`, null);
+                            await this.Message._remove_from_index(target_cid, target_mid);
+                            await this.engine.set(`chat/${target_cid}/message/${target_mid}`, null);
                             this.event.emit('message:deleted', target_cid, target_mid);
                         }
                         continue;
                     }
 
-                    // ─────────────────────────────────────────────────────────────
-                    // MENSAJE NUEVO
-                    // ─────────────────────────────────────────────────────────────
-
-                    // Construir index desde raw y guardar
-                    const index = build_message_index(msg);
+                    // ─── MENSAJE NUEVO ───
+                    const index = this.Message._build_index(msg);
                     await this.engine.set(`chat/${cid}/message/${mid}/index`, JSON.stringify(index, BufferJSON.replacer));
                     await this.engine.set(`chat/${cid}/message/${mid}/raw`, JSON.stringify(msg, BufferJSON.replacer));
 
-                    // Extraer content inline según tipo
                     let content = Buffer.alloc(0);
                     if (index.type === 'text') {
                         const raw_content = msg.message?.[content_type as keyof typeof msg.message] as Record<string, unknown> | string | undefined;
@@ -386,15 +350,11 @@ export class WhatsApp {
                         } catch { /* media download may fail */ }
                     }
 
-                    if (content.length) {
-                        await this.engine.set(`chat/${cid}/message/${mid}/content`, content.toString('base64'));
-                    }
-
-                    // Agregar al índice del chat y emitir
-                    await this.Chat.add_message(cid, mid, index.created_at);
+                    if (content.length) await this.engine.set(`chat/${cid}/message/${mid}/content`, content.toString('base64'));
+                    await this.Message._add_to_index(cid, mid, index.created_at);
                     const instance = new this.Message({ index, raw: msg });
                     if (content.length) instance.content = async () => content;
-                    this.Message.notify(cid, mid);
+                    this.Message._notify(cid, mid);
                     this.event.emit('message:created', instance);
                 }
             });
@@ -403,31 +363,29 @@ export class WhatsApp {
                 for (const { key, update } of updates) {
                     if (!key.remoteJid || !key.id) continue;
 
-                    const stored_index = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/index`);
                     const stored_raw = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/raw`);
+                    const stored_index = await this.engine.get(`chat/${key.remoteJid}/message/${key.id}/index`);
                     if (!stored_index) continue;
 
                     const index: IMessageIndex = JSON.parse(stored_index, BufferJSON.reviver);
                     const raw: WAMessage = stored_raw ? JSON.parse(stored_raw, BufferJSON.reviver) : { key };
 
-                    // Edición via messages.update
                     if ((update as { message?: { editedMessage?: { message?: proto.IMessage } } }).message?.editedMessage?.message) {
                         raw.message = (update as { message: { editedMessage: { message: proto.IMessage } } }).message.editedMessage.message;
                         index.edited = true;
-                        index.caption = build_message_index(raw).caption;
+                        index.caption = this.Message._build_index(raw).caption;
                         await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
                         await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
 
                         const instance = new this.Message({ index, raw });
-                        this.Message.notify(key.remoteJid, key.id);
+                        this.Message._notify(key.remoteJid, key.id);
                         this.event.emit('message:updated', instance);
                         continue;
                     }
 
-                    // Status update
                     if ((update as { status?: number }).status !== undefined) {
                         raw.status = (update as { status: number }).status;
-                        index.status = raw.status as unknown as MESSAGE_STATUS;
+                        index.status = raw.status as unknown as import('~/Message').MESSAGE_STATUS;
                         await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
                         await this.engine.set(`chat/${key.remoteJid}/message/${key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
                     }
