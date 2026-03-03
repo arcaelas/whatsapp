@@ -98,6 +98,23 @@ export class WhatsApp {
     }
 
     /**
+     * @description Normaliza cualquier identificador (JID, LID, phone) a JID.
+     * Normalizes any identifier (JID, LID, phone) to JID format.
+     * @param uid Identificador: JID, LID (@lid), o numero de telefono.
+     */
+    async resolveJID(uid: string): Promise<string | null> {
+        if (uid.endsWith('@g.us')) return uid;
+        if (uid.endsWith('@s.whatsapp.net')) return uid;
+        if (uid.endsWith('@lid')) {
+            const resolved = await this.engine.get(`lid/${uid}`);
+            if (!resolved) return null;
+            return resolved.includes('@') ? resolved : `${resolved}@s.whatsapp.net`;
+        }
+        const cleaned = uid.replace(/\D/g, '');
+        return cleaned ? `${cleaned}@s.whatsapp.net` : null;
+    }
+
+    /**
      * @description Conecta a WhatsApp.
      * Connects to WhatsApp.
      * - Con phone: callback recibe código de 8 dígitos (una vez)
@@ -121,7 +138,7 @@ export class WhatsApp {
                                 const stored = await this.engine.get(`session/${type}/${id}`);
                                 if (stored) {
                                     let value = JSON.parse(stored, BufferJSON.reviver);
-                                    if (type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    if (type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.create(value);
                                     data[id] = value;
                                 }
                             }
@@ -181,12 +198,12 @@ export class WhatsApp {
                     const existing = await this.engine.get(`contact/${c.id}/index`);
                     const raw: IContactRaw = {
                         id: c.id,
-                        lid: (c as { lid?: string }).lid ?? null,
+                        lid: c.lid ?? null,
                         name: c.name ?? null,
                         notify: c.notify ?? null,
-                        verifiedName: (c as { verifiedName?: string }).verifiedName ?? null,
-                        imgUrl: (c as { imgUrl?: string }).imgUrl ?? null,
-                        status: (c as { status?: string }).status ?? null,
+                        verifiedName: c.verifiedName ?? null,
+                        imgUrl: c.imgUrl ?? null,
+                        status: c.status ?? null,
                     };
                     await this.engine.set(`contact/${c.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
                     if (raw.lid) await this.engine.set(`lid/${raw.lid}`, raw.id);
@@ -203,14 +220,19 @@ export class WhatsApp {
                     const raw: IContactRaw = JSON.parse(stored, BufferJSON.reviver);
                     if (c.notify) raw.notify = c.notify;
                     if (c.name) raw.name = c.name;
-                    if ((c as { imgUrl?: string }).imgUrl) raw.imgUrl = (c as { imgUrl?: string }).imgUrl;
-                    if ((c as { status?: string }).status) raw.status = (c as { status?: string }).status;
-                    if ((c as { lid?: string }).lid) raw.lid = (c as { lid?: string }).lid;
+                    if (c.imgUrl) raw.imgUrl = c.imgUrl;
+                    if (c.status) raw.status = c.status;
+                    if (c.lid) raw.lid = c.lid;
 
                     await this.engine.set(`contact/${c.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
                     if (raw.lid) await this.engine.set(`lid/${raw.lid}`, raw.id);
                     this.event.emit('contact:updated', new this.Contact(raw));
                 }
+            });
+
+            socket.ev.on('lid-mapping.update', async ({ lid, pn }) => {
+                await this.engine.set(`lid/${lid}`, pn);
+                await this.engine.set(`lid/${pn}`, lid);
             });
 
             // ═══════════════════════════════════════════════════════════════════
@@ -226,10 +248,10 @@ export class WhatsApp {
                             id: ch.id,
                             name: ch.name ?? null,
                             archived: ch.archived ?? null,
-                            pinned: (ch as { pinned?: number }).pinned ?? null,
-                            muteEndTime: (ch as { muteEndTime?: number }).muteEndTime ?? null,
+                            pinned: ch.pinned ?? null,
+                            muteEndTime: ch.muteEndTime ?? null,
                             unreadCount: ch.unreadCount ?? null,
-                            readOnly: (ch as { readOnly?: boolean }).readOnly ?? null,
+                            readOnly: ch.readOnly ?? null,
                         };
                     if (ch.name) raw.name = ch.name;
                     await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
@@ -247,7 +269,7 @@ export class WhatsApp {
 
                     if (ch.name !== undefined) raw.name = ch.name ?? raw.name;
                     if ('pinned' in ch) {
-                        raw.pinned = (ch as { pinned?: number | null }).pinned ?? null;
+                        raw.pinned = ch.pinned ?? null;
                         this.event.emit('chat:pined', ch.id, raw.pinned);
                         has_specific_event = true;
                     }
@@ -257,7 +279,7 @@ export class WhatsApp {
                         has_specific_event = true;
                     }
                     if ('muteEndTime' in ch) {
-                        raw.muteEndTime = (ch as { muteEndTime?: number | null }).muteEndTime ?? null;
+                        raw.muteEndTime = ch.muteEndTime ? Number(ch.muteEndTime) : null;
                         this.event.emit('chat:muted', ch.id, raw.muteEndTime);
                         has_specific_event = true;
                     }
@@ -280,7 +302,7 @@ export class WhatsApp {
 
             socket.ev.on('messages.upsert', async ({ messages }) => {
                 for (const msg of messages) {
-                    if (!msg.key.remoteJid || !msg.key.id) continue;
+                    if (!msg.key?.remoteJid || !msg.key.id) continue;
 
                     const cid = msg.key.remoteJid;
                     const mid = msg.key.id;

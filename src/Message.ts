@@ -125,6 +125,7 @@ export const MESSAGE_TYPE_MAP: Record<string, MessageType> = {
  * Builds IMessageIndex from WAMessage.
  */
 function build_message_index(raw: WAMessage, edited = false): IMessageIndex {
+    const key = raw.key ?? {};
     const content_type = getContentType(raw.message ?? {});
     const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'text';
     const msg_content = raw.message?.[content_type as keyof typeof raw.message] as Record<string, unknown> | string | undefined;
@@ -141,12 +142,12 @@ function build_message_index(raw: WAMessage, edited = false): IMessageIndex {
     else if (msg_content) caption = (msg_content.caption as string) ?? (msg_content.text as string) ?? (msg_content.name as string) ?? '';
 
     return {
-        id: raw.key.id!,
-        cid: raw.key.remoteJid!,
+        id: key.id ?? '',
+        cid: key.remoteJid ?? '',
         mid: context_info?.stanzaId ?? null,
-        me: raw.key.fromMe ?? false,
+        me: key.fromMe ?? false,
         type: msg_type,
-        author: raw.key.participant ?? raw.key.remoteJid!,
+        author: key.participant ?? key.remoteJid ?? '',
         status: (raw.status as unknown as MESSAGE_STATUS) ?? MESSAGE_STATUS.PENDING,
         starred: raw.starred ?? false,
         forwarded: context_info?.isForwarded ?? false,
@@ -260,21 +261,23 @@ export function message(wa: WhatsApp) {
         handlers?.forEach((h) => _Message.get(cid, mid).then((msg) => msg && h(msg)));
     }
 
-    async function _send(cid: string, content: Record<string, unknown>, binary?: Buffer, mid?: string): Promise<InstanceType<typeof _Message> | null> {
-        if (!wa.socket) return null;
+    async function _send(cid: string, content: Record<string, unknown>, binary?: Buffer, reply_to?: string): Promise<InstanceType<typeof _Message> | null> {
+        const jid = await wa.resolveJID(cid);
+        if (!jid || !wa.socket) return null;
         let quoted: WAMessage | undefined;
-        if (mid) {
-            const ref = await _Message.get(cid, mid);
+        if (reply_to) {
+            const ref = await _Message.get(jid, reply_to);
             if (ref) quoted = ref.raw;
         }
-        const raw = await wa.socket.sendMessage(cid, { ...content, ...(quoted && { quoted }) } as never);
-        if (!raw?.key?.id) return null;
+        const raw = await wa.socket.sendMessage(jid, { ...content, ...(quoted && { quoted }) } as never);
+        const sent_id = raw?.key?.id;
+        if (!raw || !sent_id) return null;
 
         const index = build_message_index(raw);
-        await wa.engine.set(`chat/${cid}/message/${raw.key.id}/index`, JSON.stringify(index, BufferJSON.replacer));
-        await wa.engine.set(`chat/${cid}/message/${raw.key.id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
-        if (binary) await wa.engine.set(`chat/${cid}/message/${raw.key.id}/content`, binary.toString('base64'));
-        await _add_to_index(cid, raw.key.id, index.created_at);
+        await wa.engine.set(`chat/${jid}/message/${sent_id}/index`, JSON.stringify(index, BufferJSON.replacer));
+        await wa.engine.set(`chat/${jid}/message/${sent_id}/raw`, JSON.stringify(raw, BufferJSON.replacer));
+        if (binary) await wa.engine.set(`chat/${jid}/message/${sent_id}/content`, binary.toString('base64'));
+        await _add_to_index(jid, sent_id, index.created_at);
         return new _Message({ index, raw });
     }
 
@@ -284,11 +287,13 @@ export function message(wa: WhatsApp) {
          * Retrieves a message by CID and MID.
          */
         static async get(cid: string, mid: string): Promise<InstanceType<typeof _Message> | null> {
-            const stored_index = await wa.engine.get(`chat/${cid}/message/${mid}/index`);
+            const jid = await wa.resolveJID(cid);
+            if (!jid) return null;
+            const stored_index = await wa.engine.get(`chat/${jid}/message/${mid}/index`);
             if (!stored_index) return null;
             const index: IMessageIndex = JSON.parse(stored_index, BufferJSON.reviver);
-            const stored_raw = await wa.engine.get(`chat/${cid}/message/${mid}/raw`);
-            const raw: WAMessage = stored_raw ? JSON.parse(stored_raw, BufferJSON.reviver) : { key: { remoteJid: cid, id: mid, fromMe: index.me } };
+            const stored_raw = await wa.engine.get(`chat/${jid}/message/${mid}/raw`);
+            const raw: WAMessage = stored_raw ? JSON.parse(stored_raw, BufferJSON.reviver) : { key: { remoteJid: jid, id: mid, fromMe: index.me } };
             return new _Message({ index, raw });
         }
 
@@ -297,12 +302,14 @@ export function message(wa: WhatsApp) {
          * Lists messages from a chat (paginated).
          */
         static async list(cid: string, offset = 0, limit = 50): Promise<InstanceType<typeof _Message>[]> {
-            const content = await wa.engine.get(`chat/${cid}/messages`);
+            const jid = await wa.resolveJID(cid);
+            if (!jid) return [];
+            const content = await wa.engine.get(`chat/${jid}/messages`);
             if (!content) return [];
             const ids = content.trim().split('\n').slice(offset, offset + limit).map((line) => line.split(' ')[1]).filter(Boolean);
             const messages: InstanceType<typeof _Message>[] = [];
             for (const mid of ids) {
-                const msg = await _Message.get(cid, mid);
+                const msg = await _Message.get(jid, mid);
                 if (msg) messages.push(msg);
             }
             return messages;
@@ -313,7 +320,9 @@ export function message(wa: WhatsApp) {
          * Counts messages in a chat.
          */
         static async count(cid: string): Promise<number> {
-            const content = await wa.engine.get(`chat/${cid}/messages`);
+            const jid = await wa.resolveJID(cid);
+            if (!jid) return 0;
+            const content = await wa.engine.get(`chat/${jid}/messages`);
             if (!content) return 0;
             return content.trim().split('\n').filter(Boolean).length;
         }
@@ -375,7 +384,7 @@ export function message(wa: WhatsApp) {
         static watch(cid: string, mid: string, handler: (msg: InstanceType<typeof _Message>) => void): () => void {
             const key = `${cid}:${mid}`;
             if (!_watchers.has(key)) _watchers.set(key, new Set());
-            _watchers.get(key)!.add(handler);
+            _watchers.get(key)?.add(handler);
             return () => {
                 _watchers.get(key)?.delete(handler);
                 if (_watchers.get(key)?.size === 0) _watchers.delete(key);
@@ -430,7 +439,8 @@ export function message(wa: WhatsApp) {
             if (this.raw.message) {
                 try {
                     const wa_msg = generateWAMessageFromContent(to_cid, generateForwardMessageContent(this.raw, false), { userJid: wa.socket.user?.id ?? '' });
-                    await wa.socket.relayMessage(to_cid, wa_msg.message!, { messageId: wa_msg.key.id! });
+                    if (!wa_msg.message || !wa_msg.key?.id) return false;
+                    await wa.socket.relayMessage(to_cid, wa_msg.message, { messageId: wa_msg.key.id });
                     return true;
                 } catch { /* fallback below */ }
             }

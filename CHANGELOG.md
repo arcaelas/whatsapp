@@ -4,13 +4,25 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [2.0.0] - 2026-03-02
+
+### BREAKING
+
+- **Baileys**: upgrade from v6.7.18 to v7.0.0-rc.9
+- **API surface**: constructors, interfaces, and static methods changed significantly from published 1.4.0 (see 1.4.0 notes below)
+- **All entry points** (`Contact.get`, `Chat.get`, `Message.get/list/count/send*`) now normalize any identifier format (JID, LID, phone) via `resolveJID()`
+
 ### Features
 
-- **Contact**: `Contact.get(uid)` now resolves LID (`@lid`), JID (`@s.whatsapp.net`), and plain phone numbers
+- **WhatsApp**: new public method `resolveJID(uid)` normalizes any identifier (JID `@s.whatsapp.net`, LID `@lid`, phone number) to JID
+- **Contact**: `Contact.get(uid)` accepts JID, LID, or plain phone number
 - **Chat**: static delegates `pin(cid, value)`, `archive(cid, value)`, `mute(cid, duration)`, `seen(cid)`, `remove(cid)`
 - **Chat**: instance method `contact()` returns the associated Contact for 1:1 chats
 - **Message**: all send statics accept optional `mid` parameter for quoted replies
 - **Message**: instance send methods `text()`, `image()`, `video()`, `audio()`, `location()`, `poll()` that reply to the current message
+- **WhatsApp**: listen to Baileys v7 `lid-mapping.update` event for bidirectional LID/PN persistence
 
 ### Docs
 
@@ -21,7 +33,9 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ### Internal
 
-- Persist LID inverse index (`lid/{lid}` -> jid) on contact upsert/update
+- Replace `proto.Message.AppStateSyncKeyData.fromObject()` with `.create()` (Baileys v7)
+- Remove all unnecessary type casts in WhatsApp.ts (Baileys v7 Contact/Chat types are properly typed)
+- Persist LID inverse index (`lid/{lid}` -> jid) on contact upsert/update and via `lid-mapping.update`
 
 ---
 

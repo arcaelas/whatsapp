@@ -103,14 +103,16 @@ export function chat(wa: WhatsApp) {
          * Retrieves a chat by its ID.
          */
         static async get(cid: string) {
-            const stored = await wa.engine.get(`chat/${cid}/index`);
+            const jid = await wa.resolveJID(cid);
+            if (!jid) return null;
+            const stored = await wa.engine.get(`chat/${jid}/index`);
             if (stored) return new _Chat(JSON.parse(stored, BufferJSON.reviver));
 
-            const contact = await wa.Contact.get(cid);
+            const contact = await wa.Contact.get(jid);
             if (!contact) return null;
 
-            const raw: IChatRaw = { id: cid, name: contact.name };
-            await wa.engine.set(`chat/${cid}/index`, JSON.stringify(raw, BufferJSON.replacer));
+            const raw: IChatRaw = { id: jid, name: contact.name };
+            await wa.engine.set(`chat/${jid}/index`, JSON.stringify(raw, BufferJSON.replacer));
             return new _Chat(raw);
         }
 
@@ -260,7 +262,8 @@ export function chat(wa: WhatsApp) {
             const last_messages = await _last_messages(this.id);
             if (!last_messages.length) return false;
             const msg = last_messages[0];
-            await wa.socket.readMessages([{ remoteJid: this.id, id: msg.key.id, participant: msg.key.fromMe ? undefined : msg.key.remoteJid }]);
+            const key = msg.key ?? {};
+            await wa.socket.readMessages([{ remoteJid: this.id, id: key.id ?? '', participant: key.fromMe ? undefined : key.remoteJid ?? undefined }]);
             this.raw.unreadCount = 0;
             this.raw.markedAsUnread = false;
             await wa.engine.set(`chat/${this.id}/index`, JSON.stringify(this.raw, BufferJSON.replacer));
