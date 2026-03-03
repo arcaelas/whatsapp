@@ -114,6 +114,24 @@ export function contact(wa: WhatsApp) {
         }
 
         /**
+         * @description Cambia el nombre de un contacto por su ID.
+         * Renames a contact by its ID.
+         */
+        static async rename(uid: string, name: string): Promise<boolean> {
+            const contact = await _Contact.get(uid);
+            return contact ? contact.rename(name) : false;
+        }
+
+        /**
+         * @description Actualiza los datos de un contacto desde WhatsApp por su ID.
+         * Refreshes a contact's data from WhatsApp by its ID.
+         */
+        static async refresh(uid: string): Promise<_Contact | null> {
+            const contact = await _Contact.get(uid);
+            return contact ? contact.refresh() : null;
+        }
+
+        /**
          * @description Cambia el nombre del contacto.
          * Renames the contact.
          * @param name Nuevo nombre.

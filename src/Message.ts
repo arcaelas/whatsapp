@@ -143,11 +143,11 @@ function build_message_index(raw: WAMessage, edited = false): IMessageIndex {
 
     return {
         id: key.id ?? '',
-        cid: key.remoteJid ?? '',
+        cid: (key as { remoteJidAlt?: string }).remoteJidAlt || key.remoteJid || '',
         mid: context_info?.stanzaId ?? null,
         me: key.fromMe ?? false,
         type: msg_type,
-        author: key.participant ?? key.remoteJid ?? '',
+        author: key.participant || key.remoteJid || '',
         status: (raw.status as unknown as MESSAGE_STATUS) ?? MESSAGE_STATUS.PENDING,
         starred: raw.starred ?? false,
         forwarded: context_info?.isForwarded ?? false,
@@ -374,6 +374,42 @@ export function message(wa: WhatsApp) {
          */
         static async poll(cid: string, opts: PollOptions, mid?: string) {
             return _send(cid, { poll: { name: opts.content, values: opts.options.map((o) => o.content), selectableCount: 1 } }, undefined, mid);
+        }
+
+        /**
+         * @description Edita un mensaje por CID y MID.
+         * Edits a message by CID and MID.
+         */
+        static async edit(cid: string, mid: string, text: string): Promise<boolean> {
+            const msg = await _Message.get(cid, mid);
+            return msg ? msg.edit(text) : false;
+        }
+
+        /**
+         * @description Elimina un mensaje por CID y MID.
+         * Deletes a message by CID and MID.
+         */
+        static async remove(cid: string, mid: string): Promise<boolean> {
+            const msg = await _Message.get(cid, mid);
+            return msg ? msg.remove() : false;
+        }
+
+        /**
+         * @description Reacciona a un mensaje por CID y MID.
+         * Reacts to a message by CID and MID.
+         */
+        static async react(cid: string, mid: string, emoji: string): Promise<boolean> {
+            const msg = await _Message.get(cid, mid);
+            return msg ? msg.react(emoji) : false;
+        }
+
+        /**
+         * @description Reenvía un mensaje por CID y MID a otro chat.
+         * Forwards a message by CID and MID to another chat.
+         */
+        static async forward(cid: string, mid: string, to_cid: string): Promise<boolean> {
+            const msg = await _Message.get(cid, mid);
+            return msg ? msg.forward(to_cid) : false;
         }
 
         /**
