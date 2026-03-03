@@ -55,10 +55,10 @@ Each Chat instance has the following properties:
 | `name` | `string` | Chat name (fallback: `raw.name` -> `raw.displayName` -> phone from JID) |
 | `type` | `"contact" \| "group"` | Chat type (based on JID suffix) |
 | `content` | `string` | Chat/group description (empty string if not set) |
-| `pined` | `boolean` | Whether the chat is pinned |
+| `pinned` | `boolean` | Whether the chat is pinned |
 | `archived` | `boolean` | Whether the chat is archived |
-| `muted` | `number \| false` | Mute end timestamp or `false` if unmuted |
-| `readed` | `boolean` | Whether the chat is read |
+| `muted` | `number` | Mute end timestamp (0 if unmuted) |
+| `read` | `boolean` | Whether the chat is read |
 | `readonly` | `boolean` | Whether the chat is read-only |
 | `raw` | `IChatRaw` | Raw chat data |
 

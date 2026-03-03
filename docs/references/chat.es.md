@@ -23,10 +23,10 @@ wa.Chat // Clase Chat enlazada
 | `name` | `string` | Nombre del chat o grupo |
 | `type` | `'contact' \| 'group'` | Tipo de chat |
 | `content` | `string` | Descripcion del chat/grupo (string vacio si no tiene) |
-| `pined` | `boolean` | `true` si el chat esta fijado |
+| `pinned` | `boolean` | `true` si el chat esta fijado |
 | `archived` | `boolean` | `true` si el chat esta archivado |
-| `muted` | `number \| false` | Timestamp de expiracion del silencio o `false` |
-| `readed` | `boolean` | `true` si el chat esta leido |
+| `muted` | `number` | Timestamp de expiracion del silencio (0 si no esta silenciado) |
+| `read` | `boolean` | `true` si el chat esta leido |
 | `readonly` | `boolean` | `true` si el chat es solo lectura |
 
 ---
@@ -287,40 +287,40 @@ wa.event.on("chat:updated", (chat) => {
 });
 ```
 
-### `chat:pined`
+### `chat:pinned`
 
-Emitido cuando se fija o desfija un chat.
+Emitido cuando se fija o desfija un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} fijado`);
+wa.event.on("chat:pinned", (chat) => {
+  if (chat.pinned) {
+    console.log(`Chat ${chat.name} fijado`);
   } else {
-    console.log(`Chat ${cid} desfijado`);
+    console.log(`Chat ${chat.name} desfijado`);
   }
 });
 ```
 
 ### `chat:archived`
 
-Emitido cuando se archiva o desarchiva un chat.
+Emitido cuando se archiva o desarchiva un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
+wa.event.on("chat:archived", (chat) => {
+  console.log(`Chat ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`);
 });
 ```
 
 ### `chat:muted`
 
-Emitido cuando se silencia o desilencia un chat.
+Emitido cuando se silencia o desilencia un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
+wa.event.on("chat:muted", (chat) => {
+  if (chat.muted) {
+    console.log(`Chat ${chat.name} silenciado hasta ${new Date(chat.muted)}`);
   } else {
-    console.log(`Chat ${cid} desilenciado`);
+    console.log(`Chat ${chat.name} desilenciado`);
   }
 });
 ```
@@ -387,7 +387,7 @@ wa.event.on("chat:created", async (chat) => {
 ```typescript
 async function archive_inactive(wa: WhatsApp) {
   const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-  if (chat && !chat.pined && !chat.archived) {
+  if (chat && !chat.pinned && !chat.archived) {
     await chat.archive(true);
   }
 }
@@ -467,4 +467,4 @@ interface IGroupParticipant {
 
 > **Salir de grupos:** Al llamar `remove()` en un grupo, primero se sale del grupo y luego se elimina el chat local con cascade delete.
 
-> **Propiedad pined:** El getter `pined` retorna `boolean` (`true` si `raw.pinned` existe). El timestamp real de fijacion esta en `raw.pinned`. No confundir el getter booleano con el campo numerico del raw.
+> **Propiedad pinned:** El getter `pinned` retorna `boolean` (`true` si `raw.pinned` existe). El timestamp real de fijacion esta en `raw.pinned`. No confundir el getter booleano con el campo numerico del raw.

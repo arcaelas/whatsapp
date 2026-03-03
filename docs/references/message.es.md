@@ -223,6 +223,46 @@ interface PollOptions {
 }
 ```
 
+### `Message.edit(cid, mid, text)`
+
+Edita un mensaje por chat ID y message ID. Delega a la instancia internamente.
+
+```typescript
+await wa.Message.edit(
+  "5491112345678@s.whatsapp.net",
+  "MESSAGE_ID",
+  "Texto corregido"
+);
+```
+
+### `Message.remove(cid, mid)`
+
+Elimina un mensaje por chat ID y message ID. Delega a la instancia internamente.
+
+```typescript
+await wa.Message.remove("5491112345678@s.whatsapp.net", "MESSAGE_ID");
+```
+
+### `Message.react(cid, mid, emoji)`
+
+Reacciona a un mensaje por chat ID y message ID. Delega a la instancia internamente.
+
+```typescript
+await wa.Message.react("5491112345678@s.whatsapp.net", "MESSAGE_ID", "👍");
+```
+
+### `Message.forward(cid, mid, to_cid)`
+
+Reenvia un mensaje a otro chat por chat ID y message ID. Delega a la instancia internamente.
+
+```typescript
+await wa.Message.forward(
+  "5491112345678@s.whatsapp.net",
+  "MESSAGE_ID",
+  "123456789@g.us"
+);
+```
+
 ### `Message.watch(cid, mid, handler)`
 
 Observa cambios en un mensaje especifico (ediciones, actualizaciones).

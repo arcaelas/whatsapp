@@ -77,7 +77,7 @@ EventEmitter tipado para escuchar eventos.
 readonly Chat: ReturnType<typeof chat>
 ```
 
-Clase Chat enlazada a esta instancia. Es el resultado del factory `chat(wa)`, que extiende la clase base `Chat` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
+Clase Chat enlazada a esta instancia. Incluye metodos estaticos (`get`, `list`, `pin`, `archive`, `mute`, `seen`, `remove`) y metodos de instancia.
 
 ### `Contact`
 
@@ -85,7 +85,7 @@ Clase Chat enlazada a esta instancia. Es el resultado del factory `chat(wa)`, qu
 readonly Contact: ReturnType<typeof contact>
 ```
 
-Clase Contact enlazada a esta instancia. Es el resultado del factory `contact(wa)`, que extiende la clase base `Contact` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
+Clase Contact enlazada a esta instancia. Incluye metodos estaticos (`get`, `list`, `rename`, `refresh`) y metodos de instancia.
 
 ### `Message`
 
@@ -93,7 +93,30 @@ Clase Contact enlazada a esta instancia. Es el resultado del factory `contact(wa
 readonly Message: ReturnType<typeof message>
 ```
 
-Clase Message enlazada a esta instancia. Es el resultado del factory `message(wa)`, que extiende la clase base `Message` con metodos estaticos y de instancia que operan sobre el contexto de esta conexion.
+Clase Message enlazada a esta instancia. Incluye metodos estaticos (`get`, `list`, `count`, `text`, `image`, `video`, `audio`, `location`, `poll`, `watch`, `edit`, `remove`, `react`, `forward`) y metodos de instancia.
+
+### `resolveJID(uid)`
+
+```typescript
+async resolveJID(uid: string): Promise<string | null>
+```
+
+Resuelve cualquier identificador de usuario (JID, numero de telefono o LID) a un JID normalizado (`@s.whatsapp.net` o `@g.us`). Retorna `null` si el LID no se puede resolver.
+
+| Input | Output |
+|-------|--------|
+| `123@g.us` | `123@g.us` (sin cambio) |
+| `123@s.whatsapp.net` | `123@s.whatsapp.net` (sin cambio) |
+| `123@lid` | Resuelto via keys `lid/` o `session/lid-mapping/` |
+| `5491112345678` | `5491112345678@s.whatsapp.net` |
+
+```typescript
+const jid = await wa.resolveJID("5491112345678");
+// "5491112345678@s.whatsapp.net"
+
+const jid2 = await wa.resolveJID("123456@lid");
+// "584144709840@s.whatsapp.net" (o null si no se puede resolver)
+```
 
 ---
 
@@ -219,40 +242,40 @@ wa.event.on("chat:updated", (chat) => {
 });
 ```
 
-### `chat:pined`
+### `chat:pinned`
 
-Emitido cuando se fija o desfija un chat.
+Emitido cuando se fija o desfija un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} fijado`);
+wa.event.on("chat:pinned", (chat) => {
+  if (chat.pinned) {
+    console.log(`Chat ${chat.name} fijado`);
   } else {
-    console.log(`Chat ${cid} desfijado`);
+    console.log(`Chat ${chat.name} desfijado`);
   }
 });
 ```
 
 ### `chat:archived`
 
-Emitido cuando se archiva o desarchiva un chat.
+Emitido cuando se archiva o desarchiva un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
+wa.event.on("chat:archived", (chat) => {
+  console.log(`Chat ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`);
 });
 ```
 
 ### `chat:muted`
 
-Emitido cuando se silencia o desilencia un chat.
+Emitido cuando se silencia o desilencia un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
+wa.event.on("chat:muted", (chat) => {
+  if (chat.muted) {
+    console.log(`Chat ${chat.name} silenciado hasta ${new Date(chat.muted)}`);
   } else {
-    console.log(`Chat ${cid} desilenciado`);
+    console.log(`Chat ${chat.name} desilenciado`);
   }
 });
 ```
@@ -409,9 +432,9 @@ interface WhatsAppEventMap {
   "contact:updated": [Contact];
   "chat:created": [Chat];
   "chat:updated": [Chat];
-  "chat:pined": [cid: string, pined: number | null];
-  "chat:archived": [cid: string, archived: boolean];
-  "chat:muted": [cid: string, muted: number | null];
+  "chat:pinned": [chat: Chat];
+  "chat:archived": [chat: Chat];
+  "chat:muted": [chat: Chat];
   "chat:deleted": [cid: string];
   "message:created": [Message];
   "message:updated": [Message];
