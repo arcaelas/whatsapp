@@ -422,10 +422,10 @@ contact/{id}/index
 | `type` | `"contact" \| "group"` | Derived from `id` | Chat type |
 | `name` | `string` | `name \|\| displayName \|\| id.split("@")[0]` | Chat name |
 | `content` | `string` | `description \|\| ""` | Description |
-| `pined` | `boolean` | `pinned !== null` | Whether pinned |
+| `pinned` | `boolean` | `pinned !== null` | Whether pinned |
 | `archived` | `boolean` | `archived \|\| false` | Whether archived |
-| `muted` | `number \| false` | `muteEndTime \|\| false` | Mute end timestamp |
-| `readed` | `boolean` | `unreadCount === 0 && !markedAsUnread` | Whether read |
+| `muted` | `number` | `muteEndTime \|\| 0` | Mute end timestamp (0 if unmuted) |
+| `read` | `boolean` | `unreadCount === 0 && !markedAsUnread` | Whether read |
 | `readonly` | `boolean` | `readOnly \|\| false` | Whether read-only |
 
 ### Storage Key
@@ -445,11 +445,11 @@ chat/{id}/index
 | Property | Type | Raw Source | Description |
 |----------|------|------------|-------------|
 | `id` | `string` | `key.id` | Unique ID |
-| `cid` | `string` | `key.remoteJid` | Chat ID |
+| `cid` | `string` | `key.remoteJidAlt \|\| key.remoteJid` | Chat ID |
 | `mid` | `string \| null` | `contextInfo.stanzaId` | Parent message |
 | `me` | `boolean` | `key.fromMe` | Whether own message |
 | `type` | `MessageType` | Derived from `message` | Message type |
-| `author` | `string` | `key.participant \|\| key.remoteJid` | Author |
+| `author` | `string` | `key.participant \|\| key.remoteJid` (uses `\|\|` not `??`) | Author |
 | `status` | `MESSAGE_STATUS` | `status` | Delivery status |
 | `starred` | `boolean` | `starred` | Whether starred |
 | `forwarded` | `boolean` | `contextInfo.isForwarded` | Whether forwarded |
@@ -491,7 +491,7 @@ chat/{id}/index
 | Entity | API Getters | Raw Fields (IChatRaw/IContactRaw) |
 |--------|-------------|-----------------------------------|
 | **Contact** | 5 (id, name, photo, phone, content) | 7 (id, lid, name, notify, verifiedName, imgUrl, status) |
-| **Chat** | 9 (id, type, name, content, pined, archived, muted, readed, readonly) | 14 |
+| **Chat** | 9 (id, type, name, content, pinned, archived, muted, read, readonly) | 14 |
 | **Message** | 14 index fields + async methods | WAMessage (50+) |
 
 ---

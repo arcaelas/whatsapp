@@ -494,6 +494,62 @@ await wa.Message.poll("123456789@g.us", {
 });
 ```
 
+### edit()
+
+Edits a message by chat ID and message ID. Delegates to the instance method internally.
+
+```typescript
+const success = await wa.Message.edit(cid: string, mid: string, text: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+await wa.Message.edit("5491112345678@s.whatsapp.net", "MESSAGE_ID", "Corrected text");
+```
+
+### remove()
+
+Deletes a message by chat ID and message ID. Delegates to the instance method internally.
+
+```typescript
+const success = await wa.Message.remove(cid: string, mid: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+await wa.Message.remove("5491112345678@s.whatsapp.net", "MESSAGE_ID");
+```
+
+### react()
+
+Reacts to a message by chat ID and message ID. Delegates to the instance method internally.
+
+```typescript
+const success = await wa.Message.react(cid: string, mid: string, emoji: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+await wa.Message.react("5491112345678@s.whatsapp.net", "MESSAGE_ID", "👍");
+```
+
+### forward()
+
+Forwards a message to another chat by chat ID and message ID. Delegates to the instance method internally.
+
+```typescript
+const success = await wa.Message.forward(cid: string, mid: string, to_cid: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+await wa.Message.forward("5491112345678@s.whatsapp.net", "MESSAGE_ID", "123456789@g.us");
+```
+
 ### watch()
 
 Observes changes on a specific message (status updates, edits, etc.).

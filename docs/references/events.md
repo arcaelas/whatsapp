@@ -132,49 +132,49 @@ wa.event.on("chat:updated", (chat) => {
 
 **Payload:** `Chat`
 
-### chat:pined
+### chat:pinned
 
-Emitted when a chat is pinned or unpinned.
+Emitted when a chat is pinned or unpinned. Payload is the updated Chat instance.
 
 ```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} pinned at ${new Date(pined)}`);
+wa.event.on("chat:pinned", (chat) => {
+  if (chat.pinned) {
+    console.log(`Chat ${chat.name} pinned`);
   } else {
-    console.log(`Chat ${cid} unpinned`);
+    console.log(`Chat ${chat.name} unpinned`);
   }
 });
 ```
 
-**Payload:** `[cid: string, pined: number | null]`
+**Payload:** `Chat`
 
 ### chat:archived
 
-Emitted when a chat is archived or unarchived.
+Emitted when a chat is archived or unarchived. Payload is the updated Chat instance.
 
 ```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid} ${archived ? "archived" : "unarchived"}`);
+wa.event.on("chat:archived", (chat) => {
+  console.log(`Chat ${chat.name} ${chat.archived ? "archived" : "unarchived"}`);
 });
 ```
 
-**Payload:** `[cid: string, archived: boolean]`
+**Payload:** `Chat`
 
 ### chat:muted
 
-Emitted when a chat is muted or unmuted.
+Emitted when a chat is muted or unmuted. Payload is the updated Chat instance.
 
 ```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} muted until ${new Date(muted)}`);
+wa.event.on("chat:muted", (chat) => {
+  if (chat.muted) {
+    console.log(`Chat ${chat.name} muted until ${new Date(chat.muted)}`);
   } else {
-    console.log(`Chat ${cid} unmuted`);
+    console.log(`Chat ${chat.name} unmuted`);
   }
 });
 ```
 
-**Payload:** `[cid: string, muted: number | null]`
+**Payload:** `Chat`
 
 ### chat:deleted
 
@@ -269,9 +269,9 @@ interface WhatsAppEventMap {
   "contact:updated": [contact: Contact];
   "chat:created": [chat: Chat];
   "chat:updated": [chat: Chat];
-  "chat:pined": [cid: string, pined: number | null];
-  "chat:archived": [cid: string, archived: boolean];
-  "chat:muted": [cid: string, muted: number | null];
+  "chat:pinned": [chat: Chat];
+  "chat:archived": [chat: Chat];
+  "chat:muted": [chat: Chat];
   "chat:deleted": [cid: string];
   "message:created": [message: Message];
   "message:updated": [message: Message];
@@ -326,16 +326,16 @@ async function main() {
     console.log(`[CHAT~] ${chat.name}`);
   });
 
-  wa.event.on("chat:pined", (cid, pined) => {
-    console.log(`[PIN] ${cid} ${pined ? "pinned" : "unpinned"}`);
+  wa.event.on("chat:pinned", (chat) => {
+    console.log(`[PIN] ${chat.name} ${chat.pinned ? "pinned" : "unpinned"}`);
   });
 
-  wa.event.on("chat:archived", (cid, archived) => {
-    console.log(`[ARCHIVE] ${cid} ${archived ? "archived" : "unarchived"}`);
+  wa.event.on("chat:archived", (chat) => {
+    console.log(`[ARCHIVE] ${chat.name} ${chat.archived ? "archived" : "unarchived"}`);
   });
 
-  wa.event.on("chat:muted", (cid, muted) => {
-    console.log(`[MUTE] ${cid} ${muted ? `until ${new Date(muted)}` : "unmuted"}`);
+  wa.event.on("chat:muted", (chat) => {
+    console.log(`[MUTE] ${chat.name} ${chat.muted ? `until ${new Date(chat.muted)}` : "unmuted"}`);
   });
 
   // Message events

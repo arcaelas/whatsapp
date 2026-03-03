@@ -92,7 +92,7 @@ Chat class bound to this instance. Includes both static methods (`get`, `list`, 
 wa.Contact: ReturnType<typeof contact>
 ```
 
-Contact class bound to this instance. Includes both static methods (`get`, `list`) and instance methods.
+Contact class bound to this instance. Includes both static methods (`get`, `list`, `rename`, `refresh`) and instance methods.
 
 ### Message
 
@@ -100,7 +100,40 @@ Contact class bound to this instance. Includes both static methods (`get`, `list
 wa.Message: ReturnType<typeof message>
 ```
 
-Message class bound to this instance. Includes both static methods (`get`, `list`, `count`, `text`, `image`, `video`, `audio`, `location`, `poll`, `watch`) and instance methods.
+Message class bound to this instance. Includes both static methods (`get`, `list`, `count`, `text`, `image`, `video`, `audio`, `location`, `poll`, `watch`, `edit`, `remove`, `react`, `forward`) and instance methods.
+
+### resolveJID()
+
+```typescript
+await wa.resolveJID(uid: string): Promise<string | null>
+```
+
+Resolves any user identifier (JID, phone number, or LID) to a normalized JID (`@s.whatsapp.net` or `@g.us`). Returns `null` if the LID cannot be resolved.
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `uid` | `string` | JID, phone number, or LID |
+
+**Resolution rules:**
+
+| Input | Output |
+|-------|--------|
+| `123@g.us` | `123@g.us` (unchanged) |
+| `123@s.whatsapp.net` | `123@s.whatsapp.net` (unchanged) |
+| `123@lid` | Resolved via `lid/` or `session/lid-mapping/` keys |
+| `5491112345678` | `5491112345678@s.whatsapp.net` |
+
+**Example:**
+
+```typescript
+const jid = await wa.resolveJID("5491112345678");
+// "5491112345678@s.whatsapp.net"
+
+const jid2 = await wa.resolveJID("123456@lid");
+// "584144709840@s.whatsapp.net" (or null if unresolvable)
+```
 
 ---
 
@@ -167,9 +200,9 @@ wa.event.on("event_name", (payload) => {
 | `chat:created` | `Chat` | New chat |
 | `chat:updated` | `Chat` | Chat updated |
 | `chat:deleted` | `string` | Chat deleted (cid) |
-| `chat:pined` | `[string, number \| null]` | Chat pinned/unpinned (cid, pin timestamp or null) |
-| `chat:archived` | `[string, boolean]` | Chat archived/unarchived (cid, archived) |
-| `chat:muted` | `[string, number \| null]` | Chat muted/unmuted (cid, mute end timestamp or null) |
+| `chat:pinned` | `Chat` | Chat pinned/unpinned |
+| `chat:archived` | `Chat` | Chat archived/unarchived |
+| `chat:muted` | `Chat` | Chat muted/unmuted |
 | `message:created` | `Message` | New message |
 | `message:updated` | `Message` | Message updated (status, edited) |
 | `message:deleted` | `[string, string]` | Message deleted (cid, mid) |
@@ -203,16 +236,16 @@ wa.event.on("chat:updated", (chat) => {
 });
 
 // Chat state changes
-wa.event.on("chat:pined", (cid, pined) => {
-  console.log(`Chat ${cid} ${pined ? "pinned" : "unpinned"}`);
+wa.event.on("chat:pinned", (chat) => {
+  console.log(`Chat ${chat.name} ${chat.pinned ? "pinned" : "unpinned"}`);
 });
 
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid} ${archived ? "archived" : "unarchived"}`);
+wa.event.on("chat:archived", (chat) => {
+  console.log(`Chat ${chat.name} ${chat.archived ? "archived" : "unarchived"}`);
 });
 
-wa.event.on("chat:muted", (cid, muted) => {
-  console.log(`Chat ${cid} ${muted ? `muted until ${new Date(muted)}` : "unmuted"}`);
+wa.event.on("chat:muted", (chat) => {
+  console.log(`Chat ${chat.name} ${chat.muted ? `muted until ${new Date(chat.muted)}` : "unmuted"}`);
 });
 ```
 

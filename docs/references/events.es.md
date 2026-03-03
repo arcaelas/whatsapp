@@ -145,53 +145,53 @@ wa.event.on("chat:updated", (chat) => {
 
 ---
 
-### `chat:pined`
+### `chat:pinned`
 
-Emitido cuando se fija o desfija un chat.
+Emitido cuando se fija o desfija un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:pined", (cid, pined) => {
-  if (pined) {
-    console.log(`Chat ${cid} fijado en ${new Date(pined)}`);
+wa.event.on("chat:pinned", (chat) => {
+  if (chat.pinned) {
+    console.log(`Chat ${chat.name} fijado`);
   } else {
-    console.log(`Chat ${cid} desfijado`);
+    console.log(`Chat ${chat.name} desfijado`);
   }
 });
 ```
 
-**Payload:** `(cid: string, pined: number | null)`
+**Payload:** `Chat`
 
 ---
 
 ### `chat:archived`
 
-Emitido cuando se archiva o desarchiva un chat.
+Emitido cuando se archiva o desarchiva un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:archived", (cid, archived) => {
-  console.log(`Chat ${cid}: ${archived ? "archivado" : "desarchivado"}`);
+wa.event.on("chat:archived", (chat) => {
+  console.log(`Chat ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`);
 });
 ```
 
-**Payload:** `(cid: string, archived: boolean)`
+**Payload:** `Chat`
 
 ---
 
 ### `chat:muted`
 
-Emitido cuando se silencia o desilencia un chat.
+Emitido cuando se silencia o desilencia un chat. El payload es la instancia de Chat actualizada.
 
 ```typescript
-wa.event.on("chat:muted", (cid, muted) => {
-  if (muted) {
-    console.log(`Chat ${cid} silenciado hasta ${new Date(muted)}`);
+wa.event.on("chat:muted", (chat) => {
+  if (chat.muted) {
+    console.log(`Chat ${chat.name} silenciado hasta ${new Date(chat.muted)}`);
   } else {
-    console.log(`Chat ${cid} desilenciado`);
+    console.log(`Chat ${chat.name} desilenciado`);
   }
 });
 ```
 
-**Payload:** `(cid: string, muted: number | null)`
+**Payload:** `Chat`
 
 ---
 
@@ -338,14 +338,14 @@ function setup_logger(wa: WhatsApp) {
   wa.event.on("chat:updated", (c) =>
     console.log(`[CHAT:UPD] ${c.name}`)
   );
-  wa.event.on("chat:pined", (cid, p) =>
-    console.log(`[CHAT:PIN] ${cid}: ${p ? "fijado" : "desfijado"}`)
+  wa.event.on("chat:pinned", (chat) =>
+    console.log(`[CHAT:PIN] ${chat.name}: ${chat.pinned ? "fijado" : "desfijado"}`)
   );
-  wa.event.on("chat:archived", (cid, a) =>
-    console.log(`[CHAT:ARC] ${cid}: ${a ? "archivado" : "desarchivado"}`)
+  wa.event.on("chat:archived", (chat) =>
+    console.log(`[CHAT:ARC] ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`)
   );
-  wa.event.on("chat:muted", (cid, m) =>
-    console.log(`[CHAT:MUTE] ${cid}: ${m ? "silenciado" : "desilenciado"}`)
+  wa.event.on("chat:muted", (chat) =>
+    console.log(`[CHAT:MUTE] ${chat.name}: ${chat.muted ? "silenciado" : "desilenciado"}`)
   );
   wa.event.on("chat:deleted", (cid) =>
     console.log(`[CHAT:DEL] ${cid}`)
@@ -461,9 +461,9 @@ interface WhatsAppEventMap {
   // Chats
   "chat:created": [Chat];
   "chat:updated": [Chat];
-  "chat:pined": [cid: string, pined: number | null];
-  "chat:archived": [cid: string, archived: boolean];
-  "chat:muted": [cid: string, muted: number | null];
+  "chat:pinned": [chat: Chat];
+  "chat:archived": [chat: Chat];
+  "chat:muted": [chat: Chat];
   "chat:deleted": [cid: string];
 
   // Mensajes

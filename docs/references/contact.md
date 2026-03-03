@@ -46,6 +46,37 @@ Each Contact instance has the following properties:
 | `content` | `string` | Contact bio/status (empty string if not set) |
 | `raw` | `IContactRaw` | Raw contact data |
 
+### rename()
+
+Renames a contact by ID. Delegates to the instance method internally.
+
+```typescript
+const success = await wa.Contact.rename(uid: string, name: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+await wa.Contact.rename("5491112345678@s.whatsapp.net", "John Work");
+```
+
+### refresh()
+
+Refreshes a contact's data from WhatsApp by ID. Delegates to the instance method internally.
+
+```typescript
+const contact = await wa.Contact.refresh(uid: string): Promise<Contact | null>
+```
+
+**Example:**
+
+```typescript
+const contact = await wa.Contact.refresh("5491112345678@s.whatsapp.net");
+if (contact) {
+  console.log("Updated photo:", contact.photo);
+}
+```
+
 ---
 
 ## Instance methods

@@ -24,6 +24,7 @@ wa.Contact // Clase Contact enlazada
 | `phone` | `string` | Numero de telefono sin formato (extraido del JID) |
 | `photo` | `string \| null` | URL de la foto de perfil o `null` |
 | `content` | `string` | Bio/estado del perfil del contacto (string vacio si no tiene) |
+| `raw` | `IContactRaw` | Datos raw del contacto |
 
 ---
 
@@ -64,6 +65,25 @@ Obtiene contactos paginados.
 const contacts = await wa.Contact.list(0, 50);
 for (const contact of contacts) {
   console.log(`${contact.name}: ${contact.phone}`);
+}
+```
+
+### `Contact.rename(uid, name)`
+
+Cambia el nombre de un contacto por su ID. Delega a la instancia internamente.
+
+```typescript
+await wa.Contact.rename("5491112345678@s.whatsapp.net", "Juan Trabajo");
+```
+
+### `Contact.refresh(uid)`
+
+Actualiza los datos de un contacto desde WhatsApp por su ID. Delega a la instancia internamente.
+
+```typescript
+const contact = await wa.Contact.refresh("5491112345678@s.whatsapp.net");
+if (contact) {
+  console.log(`Foto actualizada: ${contact.photo}`);
 }
 ```
 
