@@ -76,14 +76,8 @@ export function contact(wa: WhatsApp) {
          * @param uid JID del contacto o número de teléfono.
          */
         static async get(uid: string): Promise<_Contact | null> {
-            let jid: string;
-            if (uid.endsWith('@lid')) {
-                const resolved = await wa.engine.get(`lid/${uid}`);
-                if (!resolved) return null;
-                jid = resolved;
-            } else {
-                jid = uid.includes('@') ? uid : `${uid}@s.whatsapp.net`;
-            }
+            const jid = await wa.resolveJID(uid);
+            if (!jid) return null;
             const stored = await wa.engine.get(`contact/${jid}/index`);
             if (stored) return new _Contact(JSON.parse(stored, BufferJSON.reviver));
             if (!wa.socket) return null;
