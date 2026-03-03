@@ -69,13 +69,13 @@ export class Chat {
     /** Descripción del chat/grupo / Chat/group description */
     get content(): string { return this.raw.description ?? ''; }
     /** Si está fijado / Whether it's pinned */
-    get pined(): boolean { return this.raw.pinned !== null && this.raw.pinned !== undefined; }
+    get pinned(): boolean { return this.raw.pinned !== null && this.raw.pinned !== undefined; }
     /** Si está archivado / Whether it's archived */
     get archived(): boolean { return this.raw.archived ?? false; }
-    /** Timestamp cuando expira el silencio o false / Mute end timestamp or false */
-    get muted(): number | false { return this.raw.muteEndTime ?? false; }
+    /** Timestamp cuando expira el silencio (0 = no silenciado) / Mute end timestamp (0 = not muted) */
+    get muted(): number { return this.raw.muteEndTime ?? 0; }
     /** Si está leído / Whether it's read */
-    get readed(): boolean { return (this.raw.unreadCount === 0 || this.raw.unreadCount === null) && !this.raw.markedAsUnread; }
+    get read(): boolean { return (this.raw.unreadCount === 0 || this.raw.unreadCount === null) && !this.raw.markedAsUnread; }
     /** Si es solo lectura / Whether it's read-only */
     get readonly(): boolean { return this.raw.readOnly ?? false; }
 }

@@ -52,9 +52,9 @@ interface WhatsAppEventMap {
     'message:deleted': [cid: string, mid: string];
     'chat:created': [InstanceType<ReturnType<typeof chat>>];
     'chat:updated': [InstanceType<ReturnType<typeof chat>>];
-    'chat:pined': [cid: string, pined: number | null];
-    'chat:archived': [cid: string, archived: boolean];
-    'chat:muted': [cid: string, muted: number | null];
+    'chat:pinned': [InstanceType<ReturnType<typeof chat>>];
+    'chat:archived': [InstanceType<ReturnType<typeof chat>>];
+    'chat:muted': [InstanceType<ReturnType<typeof chat>>];
     'chat:deleted': [cid: string];
     'contact:created': [InstanceType<ReturnType<typeof contact>>];
     'contact:updated': [InstanceType<ReturnType<typeof contact>>];
@@ -106,9 +106,15 @@ export class WhatsApp {
         if (uid.endsWith('@g.us')) return uid;
         if (uid.endsWith('@s.whatsapp.net')) return uid;
         if (uid.endsWith('@lid')) {
-            const resolved = await this.engine.get(`lid/${uid}`);
-            if (!resolved) return null;
-            return resolved.includes('@') ? resolved : `${resolved}@s.whatsapp.net`;
+            const lid_number = uid.split('@')[0];
+            const direct = await this.engine.get(`lid/${uid}`);
+            if (direct) return direct.includes('@') ? direct : `${direct}@s.whatsapp.net`;
+            const reverse = await this.engine.get(`session/lid-mapping/${lid_number}_reverse`);
+            if (reverse) {
+                const phone = JSON.parse(reverse);
+                return `${phone}@s.whatsapp.net`;
+            }
+            return null;
         }
         const cleaned = uid.replace(/\D/g, '');
         return cleaned ? `${cleaned}@s.whatsapp.net` : null;
@@ -270,22 +276,23 @@ export class WhatsApp {
                     if (ch.name !== undefined) raw.name = ch.name ?? raw.name;
                     if ('pinned' in ch) {
                         raw.pinned = ch.pinned ?? null;
-                        this.event.emit('chat:pined', ch.id, raw.pinned);
                         has_specific_event = true;
                     }
                     if (ch.archived !== undefined) {
                         raw.archived = ch.archived ?? false;
-                        this.event.emit('chat:archived', ch.id, raw.archived);
                         has_specific_event = true;
                     }
                     if ('muteEndTime' in ch) {
                         raw.muteEndTime = ch.muteEndTime ? Number(ch.muteEndTime) : null;
-                        this.event.emit('chat:muted', ch.id, raw.muteEndTime);
                         has_specific_event = true;
                     }
                     if (ch.unreadCount !== undefined) raw.unreadCount = ch.unreadCount;
                     await this.engine.set(`chat/${ch.id}/index`, JSON.stringify(raw, BufferJSON.replacer));
-                    if (!has_specific_event) this.event.emit(stored ? 'chat:updated' : 'chat:created', new this.Chat(raw));
+                    const instance = new this.Chat({ ...raw });
+                    if ('pinned' in ch) this.event.emit('chat:pinned', instance);
+                    if (ch.archived !== undefined) this.event.emit('chat:archived', instance);
+                    if ('muteEndTime' in ch) this.event.emit('chat:muted', instance);
+                    if (!has_specific_event) this.event.emit(stored ? 'chat:updated' : 'chat:created', instance);
                 }
             });
 
@@ -304,7 +311,7 @@ export class WhatsApp {
                 for (const msg of messages) {
                     if (!msg.key?.remoteJid || !msg.key.id) continue;
 
-                    const cid = msg.key.remoteJid;
+                    const cid = (msg.key as { remoteJidAlt?: string }).remoteJidAlt || msg.key.remoteJid;
                     const mid = msg.key.id;
                     const content_type = getContentType(msg.message ?? {});
 
