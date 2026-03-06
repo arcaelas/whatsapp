@@ -123,6 +123,7 @@ export function chat(wa: WhatsApp) {
         static async list(offset = 0, limit = 50) {
             const chats: InstanceType<typeof _Chat>[] = [];
             for (const key of await wa.engine.list('chat/', offset, limit)) {
+                if (!key.endsWith('/index')) continue;
                 const stored = await wa.engine.get(key);
                 if (stored) chats.push(new _Chat(JSON.parse(stored, BufferJSON.reviver)));
             }

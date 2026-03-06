@@ -107,6 +107,7 @@ export function contact(wa: WhatsApp) {
         static async list(offset = 0, limit = 50): Promise<_Contact[]> {
             const contacts: _Contact[] = [];
             for (const key of await wa.engine.list('contact/', offset, limit)) {
+                if (!key.endsWith('/index')) continue;
                 const stored = await wa.engine.get(key);
                 if (stored) contacts.push(new _Contact(JSON.parse(stored, BufferJSON.reviver)));
             }
