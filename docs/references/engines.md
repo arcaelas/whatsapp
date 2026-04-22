@@ -1,326 +1,220 @@
 # Engines
 
-Persistence engines for session, contacts, chats and messages.
+`@arcaelas/whatsapp` v3 separates the WhatsApp client from the persistence layer. An **engine**
+is a string-only key-value store implementing the `Engine` contract. The library ships two
+production drivers (`FileSystemEngine`, `RedisEngine`) and you can plug in your own.
+
+Serialization (Buffers, BigInts, etc.) lives in a dedicated layer (`serialize` / `deserialize`)
+on top of baileys' `BufferJSON`, so engines never need to deal with JSON.
 
 ---
 
-## Engine interface
+## Import
 
-All engines must implement the `Engine` interface:
+```typescript title="ESM / TypeScript"
+import {
+    type Engine,
+    FileSystemEngine,
+    RedisEngine,
+    type RedisClient,
+    serialize,
+    deserialize,
+} from '@arcaelas/whatsapp';
+```
+
+---
+
+## The `Engine` contract
 
 ```typescript
 interface Engine {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string | null): Promise<void>;
-  list(prefix: string, offset?: number, limit?: number): Promise<string[]>;
+    get(path: string): Promise<string | null>;
+    set(path: string, value: string): Promise<void>;
+    unset(path: string): Promise<boolean>;
+    list(path: string, offset?: number, limit?: number): Promise<string[]>;
+    count(path: string): Promise<number>;
+    clear(): Promise<void>;
 }
 ```
 
-### Methods
+| Method              | Description                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `get(path)`         | Reads a document. Returns `null` if the path does not exist.                                       |
+| `set(path, value)`  | Writes a document and refreshes its mtime (which drives `list` ordering).                          |
+| `unset(path)`       | Cascade-deletes the path and every descendant. Idempotent — safe to call on missing paths.         |
+| `list(path, o, l)`  | Lists the **direct children**' values, ordered by mtime DESC, paginated by `offset` / `limit`.    |
+| `count(path)`       | Counts direct children without loading their values.                                               |
+| `clear()`           | Wipes the entire store.                                                                            |
 
-| Method | Description |
-|--------|-------------|
-| `get(key)` | Gets the value for a key. Returns `null` if not found. |
-| `set(key, value)` | Sets a value. If `value` is `null`, deletes the key **and all sub-keys recursively** (cascade delete). |
-| `list(prefix, offset, limit)` | Lists keys that start with `prefix`, ordered by most recent. Default `offset=0`, `limit=50`. |
-
-The cascade delete behavior is critical: calling `engine.set("chat/123@s.whatsapp.net", null)` will delete the chat index, all messages, and all message content under that prefix.
-
----
-
-## FileEngine
-
-File system based engine. **Default.**
-
-### Import
-
-```typescript
-import { FileEngine } from "@arcaelas/whatsapp";
-```
-
-### Constructor
-
-```typescript
-new FileEngine(base_path?: string)
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `base_path` | `string` | `".baileys/default"` | Base directory |
-
-### Example
-
-```typescript
-import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
-
-const wa = new WhatsApp({
-  engine: new FileEngine(".baileys/my-bot"),
-});
-```
-
-### File structure
-
-```
-.baileys/my-bot/
-  session/
-    creds                     # Authentication credentials
-    {type}/{id}               # Signal keys (e.g. session/pre-key/1)
-  lid/
-    {lid}                     # LID reverse index (value: JID)
-  contact/
-    {jid}/
-      index                   # Contact metadata (IContactRaw JSON)
-  chat/
-    {jid}/
-      index                   # Chat metadata (IChatRaw JSON)
-      messages                # Message index (TIMESTAMP MID per line)
-      message/
-        {mid}/
-          index               # Message metadata (IMessageIndex JSON)
-          raw                 # WAMessage JSON
-          content             # Binary content (base64 encoded)
-```
-
-**Note:** FileEngine replaces `@` with `_at_` in file paths (e.g. `5491112345678@s.whatsapp.net` becomes `5491112345678_at_s.whatsapp.net`).
+!!! info "Path semantics"
+    Paths are POSIX-like strings (`/chat/<jid>/message/<id>`). Drivers normalize redundant
+    slashes (`//chat///abc` → `chat/abc`). `set` always refreshes the mtime, which is what makes
+    "most recent first" listings cheap. `unset` cascades the entire subtree in a single call.
 
 ---
 
-## RedisEngine
+## `FileSystemEngine`
 
-Redis based engine. **Included in the library.**
+Persists each document at `<base>/<path>/index.json`. The directory layout lets a resource
+coexist with nested sub-resources (a chat directory can hold both its own `index.json` and a
+`message/` subtree).
 
-### Import
-
-```typescript
-import { RedisEngine } from "@arcaelas/whatsapp";
+```typescript title="Constructor"
+new FileSystemEngine(basePath: string)
 ```
 
-### Constructor
+| Parameter  | Type     | Description                                                       |
+| ---------- | -------- | ----------------------------------------------------------------- |
+| `basePath` | `string` | Absolute or relative directory used as the root of the data tree. |
 
-```typescript
+```typescript title="Usage" hl_lines="4 6 7"
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
+import { join } from 'node:path';
+
+const engine = new FileSystemEngine(join(process.cwd(), 'data', 'wa'));
+
+const wa = new WhatsApp({ engine });
+await wa.connect((qr) => console.log('QR ready', qr.length, 'bytes'));
+```
+
+!!! tip "When to choose the filesystem driver"
+    Local development, single-process bots, or embedded deployments. Persistence is durable,
+    inspectable from the shell, and requires zero infrastructure.
+
+---
+
+## `RedisEngine`
+
+Persists documents as Redis strings and uses one sorted set per parent for ordered listings.
+
+| Keyspace                     | Type        | Purpose                                                  |
+| ---------------------------- | ----------- | -------------------------------------------------------- |
+| `<prefix>:doc:<path>`        | `string`    | The serialized document body.                            |
+| `<prefix>:idx:<parent>`      | `zset`      | Score = mtime, member = full child path.                 |
+
+`list()` is implemented as `ZREVRANGE` + `MGET` in a single round-trip; `count()` is `ZCARD`
+(O(1)); `unset()` cascades via `SCAN` + `DEL` over `*:doc:<path>/*` and `*:idx:<path>*`.
+
+```typescript title="Constructor"
 new RedisEngine(client: RedisClient, prefix?: string)
 ```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `client` | `RedisClient` | - | Redis client instance (ioredis or redis compatible) |
-| `prefix` | `string` | `"wa:default"` | Key prefix for all stored data |
+| Parameter | Type          | Default        | Description                                                                 |
+| --------- | ------------- | -------------- | --------------------------------------------------------------------------- |
+| `client`  | `RedisClient` | —              | An ioredis-compatible client. See the interface below for required methods. |
+| `prefix`  | `string`      | `'wa:default'` | Key prefix; use one prefix per WhatsApp account to avoid collisions.        |
 
-### RedisClient interface
-
-The `RedisClient` interface is minimal and compatible with both `ioredis` and `redis` packages:
+### `RedisClient` interface
 
 ```typescript
 interface RedisClient {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<unknown>;
-  del(key: string | string[]): Promise<unknown>;
-  scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<unknown>;
+    del(keys: string | string[]): Promise<unknown>;
+    mget(keys: string[]): Promise<(string | null)[]>;
+    scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
+    zadd(key: string, score: number, member: string): Promise<unknown>;
+    zrem(key: string, members: string | string[]): Promise<unknown>;
+    zrevrange(key: string, start: number, stop: number): Promise<string[]>;
+    zcard(key: string): Promise<number>;
 }
 ```
 
-### Example with ioredis
+Any client matching this surface works — `ioredis` and most drop-in replacements do.
 
-```typescript
-import Redis from "ioredis";
-import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+```typescript title="Usage with ioredis" hl_lines="5 6 7"
+import IORedis from 'ioredis';
+import { WhatsApp, RedisEngine } from '@arcaelas/whatsapp';
 
-const client = new Redis();
-const engine = new RedisEngine(client, "wa:5491112345678");
-
-const wa = new WhatsApp({ engine });
-```
-
-### Example with redis
-
-```typescript
-import { createClient } from "redis";
-import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
-
-const client = createClient({ url: "redis://localhost:6379" });
-await client.connect();
-
-const engine = new RedisEngine(client, "wa:my-bot");
-const wa = new WhatsApp({ engine });
-```
-
-### Key structure in Redis
-
-All keys are prefixed with `{prefix}:`. Example with prefix `wa:bot`:
-
-```
-wa:bot:session/creds
-wa:bot:session/{type}/{id}
-wa:bot:lid/{lid}
-wa:bot:contact/{jid}/index
-wa:bot:chat/{jid}/index
-wa:bot:chat/{jid}/messages
-wa:bot:chat/{jid}/message/{mid}/index
-wa:bot:chat/{jid}/message/{mid}/raw
-wa:bot:chat/{jid}/message/{mid}/content
-```
-
-**Note:** RedisEngine uses `SCAN` (not `KEYS`) for listing and cascade delete to avoid blocking the Redis server in production.
-
----
-
-## Custom Engine
-
-You can implement your own engine for any storage backend. Make sure to implement cascade delete in `set()` when `value` is `null`.
-
-### PostgreSQL example
-
-```typescript
-import type { Engine } from "@arcaelas/whatsapp";
-import { Pool } from "pg";
-
-export class PostgresEngine implements Engine {
-  private pool: Pool;
-
-  constructor(connection_string: string) {
-    this.pool = new Pool({ connectionString: connection_string });
-  }
-
-  async init() {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS whatsapp_store (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-  }
-
-  async get(key: string): Promise<string | null> {
-    const result = await this.pool.query(
-      "SELECT value FROM whatsapp_store WHERE key = $1",
-      [key]
-    );
-    return result.rows[0]?.value ?? null;
-  }
-
-  async set(key: string, value: string | null): Promise<void> {
-    if (value === null) {
-      // Cascade delete: remove key and all sub-keys
-      await this.pool.query(
-        "DELETE FROM whatsapp_store WHERE key = $1 OR key LIKE $2",
-        [key, `${key}/%`]
-      );
-    } else {
-      await this.pool.query(
-        `INSERT INTO whatsapp_store (key, value, updated_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-        [key, value]
-      );
-    }
-  }
-
-  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-    const result = await this.pool.query(
-      `SELECT key FROM whatsapp_store
-       WHERE key LIKE $1
-       ORDER BY updated_at DESC
-       OFFSET $2 LIMIT $3`,
-      [`${prefix}%`, offset, limit]
-    );
-    return result.rows.map(row => row.key);
-  }
-}
-
-// Usage
-const engine = new PostgresEngine(process.env.DATABASE_URL!);
-await engine.init();
-
-const wa = new WhatsApp({ engine });
-```
-
-### Memory example (for testing)
-
-```typescript
-import type { Engine } from "@arcaelas/whatsapp";
-
-export class MemoryEngine implements Engine {
-  private store = new Map<string, string>();
-
-  async get(key: string): Promise<string | null> {
-    return this.store.get(key) ?? null;
-  }
-
-  async set(key: string, value: string | null): Promise<void> {
-    if (value === null) {
-      // Cascade delete: remove key and all sub-keys
-      this.store.delete(key);
-      const prefix = `${key}/`;
-      for (const k of this.store.keys()) {
-        if (k.startsWith(prefix)) this.store.delete(k);
-      }
-    } else {
-      this.store.set(key, value);
-    }
-  }
-
-  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-    const keys = Array.from(this.store.keys())
-      .filter(k => k.startsWith(prefix));
-    return keys.slice(offset, offset + limit);
-  }
-
-  clear() {
-    this.store.clear();
-  }
-}
-
-// Usage
 const wa = new WhatsApp({
-  engine: new MemoryEngine(),
+    engine: new RedisEngine(
+        new IORedis({ host: '127.0.0.1', port: 6379 }),
+        'wa:5491112345678',
+    ),
+    phone: 5491112345678,
 });
+
+await wa.connect((pin) => console.log('PIN:', pin));
+```
+
+!!! tip "When to choose Redis"
+    Multi-process / horizontal deployments, ephemeral containers where the filesystem is not
+    persisted, or any setup where you already operate Redis.
+
+---
+
+## Serialization helpers
+
+```typescript
+function serialize<T>(doc: T): string;
+function deserialize<T>(raw: string | null): T | null;
+```
+
+Both helpers are thin wrappers over `JSON.stringify` / `JSON.parse` using baileys' `BufferJSON`
+replacer/reviver, so `Buffer` instances inside Signal keys, message media references, and
+poll payloads round-trip without loss. `deserialize(null)` returns `null`, which makes it safe
+to chain after `engine.get()`.
+
+```typescript title="Custom storage on top of an engine"
+import { serialize, deserialize } from '@arcaelas/whatsapp';
+
+interface BotConfig { greeting: string; quietHours: [number, number]; }
+
+await wa.engine.set('/app/config', serialize<BotConfig>({
+    greeting: 'Hello!',
+    quietHours: [22, 8],
+}));
+
+const config = deserialize<BotConfig>(await wa.engine.get('/app/config'));
 ```
 
 ---
 
-## Implementation considerations
+## Custom engines
 
-### Key structure
+Implementing the `Engine` interface is enough to plug any backend (PostgreSQL, S3, SQLite,
+DynamoDB, …). Honor the four invariants and the rest of the library will behave correctly:
 
-The library uses a hierarchical key structure:
+1. `set` updates the mtime that drives `list` ordering.
+2. `list` returns **direct children only**, ordered by mtime DESC.
+3. `unset` cascades the subtree.
+4. `clear` wipes everything the engine owns.
 
+```typescript title="Skeleton for a custom engine" hl_lines="3"
+import type { Engine } from '@arcaelas/whatsapp';
+
+export class SqliteEngine implements Engine {
+    async get(path: string): Promise<string | null> {
+        // SELECT value FROM docs WHERE path = ?
+        return null;
+    }
+
+    async set(path: string, value: string): Promise<void> {
+        // INSERT OR REPLACE INTO docs(path, value, mtime) VALUES(?, ?, ?)
+    }
+
+    async unset(path: string): Promise<boolean> {
+        // DELETE FROM docs WHERE path = ? OR path LIKE ? || '/%'
+        return true;
+    }
+
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        // SELECT value FROM docs
+        // WHERE parent = ? ORDER BY mtime DESC LIMIT ? OFFSET ?
+        return [];
+    }
+
+    async count(path: string): Promise<number> {
+        // SELECT COUNT(*) FROM docs WHERE parent = ?
+        return 0;
+    }
+
+    async clear(): Promise<void> {
+        // DELETE FROM docs
+    }
+}
 ```
-session/creds                         # Authentication credentials
-session/{type}/{id}                   # Signal keys
-lid/{lid}                             # LID reverse index (value: JID)
-contact/{jid}/index                   # Contact data (IContactRaw JSON)
-chat/{jid}/index                      # Chat metadata (IChatRaw JSON)
-chat/{jid}/messages                   # Message index (TIMESTAMP MID per line, newest first)
-chat/{jid}/message/{mid}/index        # Message metadata (IMessageIndex JSON)
-chat/{jid}/message/{mid}/raw          # WAMessage JSON
-chat/{jid}/message/{mid}/content      # Binary content (base64 encoded string)
-```
 
-### Message index format
-
-The `chat/{jid}/messages` key stores a newline-separated list of `TIMESTAMP MID` pairs, with the newest messages first:
-
-```
-1709312400000 ABCD1234
-1709312300000 EFGH5678
-1709312200000 IJKL9012
-```
-
-### JID normalization
-
-JIDs contain `@` which may be problematic for some storage systems. FileEngine replaces `@` with `_at_`:
-
-```typescript
-// 5491112345678@s.whatsapp.net -> 5491112345678_at_s.whatsapp.net
-```
-
-Your engine can handle JIDs as-is if your storage supports it.
-
-### Binary content
-
-Messages may have binary content (images, videos, audio). The `content` key stores the data encoded as a base64 string, not raw binary.
-
-### Atomicity
-
-For production systems, consider implementing atomic operations, especially for `set()` which may be called multiple times during message processing.
+!!! warning "String-only contract"
+    Engines must not parse or transform values. Always store the exact string handed to `set`
+    and return it verbatim from `get` / `list`. Serialization is a higher-level concern.

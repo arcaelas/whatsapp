@@ -1,294 +1,165 @@
 # Getting Started
 
-This tutorial will guide you step by step to create your first WhatsApp bot.
+This tutorial walks you through a complete `@arcaelas/whatsapp` session: bootstrapping a project, picking a storage engine, listening to events, pairing the device, replying to a message, and shutting down gracefully.
 
 ---
 
-## 1. Create the project
+## 1. Bootstrap the project
+
+Create a fresh directory and add the package:
 
 ```bash
-mkdir my-whatsapp-bot
-cd my-whatsapp-bot
-npm init -y
-npm install @arcaelas/whatsapp typescript tsx
+mkdir whatsapp-bot && cd whatsapp-bot
+yarn init -y
+yarn add @arcaelas/whatsapp
+yarn add -D tsx typescript @types/node
 ```
+
+Create an `index.ts` file at the project root — that is where the rest of this guide will live.
 
 ---
 
-## 2. Basic structure
+## 2. Pick an engine
 
-Create the main file:
+The `Engine` is the persistence layer for credentials, chats, contacts, and messages. The library ships two implementations:
+
+=== "FileSystemEngine (local dev)"
+
+    ```typescript title="index.ts"
+    import { FileSystemEngine } from "@arcaelas/whatsapp";
+
+    const engine = new FileSystemEngine(__dirname + "/.session");
+    ```
+
+    Stores everything as files under the directory you provide. Ideal for development and single-process deployments.
+
+=== "RedisEngine (production)"
+
+    ```typescript title="index.ts"
+    import { RedisEngine } from "@arcaelas/whatsapp";
+    import Redis from "ioredis";
+
+    const engine = new RedisEngine(new Redis(process.env.REDIS_URL!), "bot:main");
+    ```
+
+    Backs the session by Redis and namespaces keys with the prefix you pass. Lets you scale horizontally and survive container restarts.
+
+!!! tip
+    You can also implement the `Engine` interface yourself to target SQLite, S3, DynamoDB, or anything else. See [References](references/engine.md).
+
+---
+
+## 3. Instantiate the client
+
+`new WhatsApp(...)` does not open a connection — it only wires the delegates and the event emitter.
+
+```typescript title="index.ts" hl_lines="4 5 6 7"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+
+const engine = new FileSystemEngine(__dirname + "/.session");
+const wa = new WhatsApp({
+    engine,
+    phone: 584144709840, // omit to fall back to QR pairing
+});
+```
+
+The `phone` field decides the pairing flow: provide it to receive an 8-character PIN, or omit it to receive a QR PNG buffer.
+
+---
+
+## 4. Register listeners before connecting
+
+Always attach listeners **before** calling `connect()` so you never miss the first events. Every listener receives the primary payload first and the `WhatsApp` instance last; message and chat events also receive the related `Chat` in the middle.
 
 ```typescript title="index.ts"
-import { writeFileSync } from "fs";
-import { WhatsApp } from "@arcaelas/whatsapp";
+wa.on("connected", () => {
+    console.log("session ready");
+});
 
-async function main() {
-  // Create WhatsApp instance
-  const wa = new WhatsApp();
+wa.on("disconnected", () => {
+    console.log("session closed");
+});
 
-  // Listen to events before connecting
-  wa.event.on("open", () => console.log("Connected!"));
-  wa.event.on("close", () => console.log("Disconnected"));
-  wa.event.on("error", (err) => console.error("Error:", err.message));
-
-  // Connect showing QR in console
-  console.log("Waiting for QR...");
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      // Save QR as image
-      writeFileSync("qr.png", data);
-      console.log("QR saved to qr.png - Scan with your phone");
-    } else {
-      // 8 digit code (if using phone)
-      console.log("Pairing code:", data);
-    }
-  });
-
-  console.log("Bot started!");
-}
-
-main().catch(console.error);
+wa.on("message:created", async (msg, chat, wa) => {
+    if (msg.me) return;
+    console.log(`[${chat.id}] ${msg.caption}`);
+});
 ```
+
+The full event map (`chat:*`, `contact:*`, `message:updated`, `message:reacted`, `message:seen`, etc.) is documented in [References](references/whatsapp.md).
 
 ---
 
-## 3. Run
+## 5. Connect and handle the pairing payload
+
+`connect(callback)` resolves once the session syncs. The callback fires whenever baileys hands you a fresh pairing artifact: a `string` (PIN) when `phone` is set, or a `Buffer` (PNG QR) otherwise. The callback may fire more than once if the previous code expires before the user completes pairing.
+
+```typescript title="index.ts"
+import { writeFileSync } from "node:fs";
+
+await wa.connect(async (code) => {
+    if (typeof code === "string") {
+        console.log("Pair code:", code);
+    } else if (Buffer.isBuffer(code)) {
+        writeFileSync("qr.png", code);
+        console.log("QR written to qr.png — scan it with WhatsApp");
+    }
+});
+```
+
+!!! success
+    When `connect()` resolves, the engine has the credentials persisted. Subsequent runs reuse them automatically — no second pairing required.
+
+---
+
+## 6. Reply to incoming messages
+
+The `wa.Message` delegate exposes `text`, `image`, `video`, `audio`, `location`, and `poll`. Pass the chat id (or any identifier — phone, JID, or LID) and the body:
+
+```typescript title="index.ts" hl_lines="3 4 5"
+wa.on("message:created", async (msg, chat, wa) => {
+    if (msg.me) return;
+    if (msg.caption?.toLowerCase() === "ping") {
+        await wa.Message.text(chat.id, "pong");
+    }
+});
+```
+
+Each method also has an instance variant on the message itself (`msg.text("...")`) that quotes the original message in the reply.
+
+---
+
+## 7. Graceful shutdown
+
+Cancel pending reconnects and close the socket cleanly on SIGINT:
+
+```typescript title="index.ts"
+process.on("SIGINT", async () => {
+    await wa.disconnect();
+    process.exit(0);
+});
+```
+
+Pass `{ destroy: true }` to also wipe the engine on the way out — useful in tests or when rotating accounts.
+
+---
+
+## 8. Run it
 
 ```bash
 npx tsx index.ts
 ```
 
-1. The `qr.png` file will appear
-2. Open it and scan with WhatsApp > Linked devices
-3. The bot will connect automatically
-
-!!! success "Done!"
-    Once connected, the session is saved in `.baileys/default/` and you won't need to scan again.
+The first run prints the PIN (or writes `qr.png`); pair the device, wait for the `connected` log, then send a message to your number to see the listener fire.
 
 ---
 
-## 4. Listen to messages
+## Going further
 
-Add a listener for incoming messages:
+A few client options worth knowing about:
 
-```typescript title="index.ts" hl_lines="20-35"
-import { writeFileSync } from "fs";
-import { WhatsApp } from "@arcaelas/whatsapp";
+- **`autoclean`** *(default `true`)* — on a remote `loggedOut`, clears the entire engine so the next `connect()` starts from a clean slate. Set to `false` to preserve chat/message history and only drop credentials.
+- **`reconnect`** *(default `true`)* — accepts `boolean`, a number of max attempts, or `{ max, interval }` (interval in seconds, default 60). Transient closes triggered by the protocol do not consume retry budget.
+- **`sync`** *(default `false`)* — enables baileys' full history sync; imported chats, contacts, and messages are persisted through the engine.
 
-async function main() {
-  const wa = new WhatsApp();
-
-  // Listen to new messages
-  wa.event.on("message:created", async (msg) => {
-    // Ignore own messages
-    if (msg.me) return;
-
-    // Only process text
-    if (msg.type !== "text") return;
-
-    // Get content as text
-    const content = (await msg.content()).toString();
-    console.log(`[${msg.type}] ${msg.cid}: ${content}`);
-
-    const text = content.toLowerCase();
-
-    if (text === "hello") {
-      await wa.Message.text(msg.cid, "Hello! I'm a bot. Type 'help' to see commands.");
-    }
-
-    if (text === "help") {
-      await wa.Message.text(
-        msg.cid,
-        "Available commands:\n" +
-        "- hello: Greeting\n" +
-        "- time: Current time\n" +
-        "- ping: Response test"
-      );
-    }
-
-    if (text === "time") {
-      await wa.Message.text(msg.cid, `It's ${new Date().toLocaleTimeString()}`);
-    }
-
-    if (text === "ping") {
-      await wa.Message.text(msg.cid, "pong!");
-    }
-  });
-
-  // Connect
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      writeFileSync("qr.png", data);
-      console.log("Scan qr.png");
-    }
-  });
-
-  console.log("Bot ready!");
-}
-
-main().catch(console.error);
-```
-
----
-
-## 5. Connection with pairing code
-
-If you prefer not to scan QR, use the phone number:
-
-```typescript
-const wa = new WhatsApp({
-  phone: "5491112345678", // Without + or spaces
-});
-
-await wa.pair(async (data) => {
-  if (typeof data === "string") {
-    console.log("Enter this code on your phone:", data);
-    // Go to WhatsApp > Linked devices > Link a device
-    // Select "Link with phone number"
-  }
-});
-```
-
----
-
-## 6. Handle different message types
-
-```typescript
-import { writeFileSync } from "fs";
-
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  const buffer = await msg.content();
-
-  // Text message
-  if (msg.type === "text") {
-    const text = buffer.toString();
-    console.log("Text:", text);
-  }
-
-  // Image
-  if (msg.type === "image") {
-    console.log(`Image: ${buffer.length} bytes`);
-    if (msg.caption) {
-      console.log(`Caption: ${msg.caption}`);
-    }
-    // Save image
-    writeFileSync("image.jpg", buffer);
-  }
-
-  // Video
-  if (msg.type === "video") {
-    console.log(`Video: ${buffer.length} bytes`);
-  }
-
-  // Audio (voice note)
-  if (msg.type === "audio") {
-    console.log(`Audio: ${buffer.length} bytes`);
-  }
-
-  // Location
-  if (msg.type === "location") {
-    const coords = JSON.parse(buffer.toString());
-    console.log(`Location: ${coords.lat}, ${coords.lng}`);
-  }
-
-  // Poll
-  if (msg.type === "poll") {
-    const poll = JSON.parse(buffer.toString());
-    console.log(`Poll: ${poll.content}`);
-    poll.options.forEach((opt: { content: string }, i: number) => {
-      console.log(`  ${i + 1}. ${opt.content}`);
-    });
-  }
-});
-```
-
----
-
-## 7. Send messages
-
-```typescript
-import { readFileSync } from "fs";
-
-const cid = "5491198765432@s.whatsapp.net";
-
-// Text
-await wa.Message.text(cid, "Hello!");
-
-// Text quoting message
-await wa.Message.text(cid, "Reply", "MESSAGE_ID_TO_QUOTE");
-
-// Image with caption
-const img = readFileSync("photo.jpg");
-await wa.Message.image(cid, img, "Check out this photo!");
-
-// Video
-const vid = readFileSync("video.mp4");
-await wa.Message.video(cid, vid, "Interesting video");
-
-// Audio (voice note)
-const aud = readFileSync("audio.ogg");
-await wa.Message.audio(cid, aud);
-
-// Location
-await wa.Message.location(cid, {
-  lat: -34.6037,
-  lng: -58.3816
-});
-
-// Poll
-await wa.Message.poll(cid, {
-  content: "Which do you prefer?",
-  options: [
-    { content: "Option A" },
-    { content: "Option B" },
-    { content: "Option C" }
-  ]
-});
-```
-
----
-
-## 8. React to messages
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (msg.type !== "text") return;
-
-  const text = (await msg.content()).toString().toLowerCase();
-
-  // React with emoji
-  if (text.includes("thanks")) {
-    await msg.react("❤️");
-  }
-
-  if (text.includes("haha")) {
-    await msg.react("😂");
-  }
-
-  // Remove reaction
-  // await msg.react("");
-});
-```
-
----
-
-## 9. Mark chat as read
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  // Mark chat as read
-  await wa.Chat.seen(msg.cid);
-});
-```
-
----
-
-## Next step
-
-Now that you have a basic bot running, explore the detailed documentation:
-
-- [Advanced examples](examples/basic-bot.md) - Recommended patterns
+The complete option list, event map, and delegate APIs live in [References](references/whatsapp.md). For end-to-end recipes (bots, webhooks, decorators, multi-account setups) browse the [Examples](examples/index.md).

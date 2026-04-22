@@ -1,37 +1,87 @@
 # Data Schemas
 
-Standardized schemas for storage in `@arcaelas/whatsapp`.
+Reference for every document `@arcaelas/whatsapp` v3 writes through an `Engine`.
 
-**Principles:**
-- **Minimal**: Only essential fields
-- **Flat**: No unnecessary nesting
-- **Typed**: Explicit types
-- **Temporal**: Timestamps in milliseconds UTC
-- **Nullable**: `null` for absence, never `undefined`
+The library never stores binary blobs directly: every value is first run through
+`serialize()` (which uses baileys `BufferJSON`) so the engine only ever sees and
+persists **strings**. The engine drivers (`RedisEngine`, `FileSystemEngine`) are
+opaque pipes; they are not aware of JSON, of WhatsApp, or of buffers.
 
 ---
 
-# Raw Schemas
+## Storage layout overview
 
-Classes work with "raw" objects that contain protocol properties. Getters/setters expose a simplified API.
+The orchestrator (`WhatsApp`) writes to a small, fixed set of paths. Everything
+the library produces lives under one of these branches:
+
+| Branch       | Purpose                                                                         |
+| ------------ | ------------------------------------------------------------------------------- |
+| `/session/`  | Authentication credentials and Signal protocol material.                        |
+| `/contact/`  | Contact metadata (one document per contact JID).                                |
+| `/chat/`     | Chat metadata + per-chat message documents (with separate content sub-docs).    |
+| `/lid/`      | Bidirectional LID ↔ JID lookup index.                                           |
+
+Paths use `/` as separator and **never start or end with a slash** once
+normalized — both engines collapse `//` and trim leading/trailing `/`.
 
 ---
 
-## Contact Raw
+## Path index
 
-Raw contact object properties (`IContactRaw`).
+Every concrete path the orchestrator may write or read.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `string` | Unique contact JID |
-| `lid` | `string \| null` | Alternative ID in LID format |
-| `name` | `string \| null` | Name saved in user's address book |
-| `notify` | `string \| null` | Profile push name set by the contact |
-| `verifiedName` | `string \| null` | Verified business account name |
-| `imgUrl` | `string \| null` | Profile picture URL (may expire or be `"changed"`) |
-| `status` | `string \| null` | Contact profile bio/status |
+| Path                                              | Purpose                                                                   |
+| ------------------------------------------------- | ------------------------------------------------------------------------- |
+| `/session/creds`                                  | Baileys `AuthenticationCreds` (PIN, signed prekey, identity, registration). |
+| `/session/pre-key/<id>`                           | Signal pre-key entry written by baileys' key store.                       |
+| `/session/session/<id>`                           | Signal session record per remote identity.                                |
+| `/session/app-state-sync-key/<id>`                | App-state sync key (rebuilt via `proto.Message.AppStateSyncKeyData.create`). |
+| `/session/sender-key/<id>`                        | Group sender keys.                                                        |
+| `/session/sender-key-memory/<id>`                 | Sender-key memory used during fan-out.                                    |
+| `/session/device-list/<jid>`                      | Cached device list for a JID.                                             |
+| `/session/lid-mapping/<id>`                       | Cached LID mapping entries persisted by baileys' key store.               |
+| `/contact/<jid>`                                  | Contact document (`IContactRaw`).                                         |
+| `/chat/<cid>`                                     | Chat document (`IChatRaw`).                                               |
+| `/chat/<cid>/message/<mid>`                       | Message document (`IMessage`) including the full baileys `WAMessage` raw. |
+| `/chat/<cid>/message/<mid>/content`               | Decoded payload `{ data: "<base64>" }` (text, JSON, or media bytes).      |
+| `/lid/<lid>`                                      | Forward map: LID → JID (string).                                          |
+| `/lid/<lid>_reverse`                              | Reverse fallback used by `_resolve_jid()` when the LID is unmapped.       |
 
-### Raw Example
+!!! note "Session keys"
+    The exact set of `/session/<category>/<id>` paths depends on what baileys
+    persists. The library treats every category uniformly: it serializes the
+    value with `BufferJSON` and writes it under `/session/<category>/<id>`.
+
+---
+
+## Document shapes
+
+All documents are JSON serialized with `BufferJSON`. Buffers are encoded as:
+
+```json
+{ "type": "Buffer", "data": "<base64 string>" }
+```
+
+`deserialize<T>(raw)` reconstructs the original `Buffer`/`Uint8Array` instances
+when reading.
+
+---
+
+### `IContactRaw` — `/contact/<jid>`
+
+```ts
+interface IContactRaw {
+    id: string;                  // canonical JID (e.g. 584144709840@s.whatsapp.net)
+    lid: string | null;          // alternative LID identifier when known
+    name: string | null;         // address-book name
+    notify: string | null;       // push name set by the contact
+    verified_name: string | null;// verified business name
+    img_url: string | null;      // profile picture URL ("changed" if rotated)
+    status: string | null;       // bio / about
+}
+```
+
+Example payload:
 
 ```json
 {
@@ -39,779 +89,248 @@ Raw contact object properties (`IContactRaw`).
     "lid": "140913951141911@lid",
     "name": "Juan Perez",
     "notify": "Juanito",
-    "verifiedName": null,
-    "imgUrl": "https://pps.whatsapp.net/v/t61.24694-24/...",
+    "verified_name": null,
+    "img_url": "https://pps.whatsapp.net/v/t61.24694-24/...",
     "status": "Available 24/7"
 }
 ```
 
 ---
 
-## Chat Raw
+### `IChatRaw` — `/chat/<cid>`
 
-Raw conversation object properties (`IChatRaw`).
+The chat doc only persists fields the orchestrator explicitly tracks (see
+`_handle_chats_upsert` / `_handle_chats_update`):
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `string` | Unique chat JID |
-| `name` | `string \| null` | Chat or group name |
-| `displayName` | `string \| null` | Alternative display name |
-| `description` | `string \| null` | Group description |
-| `unreadCount` | `number \| null` | Unread message count |
-| `readOnly` | `boolean \| null` | Whether the chat is read-only |
-| `archived` | `boolean \| null` | Whether the chat is archived |
-| `pinned` | `number \| null` | Pin timestamp |
-| `muteEndTime` | `number \| null` | Mute expiration timestamp |
-| `markedAsUnread` | `boolean \| null` | Whether manually marked as unread |
-| `participant` | `IGroupParticipant[] \| null` | Group participant list |
-| `createdBy` | `string \| null` | Group creator JID |
-| `createdAt` | `number \| null` | Creation timestamp |
-| `ephemeralExpiration` | `number \| null` | Ephemeral message duration (seconds) |
-
-### IGroupParticipant
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `string` | Participant JID |
-| `admin` | `string \| null` | Admin role: `null`, `"admin"`, `"superadmin"` |
-
-### Raw Example
-
-```json
-{
-    "id": "120363123456789@g.us",
-    "name": "Development Team",
-    "displayName": null,
-    "description": "Project coordination group",
-    "unreadCount": 5,
-    "readOnly": false,
-    "archived": false,
-    "pinned": 1767371367857,
-    "muteEndTime": null,
-    "markedAsUnread": false,
-    "createdAt": 1700000000,
-    "createdBy": "584144709840@s.whatsapp.net",
-    "participant": [
-        { "id": "584144709840@s.whatsapp.net", "admin": "superadmin" },
-        { "id": "584121234567@s.whatsapp.net", "admin": null }
-    ],
-    "ephemeralExpiration": 604800
+```ts
+interface IChatRaw {
+    id: string;
+    name?: string | null;
+    archived?: boolean | null;
+    pinned?: number | null;          // pin timestamp; null/absent = unpinned
+    mute_end_time?: number | null;   // ms epoch; <= Date.now() means unmuted
+    unread_count?: number | null;
+    read_only?: boolean | null;
 }
 ```
 
----
-
-## Message Raw
-
-Raw message object properties. The library stores two parts: `IMessageIndex` (metadata) and `WAMessage` (full Baileys raw).
-
-### MessageKey (key)
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `key.remoteJid` | `string \| null` | Chat JID |
-| `key.fromMe` | `boolean \| null` | Whether the message is own |
-| `key.id` | `string \| null` | Unique message ID |
-| `key.participant` | `string \| null` | Sender JID (in groups) |
-
-### Main Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `message` | `Message \| null` | Message content (see Message Content) |
-| `messageTimestamp` | `number \| null` | Creation timestamp |
-| `status` | `MessageStatus \| null` | Delivery status (0-5) |
-| `pushName` | `string \| null` | Sender name |
-| `broadcast` | `boolean \| null` | Whether it's a broadcast message |
-| `starred` | `boolean \| null` | Whether it's starred |
-| `duration` | `number \| null` | Duration in seconds (audio/video) |
-| `labels` | `string[] \| null` | Message labels |
-
-### Message Statuses (status)
-
-| Value | Constant | Description |
-|-------|----------|-------------|
-| `0` | `ERROR` | Send error |
-| `1` | `PENDING` | Pending send |
-| `2` | `SERVER_ACK` | Server acknowledged |
-| `3` | `DELIVERED` | Delivered to recipient |
-| `4` | `READ` | Read by recipient |
-| `5` | `PLAYED` | Played (audio/video) |
-
-### Media Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `mediaCiphertextSha256` | `Uint8Array \| null` | SHA256 hash of encrypted media |
-| `mediaData` | `MediaData \| null` | Media data |
-| `quotedStickerData` | `MediaData \| null` | Quoted sticker data |
-
-### Temporal Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `ephemeralStartTimestamp` | `number \| null` | Expiration timer start |
-| `ephemeralDuration` | `number \| null` | Duration until expiration (seconds) |
-| `ephemeralOffToOn` | `boolean \| null` | Whether changed from off to on |
-| `ephemeralOutOfSync` | `boolean \| null` | Whether out of sync |
-| `revokeMessageTimestamp` | `number \| null` | Revocation timestamp |
-
-### Reaction and Poll Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `reactions` | `Reaction[] \| null` | Message reactions |
-| `pollUpdates` | `PollUpdate[] \| null` | Poll updates |
-| `pollAdditionalMetadata` | `PollAdditionalMetadata \| null` | Additional poll metadata |
-| `messageSecret` | `Uint8Array \| null` | Secret for decrypting votes |
-
-### Receipt Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `userReceipt` | `UserReceipt[] \| null` | Per-user read receipts |
-| `messageC2STimestamp` | `number \| null` | Client-to-server timestamp |
-
-### Stub Properties (System Messages)
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `messageStubType` | `StubType \| null` | System message type |
-| `messageStubParameters` | `string[] \| null` | Stub parameters |
-
-### Business Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `bizPrivacyStatus` | `BizPrivacyStatus \| null` | Business privacy status |
-| `verifiedBizName` | `string \| null` | Verified business name |
-
-### Status/History Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `statusPsa` | `StatusPSA \| null` | Status PSA |
-| `statusAlreadyViewed` | `boolean \| null` | Whether status was already viewed |
-| `isMentionedInStatus` | `boolean \| null` | Whether mentioned in status |
-| `statusMentions` | `string[] \| null` | JIDs mentioned in status |
-| `statusMentionMessageInfo` | `StatusMentionMessage \| null` | Status mention message info |
-| `statusMentionSources` | `string[] \| null` | Mention sources |
-
-### Pin Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `pinInChat` | `PinInChat \| null` | Pinned message info |
-| `keepInChat` | `KeepInChat \| null` | Keep in chat |
-
-### Bot/AI Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `is1PBizBotMessage` | `boolean \| null` | Whether it's a 1P business bot message |
-| `botMessageInvokerJid` | `string \| null` | JID that invoked the bot |
-| `botTargetId` | `string \| null` | Bot target ID |
-| `isSupportAiMessage` | `boolean \| null` | Whether it's a support AI message |
-| `supportAiCitations` | `Citation[] \| null` | AI citations |
-| `agentId` | `string \| null` | Agent ID |
-
-### Internal Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `ignore` | `boolean \| null` | Whether to ignore |
-| `multicast` | `boolean \| null` | Whether multicast |
-| `urlText` | `boolean \| null` | Whether contains text URL |
-| `urlNumber` | `boolean \| null` | Whether contains number URL |
-| `clearMedia` | `boolean \| null` | Whether to clear media |
-| `photoChange` | `PhotoChange \| null` | Photo change |
-| `futureproofData` | `Uint8Array \| null` | Future compatibility data |
-| `isGroupHistoryMessage` | `boolean \| null` | Whether group history message |
-| `originalSelfAuthorUserJidString` | `string \| null` | Original author JID |
-| `premiumMessageInfo` | `PremiumMessageInfo \| null` | Premium message info |
-| `commentMetadata` | `CommentMetadata \| null` | Comment metadata |
-| `eventResponses` | `EventResponse[] \| null` | Event responses |
-| `eventAdditionalMetadata` | `EventAdditionalMetadata \| null` | Additional event metadata |
-| `reportingTokenInfo` | `ReportingTokenInfo \| null` | Reporting token info |
-| `newsletterServerId` | `number \| null` | Newsletter server ID |
-| `targetMessageId` | `MessageKey \| null` | Target message ID |
-| `messageAddOns` | `MessageAddOn[] \| null` | Message add-ons |
-| `paymentInfo` | `PaymentInfo \| null` | Payment info |
-| `quotedPaymentInfo` | `PaymentInfo \| null` | Quoted payment info |
-| `finalLiveLocation` | `LiveLocationMessage \| null` | Final live location |
-
-### Raw Example
+Example payload:
 
 ```json
-{
-    "key": {
-        "remoteJid": "584144709840@s.whatsapp.net",
-        "fromMe": false,
-        "id": "AC07DE0D18FA8254897A26C90B2FFD98",
-        "participant": null
-    },
-    "message": {
-        "extendedTextMessage": {
-            "text": "Hello world",
-            "contextInfo": {
-                "stanzaId": "AC9BE0D81D965A3C240B6ACAA891C6FD",
-                "participant": "584121234567@s.whatsapp.net",
-                "isForwarded": false,
-                "forwardingScore": 0,
-                "expiration": 604800
-            }
-        }
-    },
-    "messageTimestamp": 1767366759,
-    "status": 4,
-    "pushName": "Juan Perez",
-    "broadcast": false,
-    "starred": false,
-    "duration": null,
-    "labels": [],
-    "ephemeralStartTimestamp": 1767366759,
-    "ephemeralDuration": 604800,
-    "reactions": [
-        { "text": "❤️", "groupingKey": "❤️", "senderTimestampMs": 1767366800000 }
-    ],
-    "userReceipt": [
-        { "userJid": "584144709840@s.whatsapp.net", "readTimestamp": 1767366800 }
-    ]
-}
-```
-
----
-
-## Message Content
-
-Content types inside `message`.
-
-### Text
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `conversation` | `string` | Simple text |
-| `extendedTextMessage.text` | `string` | Text with metadata |
-| `extendedTextMessage.contextInfo` | `ContextInfo` | Context information |
-
-### Media
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `imageMessage` | `ImageMessage` | Image message |
-| `videoMessage` | `VideoMessage` | Video message |
-| `audioMessage` | `AudioMessage` | Audio message |
-| `documentMessage` | `DocumentMessage` | Document message |
-| `stickerMessage` | `StickerMessage` | Sticker message |
-
-### Media Properties (common)
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `url` | `string` | Download URL (temporary) |
-| `directPath` | `string` | Direct CDN path |
-| `mediaKey` | `Uint8Array` | Decryption key |
-| `mimetype` | `string` | MIME type |
-| `fileLength` | `number` | Size in bytes |
-| `fileSha256` | `Uint8Array` | File SHA256 hash |
-| `fileEncSha256` | `Uint8Array` | Encrypted SHA256 hash |
-| `mediaKeyTimestamp` | `number` | Key timestamp |
-| `jpegThumbnail` | `Uint8Array` | JPEG thumbnail in base64 |
-| `caption` | `string` | Media caption |
-| `width` | `number` | Width in pixels |
-| `height` | `number` | Height in pixels |
-| `seconds` | `number` | Duration (audio/video) |
-| `ptt` | `boolean` | Push-to-talk (voice note) |
-| `waveform` | `Uint8Array` | Audio waveform |
-| `streamingSidecar` | `Uint8Array` | Streaming data |
-
-### Location
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `locationMessage.degreesLatitude` | `number` | Latitude |
-| `locationMessage.degreesLongitude` | `number` | Longitude |
-| `liveLocationMessage.degreesLatitude` | `number` | Live latitude |
-| `liveLocationMessage.degreesLongitude` | `number` | Live longitude |
-| `liveLocationMessage.sequenceNumber` | `number` | Sequence number |
-| `liveLocationMessage.caption` | `string` | Location caption |
-
-### Poll
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `pollCreationMessage.name` | `string` | Poll question |
-| `pollCreationMessage.options` | `Option[]` | Answer options |
-| `pollCreationMessage.selectableOptionsCount` | `number` | Selectable count |
-| `pollUpdateMessage.pollCreationMessageKey` | `MessageKey` | Poll reference |
-| `pollUpdateMessage.vote` | `PollEncValue` | Encrypted vote |
-
-### Reaction
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `reactionMessage.key` | `MessageKey` | Message being reacted to |
-| `reactionMessage.text` | `string` | Reaction emoji |
-| `reactionMessage.senderTimestampMs` | `number` | Sender timestamp |
-
-### Protocol
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `protocolMessage.type` | `ProtocolMessageType` | Protocol type |
-| `protocolMessage.key` | `MessageKey` | Target message |
-| `protocolMessage.editedMessage` | `Message` | Edited message |
-| `protocolMessage.timestampMs` | `number` | Action timestamp |
-
-### ProtocolMessage Types
-
-| Value | Constant | Description |
-|-------|----------|-------------|
-| `0` | `REVOKE` | Delete message |
-| `3` | `EPHEMERAL_SETTING` | Configure ephemeral messages |
-| `6` | `EPHEMERAL_SYNC_RESPONSE` | Sync response |
-| `7` | `HISTORY_SYNC_NOTIFICATION` | History notification |
-| `14` | `MESSAGE_EDIT` | Edit message |
-
-### ContextInfo
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `stanzaId` | `string` | Quoted message ID |
-| `participant` | `string` | Quoted message author |
-| `quotedMessage` | `Message` | Quoted message content |
-| `isForwarded` | `boolean` | Whether forwarded |
-| `forwardingScore` | `number` | Times forwarded |
-| `expiration` | `number` | Seconds until expiration |
-| `ephemeralSettingTimestamp` | `number` | Configuration timestamp |
-| `mentionedJid` | `string[]` | Mentioned JIDs |
-
----
-
-# API Schemas
-
-Simplified schemas exposed by classes.
-
----
-
-## Contact
-
-| Property | Type | Raw Source | Description |
-|----------|------|------------|-------------|
-| `id` | `string` | `id` | Unique contact JID |
-| `name` | `string` | `name \|\| notify \|\| id.split("@")[0]` | Contact name |
-| `photo` | `string \| null` | `imgUrl` | Profile picture URL |
-| `phone` | `string` | `id.split("@")[0]` | Phone number |
-| `content` | `string` | `status \|\| ""` | Contact bio |
-
-### Storage Key
-
-```
-contact/{id}/index
-```
-
-**Stored format**: `IContactRaw` JSON (id, lid, name, notify, verifiedName, imgUrl, status).
-
----
-
-## Chat
-
-| Property | Type | Raw Source | Description |
-|----------|------|------------|-------------|
-| `id` | `string` | `id` | Unique chat JID |
-| `type` | `"contact" \| "group"` | Derived from `id` | Chat type |
-| `name` | `string` | `name \|\| displayName \|\| id.split("@")[0]` | Chat name |
-| `content` | `string` | `description \|\| ""` | Description |
-| `pinned` | `boolean` | `pinned !== null` | Whether pinned |
-| `archived` | `boolean` | `archived \|\| false` | Whether archived |
-| `muted` | `number` | `muteEndTime \|\| 0` | Mute end timestamp (0 if unmuted) |
-| `read` | `boolean` | `unreadCount === 0 && !markedAsUnread` | Whether read |
-| `readonly` | `boolean` | `readOnly \|\| false` | Whether read-only |
-
-### Storage Key
-
-```
-chat/{id}/index
-```
-
-**Stored format**: `IChatRaw` JSON (id, name, displayName, description, unreadCount, readOnly, archived, pinned, muteEndTime, markedAsUnread, participant, createdBy, createdAt, ephemeralExpiration).
-
----
-
-## Message
-
-### IMessageIndex (stored in `chat/{cid}/message/{id}/index`)
-
-| Property | Type | Raw Source | Description |
-|----------|------|------------|-------------|
-| `id` | `string` | `key.id` | Unique ID |
-| `cid` | `string` | `key.remoteJidAlt \|\| key.remoteJid` | Chat ID |
-| `mid` | `string \| null` | `contextInfo.stanzaId` | Parent message |
-| `me` | `boolean` | `key.fromMe` | Whether own message |
-| `type` | `MessageType` | Derived from `message` | Message type |
-| `author` | `string` | `key.participant \|\| key.remoteJid` (uses `\|\|` not `??`) | Author |
-| `status` | `MESSAGE_STATUS` | `status` | Delivery status |
-| `starred` | `boolean` | `starred` | Whether starred |
-| `forwarded` | `boolean` | `contextInfo.isForwarded` | Whether forwarded |
-| `created_at` | `number` | `messageTimestamp * 1000` | Creation (ms) |
-| `deleted_at` | `number \| null` | `ephemeralStartTimestamp + ephemeralDuration` | Expiration |
-| `mime` | `string` | Derived from `message` | MIME type |
-| `caption` | `string` | `*.caption \|\| ""` | Caption |
-| `edited` | `boolean` | Set on edit | Whether edited |
-
-### Instance methods
-
-| Method | Return Type | Description |
-|--------|-------------|-------------|
-| `content()` | `Promise<Buffer>` | Gets message content as Buffer (async) |
-| `stream()` | `Promise<Readable>` | Gets content as Readable stream (async) |
-| `react(emoji)` | `Promise<boolean>` | Reacts to the message |
-| `edit(text)` | `Promise<boolean>` | Edits the message (own messages only) |
-| `remove()` | `Promise<boolean>` | Deletes the message for everyone |
-| `forward(to_cid)` | `Promise<boolean>` | Forwards to another chat |
-| `text(content)` | `Promise<Message \| null>` | Replies with text |
-| `image(buffer, caption?)` | `Promise<Message \| null>` | Replies with image |
-| `video(buffer, caption?)` | `Promise<Message \| null>` | Replies with video |
-| `audio(buffer, ptt?)` | `Promise<Message \| null>` | Replies with audio |
-| `location(opts)` | `Promise<Message \| null>` | Replies with location |
-| `poll(opts)` | `Promise<Message \| null>` | Replies with poll |
-
-### Storage
-
-| Key | Content |
-|-----|---------|
-| `chat/{cid}/message/{id}/index` | JSON with IMessageIndex metadata |
-| `chat/{cid}/message/{id}/content` | Buffer base64 |
-| `chat/{cid}/message/{id}/raw` | Full WAMessage raw (for forward, re-download) |
-
----
-
-## Field Summary
-
-| Entity | API Getters | Raw Fields (IChatRaw/IContactRaw) |
-|--------|-------------|-----------------------------------|
-| **Contact** | 5 (id, name, photo, phone, content) | 7 (id, lid, name, notify, verifiedName, imgUrl, status) |
-| **Chat** | 9 (id, type, name, content, pinned, archived, muted, read, readonly) | 14 |
-| **Message** | 14 index fields + async methods | WAMessage (50+) |
-
----
-
-# Storage Guidelines
-
-Storage strategies for different backends.
-
----
-
-## Primary Fields (Columns/Indexes)
-
-Scalar fields used for filters/searches:
-
-| Entity | Primary Fields |
-|--------|----------------|
-| **Contact** | `id` |
-| **Chat** | `id`, `archived`, `pinned`, `muteEndTime` |
-| **Message** | `id`, `cid`, `me`, `author`, `status`, `created_at`, `starred` |
-
----
-
-## NoSQL Strategy (Key-Value)
-
-For FileEngine, RedisEngine, or other key-value stores.
-
-### Key Structure
-
-```
-contact/{id}/index          -> IContactRaw JSON
-lid/{lid}                   -> JID string
-chat/{id}/index             -> IChatRaw JSON
-chat/{cid}/messages         -> Message index text file
-chat/{cid}/message/{id}/index   -> IMessageIndex JSON
-chat/{cid}/message/{id}/content -> Buffer base64
-chat/{cid}/message/{id}/raw     -> WAMessage JSON
-```
-
-### Storage Format
-
-```json
-// contact/{id}/index -- stores IContactRaw
-{
-    "id": "584144709840@s.whatsapp.net",
-    "lid": "140913951141911@lid",
-    "name": "Juan Perez",
-    "notify": "Juanito",
-    "verifiedName": null,
-    "imgUrl": "https://...",
-    "status": "Available"
-}
-
-// chat/{id}/index -- stores IChatRaw
 {
     "id": "120363123456789@g.us",
     "name": "Dev Team",
-    "displayName": null,
-    "description": "Group description",
-    "unreadCount": 5,
-    "readOnly": false,
     "archived": false,
     "pinned": 1767371367857,
-    "muteEndTime": null,
-    "markedAsUnread": false,
-    "participant": [
-        { "id": "584144709840@s.whatsapp.net", "admin": "superadmin" }
-    ],
-    "createdBy": "584144709840@s.whatsapp.net",
-    "createdAt": 1700000000,
-    "ephemeralExpiration": 604800
-}
-
-// chat/{cid}/message/{id}/index -- stores IMessageIndex
-{
-    "id": "AC07DE0D18FA8254897A26C90B2FFD98",
-    "cid": "584144709840@s.whatsapp.net",
-    "mid": null,
-    "me": false,
-    "type": "text",
-    "author": "584144709840@s.whatsapp.net",
-    "status": 4,
-    "starred": false,
-    "forwarded": false,
-    "created_at": 1767366759000,
-    "deleted_at": null,
-    "mime": "text/plain",
-    "caption": "",
-    "edited": false
+    "mute_end_time": null,
+    "unread_count": 5,
+    "read_only": false
 }
 ```
 
-### Advantages
+---
 
-- **Simplicity**: Everything is JSON, no migrations
-- **Atomicity**: One record = one key
-- **Flexibility**: Add fields without altering structure
+### `IMessage` — `/chat/<cid>/message/<mid>`
 
-### Considerations
-
-**Listings and Filters:**
-```
-# List contacts
-engine.list("contact/")
-
-# List messages of a chat
-Read chat/{cid}/messages index, then fetch each message
-
-# Filter starred messages
-Requires iterating and filtering in memory
-```
-
-**Cleanup (Cascade Delete):**
-```
-# Delete chat and all its messages
-engine.set("chat/{cid}", null)
-# The engine cascade-deletes all sub-keys: chat/{cid}/*
+```ts
+interface IMessage {
+    id: string;                  // key.id
+    cid: string;                 // remoteJidAlt || remoteJid
+    mid: string | null;          // contextInfo.stanzaId (parent for replies)
+    me: boolean;                 // key.fromMe
+    type: 'text' | 'image' | 'video' | 'audio' | 'location' | 'poll';
+    author: string;              // resolved JID of the sender
+    status: MessageStatus;       // 0..5 (ERROR..PLAYED)
+    starred: boolean;
+    forwarded: boolean;          // contextInfo.isForwarded
+    created_at: number;          // ms epoch (messageTimestamp * 1000)
+    deleted_at: number | null;   // ms epoch when ephemeral expires
+    mime: string;                // text/plain | application/json | media mimetype
+    caption: string;             // text body or caption/title/option-list for media
+    edited: boolean;
+    raw: WAMessage;              // full baileys raw, used for forward / re-download
+}
 ```
 
-**Orphan Data:**
-- When deleting chat: `set("chat/{cid}", null)` removes all keys with prefix `chat/{cid}/`
-- When deleting contact: `set("contact/{id}/index", null)` (no dependencies)
+`MessageStatus` enum:
+
+| Value | Constant     | Meaning                          |
+| ----- | ------------ | -------------------------------- |
+| `0`   | `ERROR`      | Send error                       |
+| `1`   | `PENDING`    | Pending                          |
+| `2`   | `SERVER_ACK` | Server acknowledged              |
+| `3`   | `DELIVERED`  | Delivered to recipient           |
+| `4`   | `READ`       | Read by recipient                |
+| `5`   | `PLAYED`     | Played (audio/video)             |
 
 ---
 
-## SQL Strategy (Relational)
+### Message content — `/chat/<cid>/message/<mid>/content`
 
-For PostgreSQL, MySQL, SQLite.
+Stored as a small JSON envelope:
 
-### Table Schema
-
-```sql
--- Contacts (stores IContactRaw fields)
-CREATE TABLE contacts (
-    id VARCHAR(50) PRIMARY KEY,
-    lid VARCHAR(50),
-    name VARCHAR(255),
-    notify VARCHAR(255),
-    verified_name VARCHAR(255),
-    img_url TEXT,
-    status TEXT
-);
-
--- Chats (stores IChatRaw fields)
-CREATE TABLE chats (
-    id VARCHAR(50) PRIMARY KEY,
-    name VARCHAR(255),
-    display_name VARCHAR(255),
-    description TEXT,
-    unread_count INTEGER,
-    read_only BOOLEAN DEFAULT FALSE,
-    archived BOOLEAN DEFAULT FALSE,
-    pinned BIGINT,  -- timestamp or NULL
-    mute_end_time BIGINT,  -- timestamp or NULL
-    marked_as_unread BOOLEAN DEFAULT FALSE,
-    created_by VARCHAR(50),
-    created_at BIGINT,
-    ephemeral_expiration INTEGER
-);
-
--- Group participants
-CREATE TABLE chat_participants (
-    chat_id VARCHAR(50) REFERENCES chats(id) ON DELETE CASCADE,
-    contact_id VARCHAR(50),
-    admin VARCHAR(20),  -- NULL, 'admin', 'superadmin'
-    PRIMARY KEY (chat_id, contact_id)
-);
-
--- Messages (stores IMessageIndex fields)
-CREATE TABLE messages (
-    id VARCHAR(50),
-    cid VARCHAR(50) REFERENCES chats(id) ON DELETE CASCADE,
-    mid VARCHAR(50),  -- parent message (reply)
-    me BOOLEAN NOT NULL,
-    type VARCHAR(20) NOT NULL,
-    author VARCHAR(50) NOT NULL,
-    status SMALLINT DEFAULT 1,
-    starred BOOLEAN DEFAULT FALSE,
-    forwarded BOOLEAN DEFAULT FALSE,
-    created_at BIGINT NOT NULL,
-    deleted_at BIGINT,
-    mime VARCHAR(100),
-    caption TEXT,
-    edited BOOLEAN DEFAULT FALSE,
-    PRIMARY KEY (cid, id)
-);
-
--- Message content (separated for efficiency)
-CREATE TABLE message_contents (
-    cid VARCHAR(50),
-    message_id VARCHAR(50),
-    content BYTEA,
-    raw JSONB,
-    PRIMARY KEY (cid, message_id),
-    FOREIGN KEY (cid, message_id) REFERENCES messages(cid, id) ON DELETE CASCADE
-);
-
--- Reactions
-CREATE TABLE message_reactions (
-    cid VARCHAR(50),
-    message_id VARCHAR(50),
-    reactor_id VARCHAR(50),
-    emoji VARCHAR(10),
-    timestamp BIGINT,
-    PRIMARY KEY (cid, message_id, reactor_id),
-    FOREIGN KEY (cid, message_id) REFERENCES messages(cid, id) ON DELETE CASCADE
-);
+```ts
+interface IMessageContent {
+    data: string;                // base64-encoded payload
+}
 ```
 
-### Recommended Indexes
+The content shape depends on `IMessage.type`:
 
-```sql
--- Frequent searches
-CREATE INDEX idx_messages_chat ON messages(cid);
-CREATE INDEX idx_messages_created ON messages(cid, created_at DESC);
-CREATE INDEX idx_messages_author ON messages(author);
-CREATE INDEX idx_messages_starred ON messages(cid, starred) WHERE starred = TRUE;
+| `type`     | Payload (after base64 decode)                                              |
+| ---------- | -------------------------------------------------------------------------- |
+| `text`     | UTF-8 text (the message body).                                             |
+| `location` | UTF-8 JSON `{ "lat": number, "lng": number }`.                             |
+| `poll`     | UTF-8 JSON `{ "content": string, "options": [{ "content": string }] }`.    |
+| `image` / `video` / `audio` | Raw decrypted bytes downloaded via `downloadMediaMessage`. |
 
--- Chat filters
-CREATE INDEX idx_chats_archived ON chats(archived) WHERE archived = TRUE;
-CREATE INDEX idx_chats_pinned ON chats(pinned) WHERE pinned IS NOT NULL;
+!!! info "Content is optional"
+    The `content` sub-document is only written when there is something to
+    store — empty buffers are skipped. `Message.content()` returns
+    `Buffer.alloc(0)` when missing.
+
+---
+
+### Session credentials — `/session/creds`
+
+The value is the **opaque** baileys `AuthenticationCreds` object serialized
+with `BufferJSON`. The library does not introspect or document its internal
+fields; consumers should treat it as a black box owned by baileys.
+
+To rotate the session manually, `unset('/session/creds')` and let
+`connect()` regenerate it on the next `start()` (the orchestrator re-reads
+creds at the start of every retry).
+
+---
+
+### LID index — `/lid/<lid>` and `/lid/<lid>_reverse`
+
+| Path                  | Value                                              |
+| --------------------- | -------------------------------------------------- |
+| `/lid/<lid>`          | JSON-encoded **string**: the canonical JID/PN.     |
+| `/lid/<lid>_reverse`  | JSON-encoded **string** or **number**: PN fallback when the forward map is empty. |
+
+Used by `WhatsApp._resolve_jid()` to normalize any `@lid` identifier into a
+canonical `@s.whatsapp.net` JID.
+
+---
+
+## Engine path mapping
+
+### `RedisEngine`
+
+The Redis driver uses two keyspaces per logical path:
+
+```
+<prefix>:doc:<path>          -> string value (the serialized document)
+<prefix>:idx:<parent_path>   -> sorted set; score = mtime (Date.now()), member = full child path
 ```
 
-### Advantages
+So a write to `/chat/120363@g.us/message/ABC` actually performs:
 
-- **Integrity**: Foreign keys guarantee consistency
-- **Cascade Delete**: `ON DELETE CASCADE` cleans automatically
-- **Efficient Filters**: Indexes on search fields
-- **Joins**: Relate data without multiple queries
+```
+SET   wa:default:doc:chat/120363@g.us/message/ABC  "<json>"
+ZADD  wa:default:idx:chat/120363@g.us/message      <ts>  "chat/120363@g.us/message/ABC"
+```
 
-### Common Queries
+| Operation         | Redis primitives                                                           |
+| ----------------- | -------------------------------------------------------------------------- |
+| `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
+| `set(path,v)`     | `SET <prefix>:doc:<path>` + `ZADD <prefix>:idx:<parent> Date.now() <path>` |
+| `unset(path)`     | `DEL` doc + `ZREM` from parent index + cascade `SCAN/DEL` on `doc:<path>/*` and `idx:<path>(/*)` |
+| `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET` on the matched docs (one round-trip pair) |
+| `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
+| `clear()`         | `SCAN/DEL` on `<prefix>:*`                                                 |
 
-```sql
--- Chat messages sorted
-SELECT * FROM messages WHERE cid = ? ORDER BY created_at DESC LIMIT 50;
+The prefix defaults to `wa:default`. Use a different prefix per account when
+sharing one Redis instance across sessions:
 
--- Starred messages from user
-SELECT * FROM messages WHERE me = TRUE AND starred = TRUE;
+```ts
+import IORedis from 'ioredis';
+import { RedisEngine } from '@arcaelas/whatsapp';
 
--- Chats with unread messages
-SELECT * FROM chats WHERE unread_count > 0 OR marked_as_unread = TRUE;
+const redis = new IORedis(process.env.REDIS_URL);
 
--- Delete chat (cascade deletes messages, reactions, etc.)
-DELETE FROM chats WHERE id = ?;
+const engine_a = new RedisEngine(redis, 'wa:584144709840');
+const engine_b = new RedisEngine(redis, 'wa:584121234567');
 ```
 
 ---
 
-## Comparison
+### `FileSystemEngine`
 
-| Aspect | NoSQL (Key-Value) | SQL (Relational) |
-|--------|-------------------|------------------|
-| **Setup** | Minimal | Requires migrations |
-| **Filters** | In memory | Native indexes |
-| **Joins** | N queries | 1 query |
-| **Cascade Delete** | Via `set(key, null)` | Automatic |
-| **Schema Flexibility** | High | Requires ALTER |
-| **Orphan Data** | Possible if contract not followed | Impossible |
-| **Scalability** | Horizontal | Vertical |
+The filesystem driver maps each logical path to a directory and writes the
+document inside it as `index.json`:
+
+```
+<base>/<path>/index.json      -> document
+```
+
+A write to `/chat/120363@g.us/message/ABC` produces:
+
+```
+<base>/chat/120363@g.us/message/ABC/index.json
+```
+
+Sub-paths simply nest as additional directories alongside `index.json`, so a
+resource and its children can coexist on disk:
+
+```
+<base>/chat/120363@g.us/
+├── index.json                     # the chat document
+└── message/
+    ├── ABC/
+    │   ├── index.json             # the message document
+    │   └── content/
+    │       └── index.json         # the { data: base64 } envelope
+    └── DEF/
+        └── index.json
+```
+
+| Operation     | Filesystem behaviour                                                     |
+| ------------- | ------------------------------------------------------------------------ |
+| `get(path)`   | `readFile(<base>/<path>/index.json)`; returns `null` when missing.       |
+| `set(path,v)` | `mkdir -p <base>/<path>` then `writeFile(index.json)` (refreshes mtime). |
+| `unset(path)` | `rm -rf <base>/<path>`. Idempotent — never throws on missing.            |
+| `list(path)`  | `readdir`, `stat` each `<child>/index.json`, sort by mtime DESC, slice.  |
+| `count(path)` | Counts direct children that have a valid `index.json`.                   |
+| `clear()`     | `rm -rf <base>`.                                                         |
 
 ---
 
-## Recommendations by Use Case
+## Cascading `unset()`
 
-### Simple Bot / Prototype
-- **Backend**: FileEngine (JSON files)
-- **Reason**: Zero setup, easy debugging
+`unset(path)` removes the document **and the entire subtree below it**. This
+is intentional and used throughout the orchestrator for cheap bulk cleanup:
 
-### Production Bot (< 100k messages)
-- **Backend**: SQLite + FileEngine (content)
-- **Reason**: Balance between performance and simplicity
+| Caller                                 | Path passed to `unset()`           | What gets removed                                   |
+| -------------------------------------- | ---------------------------------- | --------------------------------------------------- |
+| `Chat.remove(cid)` / `chat.remove()`   | `/chat/<cid>`                      | The chat doc + every `/message/<mid>` and its `/content`. |
+| `Message.delete()` / `Message.remove()`| `/chat/<cid>/message/<mid>`        | The message doc + its `/content` sub-doc.           |
+| `Contact` deletion                     | `/contact/<jid>`                   | Just the contact doc (no children).                 |
+| Logout with `autoclean: false`         | `/session/creds`                   | Only credentials; history is preserved.             |
 
-### Production Bot (> 100k messages)
-- **Backend**: PostgreSQL + Redis (cache)
-- **Reason**: Indexes, cascade delete, complex queries
-
-### Multi-tenant / SaaS
-- **Backend**: PostgreSQL with partitioning by `cid`
-- **Reason**: Data isolation, per-tenant cleanup
+!!! warning "There is no per-leaf unset"
+    `unset` always cascades. To remove just a sub-leaf, target it directly
+    (e.g. `unset('/chat/<cid>/message/<mid>/content')` to drop only the
+    payload while keeping the message metadata).
 
 ---
 
-## Orphan Data Prevention
+## Serialization helpers
 
-### Principle
+Engines never see typed objects — only strings. The `serialize`/`deserialize`
+helpers handle the JSON ↔ object boundary and preserve `Buffer` instances
+through `BufferJSON`:
 
-> When deleting a parent entity, ALWAYS delete its dependencies.
+```ts
+import { serialize, deserialize } from '@arcaelas/whatsapp';
 
-### Deletion Cascade
+await wa.engine.set('/chat/abc', serialize({ id: 'abc', name: 'demo' }));
 
-```
-Delete Contact:
-+-- contact/{id}/index
-
-Delete Chat (via set("chat/{cid}", null)):
-|-- chat/{id}/index
-|-- chat/{id}/messages
-|-- chat/{id}/message/*/index
-|-- chat/{id}/message/*/content
-|-- chat/{id}/message/*/raw
-+-- (SQL) chat_participants, messages, message_contents, message_reactions
-
-Delete Message (via set("chat/{cid}/message/{mid}", null)):
-|-- chat/{cid}/message/{id}/index
-|-- chat/{cid}/message/{id}/content
-+-- chat/{cid}/message/{id}/raw
-    (SQL) message_contents, message_reactions
+const raw = await wa.engine.get('/chat/abc');
+const doc = deserialize<IChatRaw>(raw);  // → { id, name, ... } or null
 ```
 
-### Implementation
-
-Cascade delete is handled by the Engine's `set(key, null)` contract. The library calls:
-
-```typescript
-// Delete chat and all its content
-await wa.Chat.remove(cid);
-// or
-const chat = await wa.Chat.get(cid);
-await chat.remove();
-
-// Internally calls:
-// await wa.engine.set("chat/{cid}", null);
-// which cascade-deletes all sub-keys
-```
+Use the same helpers in any custom `Engine` callers if you want bit-for-bit
+compatibility with what the orchestrator writes.

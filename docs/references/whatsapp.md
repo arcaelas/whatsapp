@@ -1,13 +1,15 @@
 # WhatsApp
 
-Main class for WhatsApp connection and management.
+The `WhatsApp` class is the orchestrator of the v3 client. It owns the storage engine, exposes the
+`Chat`, `Contact` and `Message` delegates, and emits the full event map. Instantiating the class
+does **not** open a connection; you must call `connect(callback)` explicitly.
 
 ---
 
 ## Import
 
-```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
+```typescript title="ESM / TypeScript"
+import { WhatsApp, FileSystemEngine, RedisEngine } from '@arcaelas/whatsapp';
 ```
 
 ---
@@ -15,278 +17,181 @@ import { WhatsApp } from "@arcaelas/whatsapp";
 ## Constructor
 
 ```typescript
-const wa = new WhatsApp(options?: IWhatsApp);
+new WhatsApp(options: IWhatsApp)
 ```
 
-### Options (IWhatsApp)
+The `engine` option is **required**. Every other field is optional.
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `engine` | `Engine` | `FileEngine(".baileys/{phone}")` or `FileEngine(".baileys/default")` | Persistence engine |
-| `phone` | `string \| number` | `undefined` | Phone number for pairing code |
+| Option      | Type                                                    | Default | Description                                                                                                            |
+| ----------- | ------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `engine`    | `Engine`                                                | —       | Storage engine implementing the `Engine` contract. See [Engines](engines.md).                                          |
+| `phone`     | `number \| string`                                      | —       | Phone number for PIN pairing. When omitted, the callback receives a QR PNG buffer instead.                             |
+| `autoclean` | `boolean`                                               | `true`  | On a remote `loggedOut`, clears the entire engine. With `false` only `/session/creds` is removed (history is kept).    |
+| `reconnect` | `boolean \| number \| { max?: number; interval?: number }` | `true`  | Auto-reconnect policy for non-`loggedOut` closes. `interval` is in seconds. `true` retries forever every 60s.          |
+| `sync`      | `boolean`                                               | `false` | Enables baileys `syncFullHistory`; imported chats, contacts and messages are persisted via `messaging-history.set`.    |
 
-When `phone` is provided, the default engine path is `.baileys/{phone}`. When `phone` is omitted, the default path is `.baileys/default`.
-
-### Examples
-
-```typescript
-// Default (FileEngine with ".baileys/default")
-const wa = new WhatsApp();
-
-// With phone (FileEngine with ".baileys/5491112345678")
-const wa = new WhatsApp({
-  phone: "5491112345678",
-});
-
-// Phone as number
-const wa = new WhatsApp({
-  phone: 5491112345678,
-});
-
-// Custom engine
-import { FileEngine } from "@arcaelas/whatsapp";
-const wa = new WhatsApp({
-  engine: new FileEngine(".baileys/my-bot"),
-});
-```
+!!! info "Reconnect shortcuts"
+    - `true` — retry forever every 60 seconds.
+    - `false` — never reconnect.
+    - `5` — retry up to 5 times, 60 seconds apart.
+    - `{ max: 3, interval: 10 }` — retry 3 times, 10 seconds apart.
 
 ---
 
-## Properties
+## Lifecycle
 
-### engine
+### `connect(callback?)`
 
 ```typescript
-wa.engine: Engine
+connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void>
 ```
 
-The persistence engine used.
+Opens the connection. The callback is invoked every time baileys produces a new authentication
+artifact:
 
-### socket
+- If `phone` was provided → callback receives the **PIN string** (e.g. `"ABCD-1234"`).
+- Otherwise → callback receives a **PNG `Buffer`** with the QR code.
 
-```typescript
-wa.socket: WASocket | null
-```
+The promise resolves when the session has fully synced and `connection === 'open'`. It rejects if
+the server returns `loggedOut` or if the reconnect budget is exhausted.
 
-The Baileys socket. `null` before connecting or when disconnected.
+```typescript title="Connect with QR (FileSystemEngine)" hl_lines="6 7 8"
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
+import { writeFileSync } from 'node:fs';
 
-### event
+const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
-```typescript
-wa.event: EventEmitter<WhatsAppEventMap>
-```
-
-Node.js `EventEmitter` (from `node:events`) with typed events for all WhatsApp events.
-
-### Chat
-
-```typescript
-wa.Chat: ReturnType<typeof chat>
-```
-
-Chat class bound to this instance. Includes both static methods (`get`, `list`, `pin`, `archive`, `mute`, `seen`, `remove`) and instance methods.
-
-### Contact
-
-```typescript
-wa.Contact: ReturnType<typeof contact>
-```
-
-Contact class bound to this instance. Includes both static methods (`get`, `list`, `rename`, `refresh`) and instance methods.
-
-### Message
-
-```typescript
-wa.Message: ReturnType<typeof message>
-```
-
-Message class bound to this instance. Includes both static methods (`get`, `list`, `count`, `text`, `image`, `video`, `audio`, `location`, `poll`, `watch`, `edit`, `remove`, `react`, `forward`) and instance methods.
-
-### resolveJID()
-
-```typescript
-await wa.resolveJID(uid: string): Promise<string | null>
-```
-
-Resolves any user identifier (JID, phone number, or LID) to a normalized JID (`@s.whatsapp.net` or `@g.us`). Returns `null` if the LID cannot be resolved.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `uid` | `string` | JID, phone number, or LID |
-
-**Resolution rules:**
-
-| Input | Output |
-|-------|--------|
-| `123@g.us` | `123@g.us` (unchanged) |
-| `123@s.whatsapp.net` | `123@s.whatsapp.net` (unchanged) |
-| `123@lid` | Resolved via `lid/` or `session/lid-mapping/` keys |
-| `5491112345678` | `5491112345678@s.whatsapp.net` |
-
-**Example:**
-
-```typescript
-const jid = await wa.resolveJID("5491112345678");
-// "5491112345678@s.whatsapp.net"
-
-const jid2 = await wa.resolveJID("123456@lid");
-// "584144709840@s.whatsapp.net" (or null if unresolvable)
-```
-
----
-
-## Methods
-
-### pair()
-
-Connects to WhatsApp and calls the callback with QR or pairing code.
-
-- With `phone`: callback receives a pairing code string (called once).
-- Without `phone`: callback receives a QR code as PNG Buffer (called periodically).
-
-```typescript
-await wa.pair(callback: (data: Buffer | string) => void | Promise<void>): Promise<void>
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `callback` | `(data: Buffer \| string) => void` | Called with QR (Buffer) or pairing code (string) |
-
-**Example:**
-
-```typescript
-await wa.pair(async (data) => {
-  if (Buffer.isBuffer(data)) {
-    // QR as PNG image
-    require("fs").writeFileSync("qr.png", data);
-    console.log("Scan QR code");
-  } else {
-    // Pairing code
-    console.log("Enter code:", data);
-  }
+await wa.connect((auth) => {
+    writeFileSync('./qr.png', auth as Buffer);
 });
+```
+
+```typescript title="Connect with PIN (RedisEngine)" hl_lines="7 8 9 10"
+import IORedis from 'ioredis';
+import { WhatsApp, RedisEngine } from '@arcaelas/whatsapp';
+
+const wa = new WhatsApp({
+    engine: new RedisEngine(new IORedis(), 'wa:5491112345678'),
+    phone: 5491112345678,
+});
+
+await wa.connect((auth) => {
+    console.log('Pair this code on your phone:', auth);
+});
+```
+
+### `disconnect(options?)`
+
+```typescript
+disconnect(options?: { silent?: boolean; destroy?: boolean }): Promise<void>
+```
+
+Closes the socket cleanly.
+
+| Option    | Type      | Default | Description                                                                                          |
+| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `destroy` | `boolean` | `false` | If `true`, `engine.clear()` is called after closing — wipes the entire store.                        |
+| `silent`  | `boolean` | `false` | Reserved flag (currently consumed but does not change observable behavior).                          |
+
+Internally, `disconnect()` cancels any pending reconnect timer and ends the socket with a
+Boom-like error carrying `statusCode = 428` (`connectionClosed`) so the close handler sees an
+explicit signal rather than `undefined`.
+
+```typescript title="Graceful shutdown"
+process.on('SIGTERM', async () => {
+    await wa.disconnect();
+});
+```
+
+```typescript title="Logout + wipe"
+await wa.disconnect({ destroy: true });
 ```
 
 ---
 
 ## Events
 
-Events are accessed through `wa.event`:
+`WhatsApp` exposes a typed event API. Listeners registered with `on` and `once` return an
+**unsubscribe function** for ergonomic cleanup. See [Events](events.md) for the complete map.
 
-```typescript
-wa.event.on("event_name", (payload) => {
-  // handle event
-});
-```
+| Method          | Returns          | Description                                                              |
+| --------------- | ---------------- | ------------------------------------------------------------------------ |
+| `on(e, h)`      | `() => void`     | Registers a listener; the returned function detaches it.                 |
+| `once(e, h)`    | `() => void`     | Registers a one-shot listener; returned function detaches it preemptively.|
+| `off(e, h)`     | `this`           | Removes a previously registered listener.                                |
 
-### Connection events
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `open` | `void` | Connection established |
-| `close` | `void` | Connection closed (auto-reconnects) |
-| `error` | `Error` | Connection error (e.g. logged out) |
-
-### Data events
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `contact:created` | `Contact` | New contact |
-| `contact:updated` | `Contact` | Contact updated |
-| `chat:created` | `Chat` | New chat |
-| `chat:updated` | `Chat` | Chat updated |
-| `chat:deleted` | `string` | Chat deleted (cid) |
-| `chat:pinned` | `Chat` | Chat pinned/unpinned |
-| `chat:archived` | `Chat` | Chat archived/unarchived |
-| `chat:muted` | `Chat` | Chat muted/unmuted |
-| `message:created` | `Message` | New message |
-| `message:updated` | `Message` | Message updated (status, edited) |
-| `message:deleted` | `[string, string]` | Message deleted (cid, mid) |
-| `message:reacted` | `[string, string, string]` | Reaction (cid, mid, emoji) |
-
-### Examples
-
-```typescript
-// Connection
-wa.event.on("open", () => {
-  console.log("Connected to WhatsApp");
+```typescript title="Subscribe and unsubscribe" hl_lines="5"
+const off = wa.on('message:created', (msg, chat) => {
+    console.log(`[${chat.id}] ${msg.caption}`);
 });
 
-wa.event.on("close", () => {
-  console.log("Disconnected");
-});
-
-wa.event.on("error", (error) => {
-  console.error("Error:", error.message);
-});
-
-// Messages
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-  console.log(`New message: ${msg.type}`);
-});
-
-// Chats
-wa.event.on("chat:updated", (chat) => {
-  console.log(`Chat updated: ${chat.name}`);
-});
-
-// Chat state changes
-wa.event.on("chat:pinned", (chat) => {
-  console.log(`Chat ${chat.name} ${chat.pinned ? "pinned" : "unpinned"}`);
-});
-
-wa.event.on("chat:archived", (chat) => {
-  console.log(`Chat ${chat.name} ${chat.archived ? "archived" : "unarchived"}`);
-});
-
-wa.event.on("chat:muted", (chat) => {
-  console.log(`Chat ${chat.name} ${chat.muted ? `muted until ${new Date(chat.muted)}` : "unmuted"}`);
-});
+off(); // detach later
 ```
 
 ---
 
-## Complete example
+## Delegates
 
-```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
+The instance carries three constructors bound to the current `WhatsApp` and `engine`:
 
-async function main() {
-  const wa = new WhatsApp();
+| Delegate     | Type                            | Purpose                                              |
+| ------------ | ------------------------------- | ---------------------------------------------------- |
+| `wa.Contact` | `ReturnType<typeof contact>`    | `new wa.Contact(raw, chat)` and contact statics.     |
+| `wa.Chat`    | `ReturnType<typeof chat>`       | `new wa.Chat(raw)` and chat statics.                 |
+| `wa.Message` | `ReturnType<typeof message>`    | `new wa.Message({ wa, doc })` and message statics.   |
+| `wa.engine`  | `Engine`                        | Direct access to the storage engine.                 |
 
-  // Events
-  wa.event.on("open", () => console.log("Connected"));
-  wa.event.on("close", () => console.log("Disconnected"));
-  wa.event.on("error", (e) => console.error("Error:", e.message));
+```typescript title="Using delegates"
+const chats = await wa.Chat.list({ limit: 20 });
+const contact = await wa.Contact.get('5491112345678');
+await wa.Message.text('5491112345678', 'Hello from v3');
+```
 
-  // Messages
-  wa.event.on("message:created", async (msg) => {
-    if (msg.me || msg.type !== "text") return;
+---
 
-    const text = (await msg.content()).toString();
+## Lifecycle semantics
 
-    if (text.toLowerCase() === "ping") {
-      await msg.text("pong!");
+!!! tip "Transient closes (`restartRequired`, code `515`)"
+    The protocol-mandated reset that follows the initial sync is treated as transient. It does
+    **not** emit `disconnected` and does **not** consume retry budget; reconnect happens with
+    zero delay.
+
+!!! warning "`loggedOut` (code `401`)"
+    On `loggedOut`, the engine cleanup completes **before** the `disconnected` event fires:
+
+    - `autoclean: true` (default) → `engine.clear()` runs first.
+    - `autoclean: false`           → only `/session/creds` is removed; history is preserved.
+
+    The promise returned by `connect()` rejects with `Error('Logged out')`.
+
+!!! info "Manual disconnect (`statusCode = 428`)"
+    `disconnect()` ends the socket with a Boom-like error carrying
+    `output.statusCode = 428`. This makes manual closes distinguishable from network-level
+    errors when you inspect `lastDisconnect.error` in custom tooling.
+
+---
+
+## Full example
+
+```typescript title="server.ts"
+import IORedis from 'ioredis';
+import { WhatsApp, RedisEngine } from '@arcaelas/whatsapp';
+
+const wa = new WhatsApp({
+    engine: new RedisEngine(new IORedis(), 'wa:default'),
+    phone: 5491112345678,
+    reconnect: { max: 5, interval: 30 },
+    autoclean: true,
+});
+
+wa.on('connected',    () => console.log('online'));
+wa.on('disconnected', () => console.log('offline'));
+
+wa.on('message:created', async (msg, chat) => {
+    if (msg.caption === '/ping') {
+        await chat.text('pong');
     }
-  });
+});
 
-  // Connect
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      require("fs").writeFileSync("qr.png", data);
-      console.log("Scan qr.png");
-    } else {
-      console.log("Code:", data);
-    }
-  });
-
-  console.log("Bot ready!");
-}
-
-main().catch(console.error);
+await wa.connect((pin) => console.log('PIN:', pin));
 ```

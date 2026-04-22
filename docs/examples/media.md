@@ -1,221 +1,211 @@
-# Media Sending
+# Media
 
-Examples of sending and receiving multimedia files.
+Send and receive images, videos, audio (including voice notes), locations, and forward
+existing media between chats.
 
----
+All media is sent as a `Buffer` — the library does not read from disk for you, so you
+control how the bytes arrive (filesystem, HTTP, S3, FFmpeg pipe, etc.).
 
-## Send image
+!!! info "Size limits"
+    WhatsApp enforces hard caps on media payloads:
 
-```typescript
-import * as fs from "fs";
+    - **Images** ~5 MB
+    - **Videos** ~16 MB
+    - **Audio / voice notes** ~16 MB
+    - **Documents** ~100 MB
 
-// From local file
-const img = fs.readFileSync("photo.jpg");
-await wa.Message.image("5491112345678@s.whatsapp.net", img, "Check out this photo!");
+    Anything larger is rejected by the server before delivery. Compress or transcode
+    before sending.
 
-// From URL (download first)
-const response = await fetch("https://example.com/image.jpg");
-const buffer = Buffer.from(await response.arrayBuffer());
-await wa.Message.image("5491112345678@s.whatsapp.net", buffer, "Image from internet");
-```
-
----
-
-## Send video
-
-```typescript
-import * as fs from "fs";
-
-// From local file
-const video = fs.readFileSync("video.mp4");
-await wa.Message.video("5491112345678@s.whatsapp.net", video, "Interesting video");
-
-// Note: WhatsApp compresses videos automatically
-// For better quality, use short videos (<3 min) and 720p
-```
+!!! warning "No document API"
+    `@arcaelas/whatsapp` v3 does not expose a `document` send method. Only
+    `text`, `image`, `video`, `audio`, `location` and `poll` are supported.
 
 ---
 
-## Send audio
+## Setup
 
-```typescript
-import * as fs from "fs";
+Every snippet below assumes the same client. Instantiate it once and reuse:
 
-// Voice note (PTT - Push to Talk) - default
-const audio = fs.readFileSync("audio.ogg");
-await wa.Message.audio("5491112345678@s.whatsapp.net", audio);
+```typescript title="client.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { FileSystemEngine } from '@arcaelas/whatsapp/engines';
 
-// Regular audio (without PTT)
-await wa.Message.audio("5491112345678@s.whatsapp.net", audio, false);
-
-// Supported formats: OGG with Opus codec (preferred), MP3, AAC
-// WhatsApp automatically converts to OGG/Opus
-```
-
----
-
-## Send location
-
-```typescript
-// Static location
-await wa.Message.location("5491112345678@s.whatsapp.net", {
-  lat: -34.6037,
-  lng: -58.3816
+export const wa = new WhatsApp({
+    engine: new FileSystemEngine(__dirname),
+    phone: 14155551234,
 });
-```
 
----
-
-## Receive and save media
-
-```typescript
-import * as fs from "fs";
-import * as path from "path";
-
-const MEDIA_DIR = "./media";
-fs.mkdirSync(MEDIA_DIR, { recursive: true });
-
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  const timestamp = Date.now();
-  const buffer = await msg.content();
-
-  if (buffer.length === 0) return;
-
-  // Image
-  if (msg.type === "image") {
-    const ext = msg.mime.split("/")[1] || "jpg";
-    const filename = `${timestamp}.${ext}`;
-    fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Image saved: ${filename} (${buffer.length} bytes)`);
-    if (msg.caption) {
-      console.log(`Caption: ${msg.caption}`);
+await wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log('Pair code:', auth);
     }
-  }
-
-  // Video
-  if (msg.type === "video") {
-    const filename = `${timestamp}.mp4`;
-    fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Video saved: ${filename} (${buffer.length} bytes)`);
-  }
-
-  // Audio
-  if (msg.type === "audio") {
-    const filename = `${timestamp}.ogg`;
-    fs.writeFileSync(path.join(MEDIA_DIR, filename), buffer);
-    console.log(`Audio saved: ${filename} (${buffer.length} bytes)`);
-  }
 });
 ```
 
 ---
 
-## Forward media
+## Images
 
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
+Send an image with an optional caption. The first argument is the destination CID, the
+second is the binary buffer.
 
-  const text = (await msg.content()).toString();
+```typescript title="send-image.ts"
+import { readFile } from 'node:fs/promises';
+import { wa } from './client';
 
-  // Command to forward media
-  if (text.startsWith("!forward ")) {
-    const target_phone = text.slice(9).trim();
-    const target_jid = `${target_phone}@s.whatsapp.net`;
+const buffer = await readFile('./assets/sunset.jpg');
 
-    // Get previous message (the one we want to forward)
-    const prev_msg = await wa.Message.get(msg.cid, "PREVIOUS_MESSAGE_ID");
+await wa.Message.image('14155557777@s.whatsapp.net', buffer, {
+    caption: 'Sunset from the office today',
+});
+```
 
-    if (prev_msg && ["image", "video", "audio"].includes(prev_msg.type)) {
-      await prev_msg.forward(target_jid);
-      await wa.Message.text(msg.cid, "Media forwarded!");
+Detect incoming images with `instanceof wa.Message.Image`, then call `content()` to
+download the bytes:
+
+```typescript title="receive-image.ts"
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { wa } from './client';
+
+wa.on('message:created', async (msg, chat) => {
+    if (msg instanceof wa.Message.Image) {
+        const bytes = await msg.content();
+        const path = join('./inbox', `${msg.id}.jpg`);
+        await writeFile(path, bytes);
+        console.log(`Saved ${bytes.length} bytes from ${chat.name}`);
+        if (msg.caption) {
+            console.log('Caption:', msg.caption);
+        }
     }
-  }
 });
 ```
 
 ---
 
-## Process images
+## Videos
 
-```typescript
-import sharp from "sharp"; // npm install sharp
+Same shape as images. Provide an MP4 buffer; the server takes care of thumbnail
+generation.
 
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "image") return;
+```typescript title="send-video.ts"
+import { readFile } from 'node:fs/promises';
+import { wa } from './client';
 
-  const buffer = await msg.content();
-  if (buffer.length === 0) return;
+const clip = await readFile('./assets/demo.mp4');
 
-  // Get metadata
-  const metadata = await sharp(buffer).metadata();
-  console.log(`Image: ${metadata.width}x${metadata.height}, ${metadata.format}`);
+await wa.Message.video('14155557777@s.whatsapp.net', clip, {
+    caption: 'Quick demo of the new flow',
+});
+```
 
-  // Resize
-  const thumbnail = await sharp(buffer)
-    .resize(100, 100, { fit: "cover" })
-    .jpeg({ quality: 80 })
-    .toBuffer();
+```typescript title="receive-video.ts"
+import { createWriteStream } from 'node:fs';
+import { wa } from './client';
 
-  // Send thumbnail as reply
-  await wa.Message.image(msg.cid, thumbnail, "Generated thumbnail");
+wa.on('message:created', async (msg) => {
+    if (msg instanceof wa.Message.Video) {
+        // Stream straight to disk — useful for large clips.
+        const out = createWriteStream(`./inbox/${msg.id}.mp4`);
+        const stream = await msg.stream();
+        stream.pipe(out);
+    }
 });
 ```
 
 ---
 
-## Transcribe audio
+## Audio and voice notes
 
-```typescript
-// Example with OpenAI Whisper API
-import OpenAI from "openai";
-import * as fs from "fs";
-import * as path from "path";
+Audio defaults to **push-to-talk** (voice note). Pass `ptt: false` for a regular audio
+attachment.
 
-const openai = new OpenAI();
+```typescript title="send-voice-note.ts"
+import { readFile } from 'node:fs/promises';
+import { wa } from './client';
 
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "audio") return;
+const ogg = await readFile('./assets/reply.ogg');
 
-  const buffer = await msg.content();
-  if (buffer.length === 0) return;
+// Voice note (default)
+await wa.Message.audio('14155557777@s.whatsapp.net', ogg, { ptt: true });
 
-  // Save temporarily
-  const temp_file = path.join("/tmp", `${Date.now()}.ogg`);
-  fs.writeFileSync(temp_file, buffer);
+// Regular audio file
+await wa.Message.audio('14155557777@s.whatsapp.net', ogg, { ptt: false });
+```
 
-  try {
-    // Transcribe
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(temp_file),
-      model: "whisper-1",
-      language: "en",
-    });
+Incoming audio exposes a `ptt` getter so you can branch on voice notes vs. attachments:
 
-    await wa.Message.text(msg.cid, `Transcription:\n${transcription.text}`);
-  } catch (error) {
-    console.error("Error transcribing:", error);
-  } finally {
-    fs.unlinkSync(temp_file);
-  }
+```typescript title="receive-audio.ts"
+import { writeFile } from 'node:fs/promises';
+import { wa } from './client';
+
+wa.on('message:created', async (msg) => {
+    if (msg instanceof wa.Message.Audio) {
+        const kind = msg.ptt ? 'voice-note' : 'audio';
+        const bytes = await msg.content();
+        await writeFile(`./inbox/${msg.id}-${kind}.ogg`, bytes);
+        console.log(`Received ${kind} (${bytes.length} bytes)`);
+    }
 });
 ```
 
 ---
 
-## Limits and recommendations
+## Location
 
-| Type | Limit | Recommendation |
-|------|-------|----------------|
-| Image | 16 MB | < 5 MB, JPEG/PNG |
-| Video | 64 MB | < 16 MB, MP4 H.264 |
-| Audio | 16 MB | < 5 MB, OGG Opus |
+Static and live locations share the same constructor. The library exposes parsed
+`lat`, `lng`, `link` and `live` getters on incoming `Gps` messages.
 
-!!! tip "Compression"
-    WhatsApp automatically compresses media.
-    For better quality, use optimized formats.
+```typescript title="send-location.ts"
+import { wa } from './client';
 
-!!! warning "Timeout"
-    Media download may take time. Consider using timeouts and retries.
+// Static pin
+await wa.Message.location('14155557777@s.whatsapp.net', {
+    lat: 40.4168,
+    lng: -3.7038,
+});
+
+// Live location flag (server still treats this as a static pin until the device
+// streams updates; the `live` flag is exposed on the receiving side)
+await wa.Message.location('14155557777@s.whatsapp.net', {
+    lat: 40.4168,
+    lng: -3.7038,
+    live: true,
+});
+```
+
+```typescript title="receive-location.ts"
+import { wa } from './client';
+
+wa.on('message:created', (msg) => {
+    if (msg instanceof wa.Message.Gps) {
+        console.log(`Pin: ${msg.lat}, ${msg.lng}`);
+        console.log(`Maps URL: ${msg.link}`);
+        if (msg.live) {
+            console.log('Live location stream — expect updates via message:updated');
+        }
+    }
+});
+```
+
+---
+
+## Forwarding
+
+Any message instance can be forwarded to another chat in one call. Accepts a CID
+string, a `Chat`, or a `Contact`.
+
+```typescript title="forward.ts"
+import { wa } from './client';
+
+const ARCHIVE_CID = '14155550000@s.whatsapp.net';
+
+wa.on('message:created', async (msg) => {
+    // Archive every photo I receive into a personal chat with myself.
+    if (msg instanceof wa.Message.Image && !msg.me) {
+        const ok = await msg.forward(ARCHIVE_CID);
+        console.log(ok ? 'Forwarded' : 'Forward failed');
+    }
+});
+```
