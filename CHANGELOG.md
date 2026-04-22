@@ -49,6 +49,17 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 - JSDoc bilingüe (Spanish + English) across the public surface.
 - Clean-code pass on the decorator layer: no early returns, no inline comments inside functions, consistent `snake_case` for method names.
 
+### Documentation
+
+- Rewrite all English references (`whatsapp`, `chat`, `contact`, `message`, `engines`, `events`, `schema`) against the V3 source.
+- Rewrite all English examples (`basic-bot`, `command-bot`, `custom-engine`, `media`, `groups`, `polls`) with runnable V3 snippets using the required `engine` option, `connect(callback)` flow and `(msg, chat, wa)` event signatures.
+- Rewrite home (`index`, `installation`, `getting-started`) and advanced (`engine`) docs to match the V3 API surface.
+- Add `references/decorators.md` documenting the full Stage 3 decorator API with stacking rules.
+- Add `examples/decorator-bot.md` with a complete runnable bot that uses every decorator.
+- Translate all 19 EN docs to Spanish at the corresponding `.es.md` paths.
+- Remove `baileys-payloads` docs (EN + ES) and its entry in `mkdocs.yml` (nav + `nav_translations`).
+- Update `mkdocs.yml` to expose the new `Decorators` reference and `Decorator Bot` example in both languages.
+
 ---
 
 ## [2.0.0] - 2026-03-02
