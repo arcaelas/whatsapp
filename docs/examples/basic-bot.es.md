@@ -1,130 +1,133 @@
-# Bot Basico
+# Basic Bot
 
-Ejemplo de un bot simple que responde a mensajes.
+Un ejemplo mínimo end-to-end: un único archivo que se conecta a WhatsApp, loggea cada mensaje entrante y responde `pong` cada vez que recibe `ping`.
+
+Este es el "hola mundo" de `@arcaelas/whatsapp` v3. Todo lo que necesitas vive en un solo archivo: creación del motor, handlers de eventos, una respuesta y un apagado limpio.
 
 ---
 
-## Codigo completo
+## Ejemplo completo
 
-```typescript title="bot.ts"
-import { WhatsApp } from "@arcaelas/whatsapp";
+```typescript title="index.ts"
+import { join } from 'node:path';
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
-async function main() {
-  const wa = new WhatsApp();
+const wa = new WhatsApp({
+    engine: new FileSystemEngine(join(__dirname, 'session')),
+    phone: 584144709840,
+});
 
-  // Eventos de conexion
-  wa.event.on("open", () => console.log("Bot conectado!"));
-  wa.event.on("close", () => console.log("Bot desconectado"));
-  wa.event.on("error", (err) => console.error("Error:", err.message));
+wa.on('connected', () => {
+    console.log('[wa] connected');
+});
 
-  // Escuchar mensajes
-  wa.event.on("message:created", async (msg) => {
-    // Ignorar mensajes propios
-    if (msg.me) return;
+wa.on('disconnected', () => {
+    console.log('[wa] disconnected');
+});
 
-    // Solo procesar texto
-    if (msg.type !== "text") return;
-
-    const text = (await msg.content()).toString().toLowerCase();
-
-    // Respuestas simples
-    if (text === "hola") {
-      await wa.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver opciones.");
+wa.on('message:created', async (msg, chat, wa) => {
+    if (msg.me) {
+        return;
     }
 
-    if (text === "ayuda") {
-      await wa.Message.text(
-        msg.cid,
-        "Comandos disponibles:\n" +
-        "- hola: Saludo\n" +
-        "- hora: Hora actual\n" +
-        "- fecha: Fecha actual\n" +
-        "- ping: Test de respuesta"
-      );
-    }
+    console.log(`[${chat.name}] ${msg.caption}`);
 
-    if (text === "hora") {
-      await wa.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString("es-AR")}`);
+    if (msg.caption.trim().toLowerCase() === 'ping') {
+        await msg.text('pong');
     }
+});
 
-    if (text === "fecha") {
-      await wa.Message.text(msg.cid, `Hoy es ${new Date().toLocaleDateString("es-AR", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      })}`);
-    }
+process.on('SIGINT', async () => {
+    console.log('\n[wa] shutting down...');
+    await wa.disconnect();
+    process.exit(0);
+});
 
-    if (text === "ping") {
-      const start = Date.now();
-      await wa.Message.text(msg.cid, "pong!");
-      console.log(`Latencia: ${Date.now() - start}ms`);
-    }
-  });
-
-  // Conectar
-  console.log("Iniciando bot...");
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      const fs = await import("fs");
-      fs.writeFileSync("qr.png", data);
-      console.log("Escanea el QR en qr.png");
+wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log(`[wa] pairing code: ${auth}`);
     } else {
-      console.log("Codigo de emparejamiento:", data);
+        console.log('[wa] scan the QR (PNG buffer received)');
     }
-  });
-
-  console.log("Bot listo para recibir mensajes!");
-}
-
-main().catch(console.error);
+}).catch((err) => {
+    console.error('[wa] connect failed:', err);
+    process.exit(1);
+});
 ```
 
----
-
-## Ejecutar
+Ejecútalo:
 
 ```bash
-npx tsx bot.ts
+npx tsx index.ts
 ```
-
-1. Escanea el QR que aparece en `qr.png`
-2. Envia "hola" al bot desde otro telefono
-3. El bot respondera automaticamente
 
 ---
 
-## Mejoras opcionales
+## Cómo funciona
 
-### Agregar reacciones
+### 1. Engine
 
 ```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
+engine: new FileSystemEngine(join(__dirname, 'session')),
+```
 
-  const text = (await msg.content()).toString().toLowerCase();
+El motor es la capa de persistencia. `FileSystemEngine` escribe credenciales, chats, contactos y mensajes bajo el directorio que le das. Elimina ese directorio y la siguiente ejecución comenzará una sesión fresca.
 
-  // Reaccionar segun contenido
-  if (text.includes("gracias")) {
-    await msg.react("❤️");
-  } else if (text.includes("jaja")) {
-    await msg.react("😂");
-  }
+### 2. Phone vs QR
+
+```typescript
+phone: 584144709840,
+```
+
+Cuando `phone` está establecido, el primer connect emite un **PIN** (string); tipéalo en WhatsApp bajo *Dispositivos vinculados > Vincular con número de teléfono*. Omite `phone` y recibirás un **Buffer PNG** con el código QR.
+
+!!! tip "Consejo"
+    Durante el desarrollo, escanea un QR fresco con la app móvil de WhatsApp para confirmar el flujo de PIN. Una vez emparejado, el motor recuerda la sesión y se salta este paso en cada ejecución subsecuente.
+
+### 3. Eventos de ciclo de vida
+
+```typescript
+wa.on('connected', ...)
+wa.on('disconnected', ...)
+```
+
+`connected` se dispara una vez que la sesión se ha sincronizado completamente y el bot está listo para enviar/recibir. `disconnected` se dispara en cualquier cierre no transitorio (el cliente autoreconecta en cierres transitorios por defecto).
+
+### 4. Mensajes entrantes
+
+```typescript
+wa.on('message:created', async (msg, chat, wa) => {
+    if (msg.me) {
+        return;
+    }
+    // ...
 });
 ```
 
-### Responder con cita
+Cada oyente recibe el artefacto, el chat y la instancia del cliente. El guard `!msg.me` es esencial — sin él el bot reaccionará a sus propios mensajes salientes y entrará en loop infinito.
+
+### 5. Respondiendo
 
 ```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
+await msg.text('pong');
+```
 
-  const text = (await msg.content()).toString().toLowerCase();
+`msg.text(...)` es una respuesta citada: el mensaje original aparece como una citación. Para enviar un mensaje independiente, usa `wa.Message.text(chat.id, 'pong')`.
 
-  if (text === "eco") {
-    // Responder citando el mensaje original (msg.id como tercer argumento)
-    await wa.Message.text(msg.cid, "Esto es un eco!", msg.id);
-  }
+### 6. Apagado limpio
+
+```typescript
+process.on('SIGINT', async () => {
+    await wa.disconnect();
+    process.exit(0);
 });
 ```
+
+`disconnect()` cierra el socket limpiamente y cancela cualquier timer de reconexión pendiente. Pasa `{ destroy: true }` si quieres borrar el motor al salir (útil para tests).
+
+---
+
+## Siguientes pasos
+
+- [Command bot](./command-bot.es.md) — parsea `/help`, `/ping`, `/echo` y despacha handlers.
+- [Custom engine](./custom-engine.es.md) — implementa tu propio backend de almacenamiento.

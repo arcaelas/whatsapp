@@ -1,274 +1,194 @@
 # Contact
 
-Clase para gestionar contactos de WhatsApp.
+La entidad `Contact` representa a cualquier usuario de WhatsApp del que tu sesión tenga conocimiento, ya sea que haya iniciado un chat, aparezca en un grupo o haya sido descubierto vía lookups `onWhatsApp`. Cada contacto incluye una propiedad eager `chat` apuntando a su instancia `Chat` 1:1, de modo que puedes saltar de "quién" a "dónde" sin lookups adicionales.
+
+`Contact.get(uid)` es el único punto de entrada y despacha según la forma del identificador:
+
+- Teléfono plano (solo dígitos, sin `@`) → resuelto a través de `socket.onWhatsApp(phone)`.
+- JID (`<number>@s.whatsapp.net`) → buscado en el motor, refrescado desde el socket si falta.
+- LID (`<number>@lid`) → resuelto vía el mapeo persistido LID↔JID.
 
 ---
 
-## Importacion
+## Importación
 
-La clase se accede desde la instancia de WhatsApp:
-
-```typescript
-const wa = new WhatsApp();
-wa.Contact // Clase Contact enlazada
+```typescript title="imports.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+// o
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 ```
+
+Usa el constructor vinculado vía `wa.Contact`. La factory `contact(wa)` (interna) produce una subclase `_Contact` vinculada al contexto de WhatsApp: sobre eso operan los delegados estáticos.
+
+---
+
+## Constructor
+
+Como `Chat`, las instancias de `Contact` no están pensadas para construirse directamente. Provienen de:
+
+- `wa.Contact.get(uid)` — despacho inteligente por teléfono, JID o LID.
+- `wa.Contact.list(offset, limit)` — lecturas paginadas.
+- `chat.members()` — participantes de grupos.
+- Handlers de eventos para `contact:created`/`contact:updated`.
+- `msg.author()` — el remitente de un mensaje.
+
+```typescript title="bootstrap.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+});
+
+await wa.connect();
+
+// Número de teléfono (solo dígitos)
+const byPhone = await wa.Contact.get("5215555555555");
+
+// JID
+const byJid = await wa.Contact.get("5215555555555@s.whatsapp.net");
+
+// LID (identificador oculto asignado por WhatsApp)
+const byLid = await wa.Contact.get("192837465@lid");
+
+console.log(byPhone?.name, byJid?.phone, byLid?.id);
+```
+
+!!! info "¿Por qué el despacho inteligente?"
+    WhatsApp expone tres sabores de identificador para el mismo usuario. `Contact.get` los normaliza a través de un resolver interno más una sonda `onWhatsApp` en vivo, de modo que tu código solo pasa strings y recibe un `Contact` normalizado (con un JID válido en `.id`).
 
 ---
 
 ## Propiedades
 
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `id` | `string` | JID del contacto (ej: `5491112345678@s.whatsapp.net`) |
-| `name` | `string` | Nombre del contacto (name, notify o numero) |
-| `phone` | `string` | Numero de telefono sin formato (extraido del JID) |
-| `photo` | `string \| null` | URL de la foto de perfil o `null` |
-| `content` | `string` | Bio/estado del perfil del contacto (string vacio si no tiene) |
-| `raw` | `IContactRaw` | Datos raw del contacto |
+Todas las propiedades son getters síncronos sobre la forma interna `_raw: IContactRaw`, excepto `chat`, que se hidrata eagerly en la construcción.
 
----
+| Propiedad | Tipo | Descripción |
+| --------- | ---- | ----------- |
+| `id` | `string` | JID canónico (p. ej. `5215555555555@s.whatsapp.net`). |
+| `jid` | `string` | Alias de `id`. |
+| `lid` | `string \| null` | Identificador de dispositivo vinculado (`@lid`) cuando está disponible. |
+| `name` | `string` | Nombre local → push notify → fallback del teléfono. |
+| `phone` | `string` | Dígitos antes del `@` en el JID. |
+| `photo` | `string \| null` | URL de foto de perfil (cacheada después del primer `refresh`/`get`). |
+| `content` | `string` | Texto de estado/bio. |
+| `me` | `boolean` | `true` cuando la instancia representa la cuenta autenticada. |
+| `chat` | `Chat` | Chat 1:1 eager vinculado a este contacto. |
 
-## Metodos estaticos
+### `IContactRaw`
 
-### `Contact.get(uid)`
-
-Obtiene un contacto por su ID o numero de telefono. Si no existe en el engine, verifica con WhatsApp (`onWhatsApp`) y lo crea automaticamente.
-
-Soporta LID: si `uid` termina en `@lid`, resuelve el JID real a traves de la key `lid/{uid}` en el engine antes de buscar el contacto.
-
-```typescript
-// Con JID completo
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-
-// Solo con numero de telefono
-const contact2 = await wa.Contact.get("5491112345678");
-
-// Con LID (Linked ID)
-const contact3 = await wa.Contact.get("some-lid@lid");
-
-if (contact) {
-  console.log(`Nombre: ${contact.name}`);
-  console.log(`Telefono: ${contact.phone}`);
-}
-```
-
-### `Contact.list(offset?, limit?)`
-
-Obtiene contactos paginados.
-
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Posicion inicial |
-| `limit` | `number` | `50` | Cantidad maxima de resultados |
-
-```typescript
-const contacts = await wa.Contact.list(0, 50);
-for (const contact of contacts) {
-  console.log(`${contact.name}: ${contact.phone}`);
-}
-```
-
-### `Contact.rename(uid, name)`
-
-Cambia el nombre de un contacto por su ID. Delega a la instancia internamente.
-
-```typescript
-await wa.Contact.rename("5491112345678@s.whatsapp.net", "Juan Trabajo");
-```
-
-### `Contact.refresh(uid)`
-
-Actualiza los datos de un contacto desde WhatsApp por su ID. Delega a la instancia internamente.
-
-```typescript
-const contact = await wa.Contact.refresh("5491112345678@s.whatsapp.net");
-if (contact) {
-  console.log(`Foto actualizada: ${contact.photo}`);
-}
-```
-
----
-
-## Metodos de instancia
-
-### `rename(name)`
-
-Cambia el nombre del contacto (solo local en el engine).
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  await contact.rename("Mi mejor amigo");
-  console.log(contact.name); // "Mi mejor amigo"
-}
-```
-
-### `refresh()`
-
-Actualiza la foto de perfil y el estado/bio del contacto desde WhatsApp. Persiste los cambios en el engine.
-
-Retorna `this` si se actualizo correctamente, o `null` si no hay socket conectado.
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  await contact.refresh();
-  console.log(`Foto actualizada: ${contact.photo}`);
-  console.log(`Bio actualizada: ${contact.content}`);
-}
-```
-
-### `chat()`
-
-Obtiene o crea el chat 1-1 con este contacto.
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  const chat = await contact.chat();
-  if (chat) {
-    console.log(`Chat: ${chat.name} (${chat.type})`);
-  }
-}
-```
-
----
-
-## Eventos de Contact
-
-Los eventos se escuchan a traves de `wa.event`:
-
-### `contact:created`
-
-Emitido cuando se crea un nuevo contacto.
-
-```typescript
-wa.event.on("contact:created", (contact) => {
-  console.log(`Nuevo contacto: ${contact.name}`);
-  console.log(`  Telefono: ${contact.phone}`);
-});
-```
-
-### `contact:updated`
-
-Emitido cuando se actualiza un contacto existente.
-
-```typescript
-wa.event.on("contact:updated", (contact) => {
-  console.log(`Contacto actualizado: ${contact.name}`);
-});
-```
-
----
-
-## Ejemplos
-
-### Listar todos los contactos
-
-```typescript
-let offset = 0;
-const limit = 50;
-const all_contacts = [];
-
-while (true) {
-  const page = await wa.Contact.list(offset, limit);
-  if (page.length === 0) break;
-  all_contacts.push(...page);
-  offset += limit;
-}
-
-console.log(`Total de contactos: ${all_contacts.length}`);
-```
-
-### Buscar contacto por nombre
-
-```typescript
-async function find_contact_by_name(wa: WhatsApp, name: string) {
-  let offset = 0;
-  const limit = 50;
-
-  while (true) {
-    const contacts = await wa.Contact.list(offset, limit);
-    if (contacts.length === 0) break;
-
-    const found = contacts.find(c =>
-      c.name.toLowerCase().includes(name.toLowerCase())
-    );
-
-    if (found) return found;
-    offset += limit;
-  }
-
-  return null;
-}
-
-const contact = await find_contact_by_name(wa, "Juan");
-if (contact) {
-  await wa.Message.text(contact.id, "Te encontre!");
-}
-```
-
-### Mensaje de bienvenida a nuevos contactos
-
-```typescript
-wa.event.on("contact:created", async (contact) => {
-  await wa.Message.text(
-    contact.id,
-    "Bienvenido! Soy un bot de asistencia. Escribe !ayuda para ver comandos."
-  );
-});
-```
-
-### Enviar mensaje desde contacto
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  // Opcion 1: Usando el chat del contacto
-  const chat = await contact.chat();
-  // Enviar al chat...
-
-  // Opcion 2: Directamente con el ID del contacto
-  await wa.Message.text(contact.id, "Hola desde tu contacto!");
-}
-```
-
----
-
-## Interfaz IContactRaw
-
-Objeto raw del contacto almacenado en el engine (protocolo).
-
-```typescript
-interface IContactRaw {
+```typescript title="IContactRaw.ts"
+export interface IContactRaw {
   id: string;
   lid?: string | null;
   name?: string | null;
   notify?: string | null;
-  verifiedName?: string | null;
-  imgUrl?: string | null;
+  verified_name?: string | null;
+  img_url?: string | null;
   status?: string | null;
 }
 ```
 
-| Campo | Tipo | Descripcion |
-|-------|------|-------------|
-| `id` | `string` | JID unico del contacto |
-| `lid` | `string \| null` | ID alternativo en formato LID |
-| `name` | `string \| null` | Nombre guardado en la agenda del usuario |
-| `notify` | `string \| null` | Nombre de perfil (pushName) |
-| `verifiedName` | `string \| null` | Nombre de cuenta business verificada |
-| `imgUrl` | `string \| null` | URL de la foto de perfil |
-| `status` | `string \| null` | Bio/estado del perfil |
+### Propiedad eager `chat`
+
+`Contact.chat` no es una función, es una instancia `wa.Chat` completamente construida disponible sincrónicamente. Te permite encadenar llamadas como:
+
+```typescript title="eager-chat.ts"
+const contact = await wa.Contact.get("5215555555555");
+if (contact) {
+  await contact.chat.pin(true);
+  await contact.chat.typing(true);
+  await wa.Message.text(contact.chat.id, "Ready to go!");
+  await contact.chat.typing(false);
+}
+```
+
+!!! tip "`chat` para grupos"
+    Solo los chats 1:1 son descubiertos por `Contact.get`. Los JIDs de grupo (`@g.us`) se filtran; usa `wa.Chat.get(groupJid)` cuando necesites la entidad del grupo.
 
 ---
 
-## Notas
+## Métodos
 
-> **JID de contacto:** El JID (Jabber ID) de un contacto tiene el formato `{numero}@s.whatsapp.net`. Ejemplo: `5491112345678@s.whatsapp.net`
+### `rename(name: string)`
 
-> **Nombre local:** El nombre del contacto se almacena localmente en el engine. Los cambios con `rename()` solo afectan tu instancia, no lo que otros ven.
+Renombra el contacto localmente (solo libreta de direcciones del dispositivo). No se propaga a los servidores de WhatsApp, pero el nuevo valor es visible inmediatamente a través de `.name` y se persiste vía el motor.
 
-> **Verificacion de WhatsApp:** `Contact.get()` verifica con WhatsApp si el numero existe. Si el numero no tiene WhatsApp, retorna `null`.
+```typescript title="rename.ts"
+const contact = await wa.Contact.get("5215555555555");
+await contact?.rename("Alice Example");
+```
 
-> **Soporte LID:** `Contact.get()` acepta IDs en formato `@lid` (Linked ID). Estos se resuelven internamente a traves de la key `lid/{lid}` en el engine.
+Devuelve `true` en caso de éxito, `false` cuando el contacto no puede ser resuelto.
+
+### `refresh()`
+
+Re-hidrata `photo` y `content` (bio/estado) desde el socket en vivo y reescribe el documento del motor. Devuelve `this` en caso de éxito, `null` si no hay socket activo.
+
+```typescript title="refresh.ts"
+const contact = await wa.Contact.get("5215555555555@s.whatsapp.net");
+await contact?.refresh();
+console.log(contact?.photo, contact?.content);
+```
+
+!!! info "Hidratación automática"
+    `wa.Contact.get(uid)` ya obtiene los datos de perfil la primera vez que se ve un JID. Llama a `refresh()` solo cuando necesites metadatos frescos (p. ej. el usuario actualizó su avatar).
+
+---
+
+## Estáticos (delegado vía `wa.Contact`)
+
+| Delegado | Signatura | Notas |
+| -------- | --------- | ----- |
+| `wa.Contact.get` | `(uid: string) => Promise<Contact \| null>` | Despacho inteligente: teléfono / JID / LID. |
+| `wa.Contact.list` | `(offset?: number, limit?: number) => Promise<Contact[]>` | Contactos persistidos paginados (mtime DESC). Por defecto: `0, 50`. Cada resultado tiene `chat` pre-cargado. |
+| `wa.Contact.rename` | `(uid: string, name: string) => Promise<boolean>` | Delega en la instancia `rename`. |
+| `wa.Contact.refresh` | `(uid: string) => Promise<Contact \| null>` | Delega en la instancia `refresh`. |
+
+```typescript title="delegates.ts"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new FileSystemEngine({ path: "./.whatsapp" }),
+});
+
+await wa.connect();
+
+// Delegados de una línea
+await wa.Contact.rename("5215555555555", "Alice");
+await wa.Contact.refresh("5215555555555@s.whatsapp.net");
+
+// Iterar cada contacto
+let offset = 0;
+while (true) {
+  const batch = await wa.Contact.list(offset, 100);
+  if (batch.length === 0) break;
+  for (const c of batch) {
+    console.log(c.phone, c.name, c.photo ?? "(no photo)");
+  }
+  offset += batch.length;
+}
+```
+
+---
+
+## Rutas de persistencia
+
+Los registros relacionados con contactos viven bajo las siguientes claves en el motor configurado:
+
+| Ruta | Valor | Escrito por |
+| ---- | ----- | ----------- |
+| `/contact/{jid}` | `IContactRaw` serializado. | `Contact.get`, `rename`, `refresh`, eventos `contact:*`. |
+| `/lid/{lid}` | String JID serializado — índice inverso para resolución de LID. | `Contact.get` cuando se descubre un LID; evento `lid-mapping.update`. |
+| `/chat/{jid}` | `IChatRaw` serializado — el `contact.chat` eager se carga desde aquí. | `Chat.get`, persistencia de mensajes, eventos `chats.*`. |
+
+!!! warning "Consistencia del motor"
+    Cuando `autoclean` es `true` (por defecto) y se recibe un `loggedOut` remoto, todo el motor se borra para forzar una sincronización fresca en el próximo login. Establece `autoclean: false` en las opciones del constructor de `WhatsApp` si deseas conservar contactos/chats/mensajes entre reautenticaciones.
+
+```typescript title="preserve-data.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+  autoclean: false, // conservar /contact/*, /lid/*, /chat/* entre relogins
+});
+```

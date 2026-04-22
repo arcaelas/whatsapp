@@ -2,189 +2,45 @@
 
 ![Banner](assets/banner.png)
 
-> **Libreria TypeScript para automatizacion de WhatsApp**
-> Basada en Baileys | Tipado completo | Engine de persistencia flexible | Facil de usar
+Una librería de TypeScript para automatización de WhatsApp construida sobre [baileys v7](https://github.com/WhiskeySockets/Baileys). Entrega un núcleo basado en clases, motores de persistencia intercambiables y una DSL de decoradores Stage 3 para construir bots — todo sin claves de API externas.
 
 ---
 
-## Caracteristicas
+## Características
 
-- **Conexion simplificada** - QR o codigo de emparejamiento en una sola llamada
-- **Eventos tipados** - TypeScript completo con autocompletado
-- **Persistencia flexible** - FileEngine por defecto, RedisEngine incluido, o implementa tu propio Engine
-- **Clases intuitivas** - Chat, Contact, Message con metodos estaticos
-- **Multiples tipos de mensaje** - text, image, video, audio, location, poll
-- **Gestion de grupos** - Listar miembros, archivar, silenciar, fijar
-- **Soporte de encuestas** - Crear encuestas con multiples opciones
+- **API basada en clases**: un único orquestador `WhatsApp` con delegados `Message`, `Chat` y `Contact`.
+- **Motores intercambiables**: `FileSystemEngine` para desarrollo local, `RedisEngine` para producción, o implementa tu propio `Engine`.
+- **DSL de decoradores**: sub-entrada opcional `@arcaelas/whatsapp/decorators` con `@Bot`, `@on`, `@guard`, `@command`, `@pipe`, `@every`, `@pair`.
+- **Sistema de eventos completo**: `connected`, `disconnected`, `message:*`, `chat:*`, `contact:*` — cada listener recibe `(payload, chat, wa)`.
+- **Resolución de identificadores**: normalización transparente entre números de teléfono, JID (`@s.whatsapp.net`) y LID (`@lid`).
+- **Aislamiento multicuenta**: cada instancia `WhatsApp` posee su propio espacio de nombres en el motor, por lo que múltiples sesiones pueden coexistir en el mismo proceso.
 
 ---
 
-## Inicio Rapido
+## Hola mundo
 
-```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
+```typescript title="index.ts"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+import { writeFileSync } from "node:fs";
 
-// Crear instancia
 const wa = new WhatsApp({
-  phone: "5491112345678", // Opcional: para codigo de emparejamiento
+    engine: new FileSystemEngine(__dirname + "/.session"),
+    phone: 584144709840,
 });
 
-// Escuchar eventos
-wa.event.on("open", () => console.log("Conectado!"));
-wa.event.on("close", () => console.log("Desconectado"));
-wa.event.on("error", (err) => console.error("Error:", err.message));
+wa.on("connected", () => console.log("session ready"));
+wa.on("message:created", (msg, chat) => console.log(chat.id, msg.caption));
 
-// Conectar
-await wa.pair(async (data) => {
-  if (Buffer.isBuffer(data)) {
-    // QR code como imagen PNG
-    const fs = await import("fs");
-    fs.writeFileSync("qr.png", data);
-    console.log("Escanea el QR en qr.png");
-  } else {
-    // Codigo de emparejamiento (8 digitos)
-    console.log("Codigo:", data);
-  }
-});
-
-// Escuchar mensajes
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return; // Ignorar mensajes propios
-
-  // Verificar tipo
-  if (msg.type === "text") {
-    const text = (await msg.content()).toString();
-    console.log(`Mensaje: ${text}`);
-
-    // Responder
-    if (text.toLowerCase() === "hola") {
-      await wa.Message.text(msg.cid, "Hola! Como estas?");
-    }
-  }
+await wa.connect((code) => {
+    if (typeof code === "string") console.log("PIN:", code);
+    else writeFileSync("qr.png", code);
 });
 ```
 
 ---
 
-## Tipos de Mensaje
+## Próximos pasos
 
-La libreria soporta multiples tipos de mensaje:
-
-| Tipo | `msg.type` | Descripcion |
-|------|------------|-------------|
-| Texto | `"text"` | Mensaje de texto plano |
-| Imagen | `"image"` | Imagen con caption opcional |
-| Video | `"video"` | Video con caption opcional |
-| Audio | `"audio"` | Nota de voz o audio |
-| Ubicacion | `"location"` | Coordenadas geograficas |
-| Encuesta | `"poll"` | Encuesta con opciones |
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  if (msg.type === "image") {
-    const buffer = await msg.content();
-    console.log(`Imagen recibida: ${buffer.length} bytes`);
-    if (msg.caption) {
-      console.log(`Caption: ${msg.caption}`);
-    }
-  }
-
-  if (msg.type === "poll") {
-    const buffer = await msg.content();
-    const poll = JSON.parse(buffer.toString());
-    console.log(`Encuesta: ${poll.content}`);
-    poll.options.forEach((opt: { content: string }, i: number) => {
-      console.log(`  ${i + 1}. ${opt.content}`);
-    });
-  }
-});
-```
-
----
-
-## Engine de Persistencia
-
-Por defecto se usa `FileEngine`. Puedes implementar tu propio engine:
-
-=== "FileEngine (default)"
-    ```typescript
-    import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
-
-    const wa = new WhatsApp({
-      engine: new FileEngine(".baileys/mi-bot"),
-    });
-    ```
-
-=== "RedisEngine (incluido)"
-    ```typescript
-    import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
-    import Redis from "ioredis";
-
-    const client = new Redis();
-    const wa = new WhatsApp({
-      engine: new RedisEngine(client, "wa:mi-bot"),
-    });
-    ```
-
-=== "Engine personalizado"
-    ```typescript
-    import { WhatsApp } from "@arcaelas/whatsapp";
-    import type { Engine } from "@arcaelas/whatsapp";
-
-    // Implementa la interfaz Engine
-    class MyEngine implements Engine {
-      async get(key: string): Promise<string | null> { /* ... */ }
-      async set(key: string, value: string | null): Promise<void> { /* ... */ }
-      async list(prefix: string, offset?: number, limit?: number): Promise<string[]> { /* ... */ }
-    }
-
-    const wa = new WhatsApp({
-      engine: new MyEngine(),
-    });
-    ```
-
----
-
-## Siguiente Paso
-
-<div class="grid cards" markdown>
-
--   :material-download:{ .lg .middle } **Instalacion**
-
-    ---
-
-    Instrucciones detalladas para instalar la libreria
-
-    [:octicons-arrow-right-24: Ver guia](installation.es.md)
-
--   :material-rocket-launch:{ .lg .middle } **Primeros Pasos**
-
-    ---
-
-    Tutorial paso a paso para crear tu primer bot
-
-    [:octicons-arrow-right-24: Comenzar](getting-started.es.md)
-
--   :material-api:{ .lg .middle } **Referencias API**
-
-    ---
-
-    Documentacion completa de todas las clases
-
-    [:octicons-arrow-right-24: Ver API](references/whatsapp.es.md)
-
--   :material-code-tags:{ .lg .middle } **Ejemplos**
-
-    ---
-
-    Ejemplos practicos listos para usar
-
-    [:octicons-arrow-right-24: Ver ejemplos](examples/basic-bot.es.md)
-
-</div>
-
----
-
-**Desarrollado por [Arcaelas Insiders](https://github.com/arcaelas)**
+- [Instalación](installation.es.md) — instala el paquete y configura el entorno de ejecución.
+- [Primeros pasos](getting-started.es.md) — un tutorial guiado desde cero hasta un bot en funcionamiento.
+- [Referencias](references/whatsapp.es.md) — la superficie completa de la API de cada clase y opción.
