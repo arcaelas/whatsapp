@@ -7,6 +7,9 @@ test.ts
 src/_test*.ts
 src/_index.ts
 
+# Local dev playground
+playground/
+
 # MkDocs build
 site/
 .env.*
