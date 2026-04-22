@@ -6,6 +6,51 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [3.0.0] - 2026-04-21
+
+### BREAKING
+
+- **Package layout**: public entry points split into core (`@arcaelas/whatsapp`) and decorator API (`@arcaelas/whatsapp/decorators`). `exports` map added to `package.json`.
+- **Engine classes renamed**: `Redis` → `RedisEngine`, `FileSystem` → `FileSystemEngine`. Importing the old names breaks.
+- **Source tree restructured**: V1 root files (`src/Chat.ts`, `Contact.ts`, `Message.ts`, `WhatsApp.ts`, `src/store/*`) removed; all library code now lives under `src/lib/{chat,contact,message,store,whatsapp,bot}/`.
+- **Event signatures extended**: `message:*` and `contact:*` listeners now receive `[entity, chat, wa]` (was `[entity, wa]`). `message:reacted` is `[msg, chat, emoji, wa]`.
+- **Previously public internals made internal**: `wa.socket` getter removed; `wa.resolve_jid()` renamed to `wa._resolve_jid()` (internal use only). Consumers should use the public delegates `wa.Message`, `wa.Chat`, `wa.Contact`.
+- **Message base class**: single-class architecture with specialized subclasses (`Text`, `Image`, `Video`, `Audio`, `Gps`, `Poll`). Constructor is `new Message({ wa, doc })`.
+- **Engine contract is string-only**: `Engine.{get,set,unset,list,count,clear}` operate on strings; serialization via `BufferJSON` moved to a dedicated layer (`serialize`/`deserialize`).
+- **`disconnect()` emits a Boom-like error with `statusCode=428`** (`connectionClosed`) so the close handler sees an explicit signal instead of `undefined`.
+
+### Features
+
+- **`@Bot(options)` class decorator**: turns any class into a WhatsApp bot with default options; constructor accepts a partial override.
+- **Method decorators**: `@on(event)`, `@guard(pred)`, `@once([event])`, `@command(pattern)`, `@from(phone|jid|lid|array|pred)`, `@pair()`, `@pipe(workflow, index)`, `@every(ms)`, `@connect()`, `@disconnect()`.
+- **`WhatsAppBot`**: optional base class that wires decorated handlers at `connect()`.
+- **Workflow pipelines**: `@pipe(name, index)` executes multiple steps sequentially on `message:created`, sharing the same mutable arguments between steps.
+- **`@pair()` runs in parallel**: multiple methods decorated with `@pair` run concurrently via `Promise.all` when baileys emits a code.
+- **Auto-register to `message:created`**: methods decorated with `@guard` or `@from` without an explicit `@on` register implicitly to `message:created`.
+- **`@once(event)` shortcut**: combines `@on(event) + @once()` in a single decorator.
+- **Client options**:
+  - `autoclean` (default `true`): on remote `loggedOut`, clears the entire engine. With `false`, only `/session/creds` is removed, preserving history.
+  - `reconnect` (default `true`, infinite with 60s interval): accepts `boolean`, `number` (max attempts), or `{ max, interval }`. Transient closes (`restartRequired`) do not consume retry budget.
+  - `sync` (default `false`): enables baileys `syncFullHistory`; a new `messaging-history.set` handler persists imported chats/contacts/messages.
+- **PIN refresh**: every baileys QR refresh emits a new pair code via the callback (previously emitted only once per `connect()`).
+- **Re-read of creds on each retry**: the internal `start()` re-reads `/session/creds` before each attempt so external cleanups take effect on reconnect.
+- **Message getters**: `msg.type`, `msg.from` exposed as synchronous getters.
+
+### Fixes
+
+- **`restartRequired` (515) treated as transient**: the baileys post-pair-success reset no longer emits `disconnected` and reconnects with zero delay.
+- **Retry timer cancellation**: `disconnect()` cancels any pending reconnect `setTimeout`, eliminating ghost reconnections.
+- **Engine cleanup order**: on `loggedOut`, the engine cleanup (`clear()` or `unset('/session/creds')`) completes before `disconnected` is emitted, so listeners see the final state.
+
+### Internal
+
+- Stage 3 decorator infrastructure with `Symbol.metadata` polyfill for Node < 22.
+- `tsconfig.json`: removed `experimentalDecorators` and `emitDecoratorMetadata` (required by Stage 3).
+- JSDoc bilingüe (Spanish + English) across the public surface.
+- Clean-code pass on the decorator layer: no early returns, no inline comments inside functions, consistent `snake_case` for method names.
+
+---
+
 ## [2.0.0] - 2026-03-02
 
 ### BREAKING
