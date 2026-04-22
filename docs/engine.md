@@ -1,476 +1,386 @@
 # Engine
 
-Persistence system documentation for `@arcaelas/whatsapp`.
+The persistence layer of `@arcaelas/whatsapp` v3.
+
+---
+
+## Philosophy
+
+`Engine` is a **string-only key/value contract**. It knows nothing about
+WhatsApp, JSON, or Buffers — it just stores and retrieves opaque strings under
+hierarchical paths.
+
+| Concern             | Lives in                                                  |
+| ------------------- | --------------------------------------------------------- |
+| Wire protocol       | `baileys`                                                 |
+| Domain shapes       | `IChatRaw`, `IContactRaw`, `IMessage`                     |
+| Serialization       | `serialize` / `deserialize` (BufferJSON, in `~/lib/store`) |
+| Persistence         | **`Engine` implementations**                              |
+
+This separation means an engine implementation can be backed by anything that
+can `get`/`set`/`unset`/`list`/`count`/`clear` strings under a path: a file
+tree, Redis, SQLite, DynamoDB, an in-memory map for tests, etc.
 
 ---
 
 ## Interface
 
-An Engine must implement the following interface:
+```ts
+import type { Engine } from '@arcaelas/whatsapp';
 
-```typescript
 interface Engine {
-    /**
-     * @description Retrieves a value by its key.
-     * @param key Document path.
-     * @returns JSON text or null if not found.
-     */
-    get(key: string): Promise<string | null>;
+    /** Read a value by path. Returns null if missing. */
+    get(path: string): Promise<string | null>;
+
+    /** Write a value. MUST refresh the mtime used by `list`. */
+    set(path: string, value: string): Promise<void>;
 
     /**
-     * @description Saves or deletes a value.
-     * If value is null, deletes the key and all sub-keys recursively (cascade delete).
-     * @param key Document path.
-     * @param value Text to save or null to delete recursively.
+     * Delete the value AND every descendant under `path`.
+     * MUST be idempotent — never throw when `path` does not exist.
      */
-    set(key: string, value: string | null): Promise<void>;
+    unset(path: string): Promise<boolean>;
 
     /**
-     * @description Lists keys under a prefix, ordered by most recent.
-     * @param prefix Search prefix.
-     * @param offset Pagination start (default: 0).
-     * @param limit Maximum count (default: 50).
-     * @returns Array of keys.
+     * List values of the **direct children** of `path`,
+     * paginated and ordered by mtime DESC.
      */
-    list(prefix: string, offset?: number, limit?: number): Promise<string[]>;
+    list(path: string, offset?: number, limit?: number): Promise<string[]>;
+
+    /** Count direct children of `path` without loading their values. */
+    count(path: string): Promise<number>;
+
+    /** Drop everything in this engine's namespace. */
+    clear(): Promise<void>;
 }
 ```
 
-### Contracts
+### Per-method semantics
 
-| Method | Expected Behavior |
-|--------|-------------------|
-| `get(key)` | Returns `string` if exists, `null` if not |
-| `set(key, value)` | If `value` is `null`, deletes the key AND all sub-keys recursively |
-| `set(key, value)` | If `value` is `string`, creates/updates |
-| `list(prefix)` | Returns keys starting with `prefix` |
-| `list(prefix)` | Descending order by modification date |
+| Method   | Contract                                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| `get`    | Returns the exact string previously written by `set`, or `null` if the path was never written / was unset.  |
+| `set`    | Overwrites any prior value. Refreshes the path's mtime so subsequent `list` calls reorder correctly.        |
+| `unset`  | Cascades — removes the path **and all sub-paths**. Idempotent: returns `true` even when nothing existed.    |
+| `list`   | Returns the **values** (not the keys) of direct children, sorted by mtime DESC, sliced by `offset`/`limit`. Defaults: `offset=0`, `limit=50`. |
+| `count`  | Returns the number of direct children. Should be O(1) where the backend allows (`ZCARD` in Redis).          |
+| `clear`  | Wipes the engine's full keyspace. Used on `loggedOut` when `autoclean: true`.                               |
 
----
+!!! info "Path normalization"
+    Both built-in drivers collapse `//` and trim leading/trailing `/` before
+    use. A custom engine should do the same so that `/chat/x`, `chat/x`, and
+    `/chat//x/` all resolve to the same key.
 
-## Namespaces
-
-The system uses 3 namespaces:
-
-| Namespace | Description | Example Key |
-|-----------|-------------|-------------|
-| `session` | Credentials and connection state | `session/creds`, `session/{type}/{id}` |
-| `contact` | Contact information | `contact/{jid}/index` |
-| `chat` | Conversations, metadata, and messages | `chat/{jid}/index`, `chat/{cid}/message/{id}/index` |
-
-Additionally, there is a reverse index namespace:
-
-| Key | Description |
-|-----|-------------|
-| `lid/{lid}` | Maps a LID to a JID for contact lookup |
+!!! warning "`list` returns values, not keys"
+    Unlike many key/value APIs, `Engine.list` returns the **document
+    contents**. This lets the orchestrator do paginated reads in a single
+    round-trip (`ZREVRANGE` + `MGET` on Redis, `readdir` + parallel `readFile`
+    on disk).
 
 ---
 
-## Key Structure
+## Built-in implementations
 
-### Session
+### `RedisEngine`
 
-Authentication and connection state.
+```ts
+import IORedis from 'ioredis';
+import { RedisEngine, WhatsApp } from '@arcaelas/whatsapp';
 
-```
-session/creds                          -> Authentication credentials
-session/app-state-sync-key/{id}        -> Sync keys
-session/app-state-sync-version/{name}  -> State versions
-session/sender-key/{jid}               -> Encryption keys per contact
-session/sender-key-memory/{jid}        -> Key memory
-session/pre-key/{id}                   -> Pre-keys
-session/session/{jid}                  -> Encryption sessions
+const redis = new IORedis(process.env.REDIS_URL!);
+const engine = new RedisEngine(redis, 'wa:584144709840');
+
+const wa = new WhatsApp({ engine, phone: 584144709840 });
 ```
 
-**Format**: JSON serialized with `BufferJSON` to handle binaries.
-
-### Contact
-
-Contact information.
+Keyspaces:
 
 ```
-contact/{jid}/index        -> JSON with contact data (IContactRaw)
+<prefix>:doc:<path>           # the document
+<prefix>:idx:<parent_path>    # sorted set: score=mtime, member=full child path
 ```
 
-**Example**:
-```json
-{
-    "id": "584144709840@s.whatsapp.net",
-    "lid": "140913951141911@lid",
-    "name": "Juan Perez",
-    "notify": "Juanito",
-    "verifiedName": null,
-    "imgUrl": "https://pps.whatsapp.net/...",
-    "status": "Available 24/7"
+Highlights:
+
+- `list` is one `ZREVRANGE` + one `MGET` — no per-document round-trip.
+- `count` is `ZCARD` (O(1)).
+- `unset` cascades by `SCAN`/`DEL` over `doc:<path>/*` and `idx:<path>(/*)`.
+- `clear` wipes everything matching `<prefix>:*`.
+
+The minimal client interface (`RedisClient`) only requires the commands the
+engine actually uses, so it works with `ioredis`, `node-redis` (with thin
+adapters), or any compatible driver.
+
+---
+
+### `FileSystemEngine`
+
+```ts
+import { FileSystemEngine, WhatsApp } from '@arcaelas/whatsapp';
+import { join } from 'node:path';
+
+const engine = new FileSystemEngine(join(process.cwd(), '.baileys'));
+
+const wa = new WhatsApp({ engine, phone: 584144709840 });
+```
+
+Layout on disk:
+
+```
+<base>/<path>/index.json
+```
+
+Each document lives under its own directory so it can coexist with nested
+sub-resources (e.g. a chat directory contains both `index.json` and a
+`message/` directory).
+
+Highlights:
+
+- `set` does `mkdir -p` then `writeFile`.
+- `list` reads `mtimeMs` for each child's `index.json` and sorts DESC.
+- `unset` is `rm -rf` on the path's directory. Idempotent.
+- `clear` is `rm -rf` on the whole base directory.
+
+---
+
+## Implementing a custom engine
+
+Two ready-to-tweak stubs follow. Both honour the full contract; only `set`
+needs to refresh the per-path mtime so `list` orders correctly.
+
+### In-memory engine (tests, fixtures)
+
+```ts
+import type { Engine } from '@arcaelas/whatsapp';
+
+function normalize(path: string): string {
+    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
 }
-```
 
-### LID Reverse Index
+export class MemoryEngine implements Engine {
+    private readonly _docs = new Map<string, { value: string; mtime: number }>();
 
-```
-lid/{lid}                  -> JID string (e.g. "584144709840@s.whatsapp.net")
-```
-
-### Chat
-
-Conversations and their message indexes.
-
-```
-chat/{jid}/index           -> JSON with chat data (IChatRaw)
-chat/{jid}/messages        -> Message index (see Relationships)
-```
-
-**Example `chat/{jid}/index`**:
-```json
-{
-    "id": "120363123456789@g.us",
-    "name": "Dev Team",
-    "displayName": null,
-    "description": "Group description",
-    "unreadCount": 5,
-    "readOnly": false,
-    "archived": false,
-    "pinned": 1767371367857,
-    "muteEndTime": null,
-    "markedAsUnread": false,
-    "participant": [
-        { "id": "584144709840@s.whatsapp.net", "admin": "superadmin" },
-        { "id": "584121234567@s.whatsapp.net", "admin": null }
-    ],
-    "createdBy": "584144709840@s.whatsapp.net",
-    "createdAt": 1700000000,
-    "ephemeralExpiration": 604800
-}
-```
-
-### Message
-
-Messages separated into metadata, content, and raw.
-
-```
-chat/{cid}/message/{id}/index    -> JSON with metadata (IMessageIndex)
-chat/{cid}/message/{id}/content  -> Buffer base64 (media)
-chat/{cid}/message/{id}/raw      -> Full raw JSON (WAMessage)
-```
-
-**Example `chat/{cid}/message/{id}/index`**:
-```json
-{
-    "id": "AC07DE0D18FA8254897A26C90B2FFD98",
-    "cid": "584144709840@s.whatsapp.net",
-    "mid": null,
-    "me": false,
-    "type": "text",
-    "author": "584144709840@s.whatsapp.net",
-    "status": 4,
-    "starred": false,
-    "forwarded": false,
-    "created_at": 1767366759000,
-    "deleted_at": null,
-    "mime": "text/plain",
-    "caption": "",
-    "edited": false
-}
-```
-
----
-
-## Relationships
-
-### Problem
-
-In relational databases, the `Message -> Chat` relationship is simple:
-```sql
-SELECT * FROM messages WHERE cid = ?;
-```
-
-In key-value stores, listing messages requires scanning all keys:
-```
-SCAN chat/{cid}/message/*/index
-```
-
-This is inefficient for:
-- Paginated ordering by date
-- Counting messages without loading them
-- Getting the latest N messages
-
-### Solution: Message Index
-
-Each chat maintains an index of its messages:
-
-```
-chat/{cid}/messages
-```
-
-**Format**: Plain text with one line per message:
-```
-{TIMESTAMP} {MESSAGE_ID}
-{TIMESTAMP} {MESSAGE_ID}
-...
-```
-
-**Example**:
-```
-1767366759000 AC07DE0D18FA8254897A26C90B2FFD98
-1767366758000 BC18EF1D29GB9365908B37D01C3GGE09
-1767366757000 CC29FG2E30HC0476019C48E12D4HHF10
-```
-
-### Operations
-
-These operations are available through the Message class API:
-
-**List messages (paginated)** (`Message.list`):
-```typescript
-const messages = await wa.Message.list(cid, offset, limit);
-```
-
-**Count messages** (`Message.count`):
-```typescript
-const count = await wa.Message.count(cid);
-```
-
-**Delete a message** (instance method `msg.remove()`):
-```typescript
-const msg = await wa.Message.get(cid, mid);
-if (msg) await msg.remove();
-```
-
-### Advantages
-
-| Aspect | Without Index | With Index |
-|--------|--------------|------------|
-| List messages | SCAN + parse JSON | Split lines |
-| Paginate | Load all | Direct slice |
-| Count | Load all | Count lines |
-| Sort | In-memory sort | Already sorted |
-| Last message | Load all | First line |
-
----
-
-## Cascade Delete
-
-When deleting an entity, all its dependencies are deleted.
-
-### How it works
-
-The `set(key, null)` contract requires that when `value` is `null`, the engine deletes both the key itself AND all sub-keys with that prefix recursively. This is how cascade delete works.
-
-### Delete Contact
-
-```typescript
-// Only deletes the contact index
-await wa.engine.set("contact/{jid}/index", null);
-```
-
-### Delete Chat
-
-Use `Chat.remove(cid)` (static) or `chat.remove()` (instance). This calls `wa.engine.set("chat/{cid}", null)` which cascade-deletes the chat index, message index, and all message data:
-
-```typescript
-// Static
-await wa.Chat.remove(cid);
-
-// Or via instance
-const chat = await wa.Chat.get(cid);
-if (chat) await chat.remove();
-```
-
-The engine's cascade delete on `set("chat/{cid}", null)` removes:
-1. `chat/{cid}/index`
-2. `chat/{cid}/messages`
-3. `chat/{cid}/message/{mid}/index`, `/content`, `/raw` for each message
-
-### Delete Message
-
-Use the instance method `msg.remove()`:
-
-```typescript
-const msg = await wa.Message.get(cid, mid);
-if (msg) await msg.remove();
-```
-
-This removes the message from the index and calls `wa.engine.set("chat/{cid}/message/{mid}", null)` which cascade-deletes `/index`, `/content`, and `/raw`.
-
----
-
-## Engine Implementations
-
-### FileEngine
-
-Stores each key as a file in the filesystem.
-
-```
-.baileys/{session}/
-|-- session/
-|   |-- creds
-|   |-- app-state-sync-key/
-|   |   +-- {id}
-|   +-- ...
-|-- lid/
-|   +-- {lid}
-|-- contact/
-|   +-- 584144709840_at_s.whatsapp.net/
-|       +-- index
-+-- chat/
-    +-- 584144709840_at_s.whatsapp.net/
-        |-- index
-        |-- messages
-        +-- message/
-            +-- AC07DE.../
-                |-- index
-                |-- content
-                +-- raw
-```
-
-**Considerations**:
-- Sanitize `@` -> `_at_` for valid paths
-- Create directories recursively
-- Sort by `mtime` from filesystem
-- `set(key, null)` uses `rm -rf` for cascade delete
-
-### RedisEngine
-
-Uses Redis as backend. Included in the library as an official export.
-
-```
-wa:{session}:session/creds
-wa:{session}:contact/{jid}/index
-wa:{session}:chat/{jid}/index
-wa:{session}:chat/{jid}/messages
-wa:{session}:chat/{cid}/message/{id}/index
-wa:{session}:chat/{cid}/message/{id}/raw
-wa:{session}:chat/{cid}/message/{id}/content
-wa:{session}:lid/{lid}
-```
-
-**Considerations**:
-- Prefix per session for multi-tenant
-- Uses SCAN (not KEYS) for listing -- non-blocking
-- `set(key, null)` scans and deletes all sub-keys matching `{key}/*` for cascade delete
-- No native order, depends on message index
-
-### PostgreSQL Engine (Example)
-
-```typescript
-class PostgresEngine implements Engine {
-    constructor(private readonly _pool: Pool, private readonly _session: string) {}
-
-    async get(key: string): Promise<string | null> {
-        const { rows } = await this._pool.query(
-            'SELECT value FROM kv_store WHERE session = $1 AND key = $2',
-            [this._session, key]
-        );
-        return rows[0]?.value ?? null;
+    async get(path: string): Promise<string | null> {
+        return this._docs.get(normalize(path))?.value ?? null;
     }
 
-    async set(key: string, value: string | null): Promise<void> {
-        if (value) {
-            await this._pool.query(
-                `INSERT INTO kv_store (session, key, value, updated_at)
-                 VALUES ($1, $2, $3, NOW())
-                 ON CONFLICT (session, key) DO UPDATE SET value = $3, updated_at = NOW()`,
-                [this._session, key, value]
-            );
-        } else {
-            // Cascade delete: delete exact key AND all sub-keys
-            await this._pool.query(
-                'DELETE FROM kv_store WHERE session = $1 AND (key = $2 OR key LIKE $3)',
-                [this._session, key, key + '/%']
-            );
+    async set(path: string, value: string): Promise<void> {
+        this._docs.set(normalize(path), { value, mtime: Date.now() });
+    }
+
+    async unset(path: string): Promise<boolean> {
+        const root = normalize(path);
+        const prefix = `${root}/`;
+        for (const key of this._docs.keys()) {
+            if (key === root || key.startsWith(prefix)) {
+                this._docs.delete(key);
+            }
         }
+        return true;
     }
 
-    async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-        const { rows } = await this._pool.query(
-            `SELECT key FROM kv_store
-             WHERE session = $1 AND key LIKE $2
-             ORDER BY updated_at DESC
-             LIMIT $3 OFFSET $4`,
-            [this._session, prefix + '%', limit, offset]
-        );
-        return rows.map(r => r.key);
-    }
-}
-```
-
-**Required table**:
-```sql
-CREATE TABLE kv_store (
-    session VARCHAR(100) NOT NULL,
-    key VARCHAR(500) NOT NULL,
-    value TEXT,
-    updated_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (session, key)
-);
-
-CREATE INDEX idx_kv_prefix ON kv_store (session, key varchar_pattern_ops);
-CREATE INDEX idx_kv_updated ON kv_store (session, updated_at DESC);
-```
-
----
-
-## Key Summary
-
-| Key Pattern | Type | Description |
-|-------------|------|-------------|
-| `session/creds` | JSON | Authentication credentials |
-| `session/{type}/{id}` | JSON | Signal protocol keys |
-| `lid/{lid}` | Text | Reverse index LID -> JID |
-| `contact/{jid}/index` | JSON | Contact data (IContactRaw) |
-| `chat/{jid}/index` | JSON | Chat data (IChatRaw) |
-| `chat/{jid}/messages` | TXT | Index `{TS} {ID}\n` |
-| `chat/{cid}/message/{id}/index` | JSON | Message metadata (IMessageIndex) |
-| `chat/{cid}/message/{id}/content` | Base64 | Binary content |
-| `chat/{cid}/message/{id}/raw` | JSON | Full raw WAMessage |
-
----
-
-## Optimizations
-
-### Batch Operations
-
-For bulk operations, consider batch methods:
-
-```typescript
-interface EngineBatch extends Engine {
-    set_batch(entries: Array<[key: string, value: string | null]>): Promise<void>;
-}
-```
-
-### TTL (Time-To-Live)
-
-For ephemeral messages:
-
-```typescript
-interface EngineTTL extends Engine {
-    set_ttl(key: string, value: string, ttl_seconds: number): Promise<void>;
-}
-```
-
-### Prefix Delete
-
-For efficient cascade delete:
-
-```typescript
-interface EnginePrefix extends Engine {
-    delete_prefix(prefix: string): Promise<number>;
-}
-```
-
-**Redis implementation**:
-```typescript
-async delete_prefix(prefix: string): Promise<number> {
-    let count = 0;
-    let cursor = '0';
-    do {
-        const [next, keys] = await this._client.scan(cursor, 'MATCH', `${this._prefix}:${prefix}*`);
-        cursor = next;
-        if (keys.length) {
-            await this._client.del(...keys);
-            count += keys.length;
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        const root = normalize(path);
+        const prefix = root === '' ? '' : `${root}/`;
+        const direct: Array<{ value: string; mtime: number }> = [];
+        for (const [key, entry] of this._docs) {
+            if (!key.startsWith(prefix)) continue;
+            const rest = key.slice(prefix.length);
+            if (rest.length === 0 || rest.includes('/')) continue;
+            direct.push(entry);
         }
-    } while (cursor !== '0');
-    return count;
+        direct.sort((a, b) => b.mtime - a.mtime);
+        return direct.slice(offset, offset + limit).map((e) => e.value);
+    }
+
+    async count(path: string): Promise<number> {
+        const root = normalize(path);
+        const prefix = root === '' ? '' : `${root}/`;
+        let total = 0;
+        for (const key of this._docs.keys()) {
+            if (!key.startsWith(prefix)) continue;
+            const rest = key.slice(prefix.length);
+            if (rest.length > 0 && !rest.includes('/')) total++;
+        }
+        return total;
+    }
+
+    async clear(): Promise<void> {
+        this._docs.clear();
+    }
 }
 ```
+
+### SQLite engine
+
+A single-table schema is enough — keep `(mtime DESC)` and prefix-friendly
+indexes on the path column.
+
+```ts
+import Database from 'better-sqlite3';
+import type { Engine } from '@arcaelas/whatsapp';
+
+function normalize(path: string): string {
+    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
+}
+
+export class SqliteEngine implements Engine {
+    private readonly _db: Database.Database;
+
+    constructor(file: string) {
+        this._db = new Database(file);
+        this._db.exec(`
+            CREATE TABLE IF NOT EXISTS docs (
+                path  TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                mtime INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_docs_mtime ON docs (mtime DESC);
+            CREATE INDEX IF NOT EXISTS idx_docs_prefix ON docs (path COLLATE BINARY);
+        `);
+    }
+
+    async get(path: string): Promise<string | null> {
+        const row = this._db
+            .prepare('SELECT value FROM docs WHERE path = ?')
+            .get(normalize(path)) as { value: string } | undefined;
+        return row?.value ?? null;
+    }
+
+    async set(path: string, value: string): Promise<void> {
+        this._db
+            .prepare(
+                `INSERT INTO docs (path, value, mtime) VALUES (?, ?, ?)
+                 ON CONFLICT(path) DO UPDATE SET value = excluded.value, mtime = excluded.mtime`
+            )
+            .run(normalize(path), value, Date.now());
+    }
+
+    async unset(path: string): Promise<boolean> {
+        const root = normalize(path);
+        this._db
+            .prepare('DELETE FROM docs WHERE path = ? OR path LIKE ?')
+            .run(root, `${root}/%`);
+        return true;
+    }
+
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        const root = normalize(path);
+        const prefix = root === '' ? '' : `${root}/`;
+        const rows = this._db
+            .prepare(
+                `SELECT value, path FROM docs
+                 WHERE path LIKE ?
+                 ORDER BY mtime DESC`
+            )
+            .all(`${prefix}%`) as { value: string; path: string }[];
+        const direct = rows.filter((r) => {
+            const rest = r.path.slice(prefix.length);
+            return rest.length > 0 && !rest.includes('/');
+        });
+        return direct.slice(offset, offset + limit).map((r) => r.value);
+    }
+
+    async count(path: string): Promise<number> {
+        const root = normalize(path);
+        const prefix = root === '' ? '' : `${root}/`;
+        const rows = this._db
+            .prepare('SELECT path FROM docs WHERE path LIKE ?')
+            .all(`${prefix}%`) as { path: string }[];
+        let total = 0;
+        for (const r of rows) {
+            const rest = r.path.slice(prefix.length);
+            if (rest.length > 0 && !rest.includes('/')) total++;
+        }
+        return total;
+    }
+
+    async clear(): Promise<void> {
+        this._db.prepare('DELETE FROM docs').run();
+    }
+}
+```
+
+!!! tip "Edge cases worth testing"
+    - `unset` on a missing path returns `true` (idempotent).
+    - `list` of a path with no children returns `[]`, never throws.
+    - `set` of an existing path overwrites and bumps the mtime — old positions in `list` should disappear and the new value should appear at the top.
+    - Path normalization: `chat/x`, `/chat/x`, and `/chat//x/` all hit the same record.
+
+---
+
+## Multi-account: one process, several engines
+
+Each `WhatsApp` instance owns exactly one `Engine`. To run several accounts
+concurrently in the same process, give each its own engine — possibly of
+different types:
+
+```ts
+import IORedis from 'ioredis';
+import { join } from 'node:path';
+import {
+    FileSystemEngine,
+    RedisEngine,
+    WhatsApp,
+} from '@arcaelas/whatsapp';
+
+const redis = new IORedis(process.env.REDIS_URL!);
+
+// Account A — Redis-backed (hot, multi-instance friendly)
+const wa_a = new WhatsApp({
+    engine: new RedisEngine(redis, 'wa:584144709840'),
+    phone: 584144709840,
+});
+
+// Account B — local filesystem (single-host bot, easy to inspect)
+const wa_b = new WhatsApp({
+    engine: new FileSystemEngine(join(process.cwd(), '.sessions/B')),
+    phone: 584121234567,
+});
+
+await Promise.all([
+    wa_a.connect((auth) => console.log('A:', auth)),
+    wa_b.connect((auth) => console.log('B:', auth)),
+]);
+```
+
+Two rules to remember:
+
+1. **Never share an engine instance between two `WhatsApp` clients.** State
+   would collide under the same paths. With Redis, give each account a unique
+   `prefix`. With FileSystem, give each account a unique base directory.
+2. The engine **must already be wired** when you construct `WhatsApp` — it is
+   read by the constructor and used immediately on `connect()`.
+
+---
+
+## `autoclean` and `loggedOut`
+
+When baileys reports `DisconnectReason.loggedOut`, the orchestrator decides
+what to do with the engine **before** emitting `disconnected`, so listeners
+always observe the final state:
+
+| `autoclean` value          | Action on `loggedOut`                                         |
+| -------------------------- | ------------------------------------------------------------- |
+| `true` (default)           | `await engine.clear()` — the entire engine namespace is wiped. |
+| `false`                    | `await engine.unset('/session/creds')` — credentials only; chats / contacts / messages are preserved. |
+
+```ts
+// Wipe everything when the user logs out from the phone
+const wa1 = new WhatsApp({ engine, autoclean: true });
+
+// Keep history; only force re-authentication on next connect
+const wa2 = new WhatsApp({ engine, autoclean: false });
+```
+
+`disconnect({ destroy: true })` also calls `engine.clear()`, regardless of
+`autoclean`, so a manual nuke is always one flag away:
+
+```ts
+await wa.disconnect({ destroy: true }); // same as engine.clear()
+```
+
+!!! note "Cleanup happens before the event"
+    The orchestrator awaits the engine cleanup before emitting `disconnected`.
+    Any handler attached via `wa.on('disconnected', ...)` is guaranteed to see
+    the post-cleanup state of the store.

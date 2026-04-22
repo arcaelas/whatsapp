@@ -1,459 +1,259 @@
 # Chat
 
-Class for chat management.
+The `Chat` entity represents a WhatsApp conversation — either a 1:1 chat with a contact or a group. It exposes read-only metadata (name, description, pinned/archived/muted state) and mutating methods that propagate changes to WhatsApp servers and local persistence via the configured engine.
+
+Every instance is bound to a `WhatsApp` context through the `chat(wa)` factory, which also exposes static delegates such as `wa.Chat.get(cid)`, `wa.Chat.list(offset, limit)` and per-action shortcuts (`pin`, `archive`, `mute`, `seen`, `clear`, `delete`).
 
 ---
 
 ## Import
 
-The Chat class is accessed through the WhatsApp instance:
-
-```typescript
-const wa = new WhatsApp();
-// wa.Chat is available after instantiation
+```typescript title="imports.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+// or
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 ```
+
+The `Chat` class itself is not exported as a top-level name. Access the bound constructor through `wa.Chat` (returned from the `chat(wa)` factory internally wired by the `WhatsApp` constructor).
 
 ---
 
-## IChatRaw
+## Constructor
 
-Raw chat object stored in the engine:
+`Chat` instances are not meant to be built manually. They are produced by:
 
-```typescript
-interface IChatRaw {
-  id: string;
-  name?: string | null;
-  displayName?: string | null;
-  description?: string | null;
-  unreadCount?: number | null;
-  readOnly?: boolean | null;
-  archived?: boolean | null;
-  pinned?: number | null;
-  muteEndTime?: number | null;
-  markedAsUnread?: boolean | null;
-  participant?: IGroupParticipant[] | null;
-  createdBy?: string | null;
-  createdAt?: number | null;
-  ephemeralExpiration?: number | null;
-}
+- `wa.Chat.get(cid)` — load or bootstrap by CID.
+- `wa.Chat.list(offset, limit)` — paginated read of persisted chats.
+- `contact.chat` — eager property on a `Contact` instance (1:1 chats).
+- Event payloads (`message:created`, `message:updated`, etc.) — the second argument is always the `Chat` the message belongs to.
 
-interface IGroupParticipant {
-  id: string;
-  admin: string | null;
+```typescript title="bootstrap.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+});
+
+await wa.connect();
+
+const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");
+if (chat) {
+  console.log(chat.name, chat.type);
 }
 ```
+
+!!! info "Auto-bootstrap"
+    `wa.Chat.get(cid)` resolves the CID (phone, JID, or LID). If no record exists in the engine but the contact is reachable, a minimal `IChatRaw` document is created and persisted before returning the instance.
 
 ---
 
 ## Properties
 
-Each Chat instance has the following properties:
+All properties are synchronous getters over the internal `_raw: IChatRaw` document.
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `id` | `string` | Chat ID (JID) |
-| `name` | `string` | Chat name (fallback: `raw.name` -> `raw.displayName` -> phone from JID) |
-| `type` | `"contact" \| "group"` | Chat type (based on JID suffix) |
-| `content` | `string` | Chat/group description (empty string if not set) |
-| `pinned` | `boolean` | Whether the chat is pinned |
-| `archived` | `boolean` | Whether the chat is archived |
-| `muted` | `number` | Mute end timestamp (0 if unmuted) |
-| `read` | `boolean` | Whether the chat is read |
-| `readonly` | `boolean` | Whether the chat is read-only |
-| `raw` | `IChatRaw` | Raw chat data |
+| -------- | ---- | ----------- |
+| `id` | `string` | JID of the chat (e.g. `5215555555555@s.whatsapp.net` or `120363...@g.us`). |
+| `cid` | `string` | Alias of `id`. Use whichever reads better in your code. |
+| `type` | `"contact" \| "group"` | Derived from the JID suffix (`@g.us` → group). |
+| `name` | `string` | Local name → display name → phone fallback. |
+| `content` | `string` | Group description (empty string for 1:1 chats). |
+| `pinned` | `boolean` | `true` when the pin flag is set. |
+| `archived` | `boolean` | `true` if the chat is archived. |
+| `muted` | `boolean` | `true` when the chat is muted and the mute window has not expired. |
+| `read` | `boolean` | `true` when `unread_count === 0` and the chat is not marked as unread. |
+| `readonly` | `boolean` | `true` for broadcast/announce-only channels. |
 
----
+### `IChatRaw`
 
-## Static methods
+Persisted shape backing every `Chat` instance.
 
-### get()
-
-Gets a specific chat. If the chat is not in storage, it tries to find the contact and create one.
-
-```typescript
-const chat = await wa.Chat.get(cid: string): Promise<Chat | null>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  console.log(`Name: ${chat.name}`);
-  console.log(`Type: ${chat.type}`);
+```typescript title="IChatRaw.ts"
+export interface IChatRaw {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  unread_count?: number | null;
+  read_only?: boolean | null;
+  archived?: boolean | null;
+  pinned?: number | null;
+  mute_end_time?: number | null;
+  marked_as_unread?: boolean | null;
+  participants?: GroupParticipant[] | null;
+  created_by?: string | null;
+  created_at?: number | null;
+  ephemeral_expiration?: number | null;
 }
-```
 
-### list()
-
-Gets chats with pagination.
-
-```typescript
-const chats = await wa.Chat.list(offset?: number, limit?: number): Promise<Chat[]>
-```
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Starting position |
-| `limit` | `number` | `50` | Maximum chats |
-
-**Example:**
-
-```typescript
-const chats = await wa.Chat.list(0, 100);
-for (const chat of chats) {
-  console.log(`${chat.name} (${chat.type})`);
-}
-```
-
-### pin()
-
-Pins or unpins a chat by ID. Delegates to the instance method internally.
-
-```typescript
-const success = await wa.Chat.pin(cid: string, value: boolean): Promise<boolean>
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `cid` | `string` | Chat ID |
-| `value` | `boolean` | `true` to pin, `false` to unpin |
-
-**Example:**
-
-```typescript
-// Pin
-await wa.Chat.pin("5491112345678@s.whatsapp.net", true);
-
-// Unpin
-await wa.Chat.pin("5491112345678@s.whatsapp.net", false);
-```
-
-### archive()
-
-Archives or unarchives a chat by ID. Delegates to the instance method internally.
-
-```typescript
-const success = await wa.Chat.archive(cid: string, value: boolean): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-// Archive
-await wa.Chat.archive("5491112345678@s.whatsapp.net", true);
-
-// Unarchive
-await wa.Chat.archive("5491112345678@s.whatsapp.net", false);
-```
-
-### mute()
-
-Mutes or unmutes a chat by ID. Delegates to the instance method internally.
-
-```typescript
-const success = await wa.Chat.mute(cid: string, duration: number | null): Promise<boolean>
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `cid` | `string` | Chat ID |
-| `duration` | `number \| null` | Duration in milliseconds or `null` to unmute |
-
-**Example:**
-
-```typescript
-// Mute for 8 hours
-await wa.Chat.mute("5491112345678@s.whatsapp.net", 8 * 60 * 60 * 1000);
-
-// Unmute
-await wa.Chat.mute("5491112345678@s.whatsapp.net", null);
-```
-
-### seen()
-
-Marks a chat as read by ID. Delegates to the instance method internally.
-
-```typescript
-const success = await wa.Chat.seen(cid: string): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-await wa.Chat.seen("5491112345678@s.whatsapp.net");
-```
-
-### remove()
-
-Deletes a chat by ID. For groups it leaves the group, for individual chats it sends a delete modification. Also performs cascade delete of all stored data under `chat/{cid}`.
-
-```typescript
-const success = await wa.Chat.remove(cid: string): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-await wa.Chat.remove("5491112345678@s.whatsapp.net");
-```
-
----
-
-## Instance methods
-
-### refresh()
-
-Refreshes chat data from WhatsApp. For groups, fetches group metadata (name, description, participants, creator). For individual chats, refreshes the associated contact. Returns `this` on success, `null` if no socket is available.
-
-```typescript
-await chat.refresh(): Promise<this | null>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
-if (chat) {
-  const refreshed = await chat.refresh();
-  if (refreshed) {
-    console.log("Updated name:", refreshed.name);
-    console.log("Description:", refreshed.content);
-  }
-}
-```
-
-### remove()
-
-Deletes this chat. For groups, leaves the group. For individual chats, sends a delete modification to WhatsApp. Also performs cascade delete of all stored data under `chat/{cid}` via `engine.set(key, null)`.
-
-```typescript
-await chat.remove(): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.remove();
-}
-```
-
-### pin()
-
-Pins or unpins this chat.
-
-```typescript
-await chat.pin(value: boolean): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.pin(true); // Pin
-  await chat.pin(false); // Unpin
-}
-```
-
-### archive()
-
-Archives or unarchives this chat.
-
-```typescript
-await chat.archive(value: boolean): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.archive(true); // Archive
-  await chat.archive(false); // Unarchive
-}
-```
-
-### mute()
-
-Mutes or unmutes this chat.
-
-```typescript
-await chat.mute(duration: number | null): Promise<boolean>
-```
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `duration` | `number \| null` | Duration in ms (0 or `null` to unmute) |
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.mute(8 * 60 * 60 * 1000); // Mute for 8 hours
-  await chat.mute(null); // Unmute
-}
-```
-
-### seen()
-
-Marks this chat as read.
-
-```typescript
-await chat.seen(): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.seen();
-}
-```
-
-### members()
-
-Gets members of this chat. For groups, fetches participants from WhatsApp and returns them as Contact instances. For individual chats, returns an array with the single contact.
-
-```typescript
-await chat.members(offset?: number, limit?: number): Promise<Contact[]>
-```
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Starting position |
-| `limit` | `number` | `50` | Maximum members |
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
-if (chat) {
-  const members = await chat.members(0, 100);
-  console.log(`Members: ${members.length}`);
-  for (const member of members) {
-    console.log(`  - ${member.name}: ${member.phone}`);
-  }
-}
-```
-
-### messages()
-
-Gets messages from this chat with pagination. Delegates to `wa.Message.list(cid, offset, limit)`.
-
-```typescript
-await chat.messages(offset?: number, limit?: number): Promise<Message[]>
-```
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Starting position |
-| `limit` | `number` | `50` | Maximum messages |
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  const messages = await chat.messages(0, 100);
-  for (const msg of messages) {
-    console.log(`${msg.type}: ${msg.caption}`);
-  }
-}
-```
-
-### contact()
-
-Gets the contact associated with this chat. Returns `null` for group chats.
-
-```typescript
-await chat.contact(): Promise<Contact | null>
-```
-
-**Example:**
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  const contact = await chat.contact();
-  if (contact) {
-    console.log(`Contact: ${contact.name}`);
-  }
+export interface GroupParticipant {
+  id: string;
+  admin: string | null; // "admin" | "superadmin" | null
 }
 ```
 
 ---
 
-## Chat types
+## Methods
 
-### Individual chat
+Instance methods that mutate state always write through to the socket first and then persist the new snapshot to the engine.
 
-JID format: `{phone}@s.whatsapp.net`
+### `refresh()`
 
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat?.type === "contact") {
-  console.log("Individual chat");
-}
+Re-hydrates chat metadata from the live socket. For groups, fetches the full group metadata (subject, description, participants, owner). For 1:1, refreshes the associated contact's profile and syncs the display name.
+
+```typescript title="refresh.ts"
+const chat = await wa.Chat.get(cid);
+await chat?.refresh();
 ```
 
-### Group
+Returns `this` on success, `null` if there is no active socket.
 
-JID format: `{id}@g.us`
+### `pin(value: boolean)`
 
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
+Pins or unpins the chat. Propagates to WhatsApp via `chatModify` and requires a reference to the last message in the chat.
+
+```typescript title="pin.ts"
+await chat.pin(true);  // pin
+await chat.pin(false); // unpin
+```
+
+### `archive(value: boolean)`
+
+Archives or unarchives the chat.
+
+```typescript title="archive.ts"
+await chat.archive(true);
+```
+
+### `mute(value: boolean)`
+
+Mutes the chat. `true` mutes forever (internally set to ~100 years). `false` restores notifications.
+
+```typescript title="mute.ts"
+await chat.mute(true);  // mute forever
+await chat.mute(false); // unmute
+```
+
+### `seen()`
+
+Marks every message in the chat as read. Reads the last persisted message to build the ack key.
+
+```typescript title="seen.ts"
+await chat.seen();
+```
+
+### `typing(on: boolean)` / `recording(on: boolean)`
+
+Toggle presence indicators. They send a `sendPresenceUpdate` call with `composing`/`recording` or `paused`.
+
+```typescript title="typing.ts"
+await chat.typing(true);
+await new Promise((r) => setTimeout(r, 1_500));
+await chat.typing(false);
+```
+
+!!! tip "Natural cadence"
+    Set `typing(true)`, send the message, then `typing(false)` to mimic human behavior. Keep the window short (1–3 s) — WhatsApp clears `composing` automatically after a few seconds.
+
+### `clear()`
+
+Clears all persisted messages of the chat from the local engine. Does not touch the remote chat.
+
+```typescript title="clear.ts"
+await chat.clear();
+```
+
+### `delete()`
+
+Deletes the chat locally and remotely. For groups, leaves the group (`groupLeave`). For 1:1, fires `chatModify { delete: true }`. Removes the chat document and all messages from the engine.
+
+```typescript title="delete.ts"
+await chat.delete();
+```
+
+!!! warning "Irreversible"
+    `delete()` cascades into the local `/chat/{cid}/message` prefix. Back up your engine snapshot if you need the history.
+
+### `members(offset?: number, limit?: number)`
+
+Returns chat participants as `Contact` instances. For 1:1 chats, yields the other party (only when `offset === 0`). For groups, pages through `groupMetadata().participants`, hydrating each participant via `wa.Contact.get`.
+
+```typescript title="members.ts"
+const chat = await wa.Chat.get("120363000000000000@g.us");
 if (chat?.type === "group") {
-  console.log("Group:", chat.name);
-  const members = await chat.members(0, 100);
-  console.log(`Members: ${members.length}`);
+  let offset = 0;
+  while (true) {
+    const batch = await chat.members(offset, 50);
+    if (batch.length === 0) break;
+    for (const member of batch) {
+      console.log(member.phone, member.name);
+    }
+    offset += batch.length;
+  }
+}
+```
+
+### `messages(offset?: number, limit?: number)`
+
+Shortcut for `wa.Message.list(this.id, offset, limit)`. Returns messages ordered by engine mtime DESC.
+
+```typescript title="messages.ts"
+const latest = await chat.messages(0, 20);
+for (const msg of latest) {
+  console.log(msg.type, msg.caption);
+}
+```
+
+### `contact()` *(1:1 only)*
+
+For 1:1 chats, the fastest way to obtain the counterpart is through `wa.Contact.get(chat.id)`. For the inverse (contact → chat), use the eager `contact.chat` property.
+
+```typescript title="contact-from-chat.ts"
+const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");
+if (chat?.type === "contact") {
+  const contact = await wa.Contact.get(chat.id);
+  console.log(contact?.name);
 }
 ```
 
 ---
 
-## Complete example
+## Static (delegate via `wa.Chat`)
 
-```typescript
-// Handle new chats
-wa.event.on("chat:created", async (chat) => {
-  console.log(`New chat: ${chat.name} (${chat.type})`);
+Every mutating method has a static delegate bound to the `WhatsApp` instance. They resolve the CID internally and fall back to `false`/`null` when no chat matches.
 
-  if (chat.type === "group") {
-    const members = await chat.members(0, 100);
-    console.log(`Group with ${members.length} members`);
-  }
+| Delegate | Signature | Notes |
+| -------- | --------- | ----- |
+| `wa.Chat.get` | `(cid: string) => Promise<Chat \| null>` | Resolves phone/JID/LID and bootstraps from contact when missing. |
+| `wa.Chat.list` | `(offset?: number, limit?: number) => Promise<Chat[]>` | Paginates persisted chats by mtime DESC. Defaults: `0, 50`. |
+| `wa.Chat.pin` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.archive` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.mute` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.seen` | `(cid: string) => Promise<boolean>` | |
+| `wa.Chat.clear` | `(cid: string) => Promise<boolean>` | Local only. |
+| `wa.Chat.delete` | `(cid: string) => Promise<boolean>` | Remote + local. |
+
+```typescript title="delegates.ts" hl_lines="12 13 14"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new FileSystemEngine({ path: "./.whatsapp" }),
 });
 
-// Auto mark as read
-wa.event.on("message:created", async (msg) => {
-  if (!msg.me) {
-    await wa.Chat.seen(msg.cid);
-  }
-});
+await wa.connect();
 
-// Archive old chats
-async function archive_old_chats() {
-  const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-  if (chat && !chat.archived) {
-    await chat.archive(true);
-    console.log(`Archived: ${chat.name}`);
-  }
-}
+const cid = "5215555555555@s.whatsapp.net";
+
+// One-liner delegates — no need to hydrate the Chat instance first
+await wa.Chat.pin(cid, true);
+await wa.Chat.mute(cid, true);
+await wa.Chat.seen(cid);
+
+// Paginated listing
+const chats = await wa.Chat.list(0, 100);
+console.log(`Tracking ${chats.length} chats.`);
 ```
+
+!!! tip "When to use statics vs instances"
+    Reach for static delegates when you already have a `cid` string from an event payload or a stored reference — they save a round-trip. Instantiate a `Chat` when you need metadata (`name`, `type`, `members()`) or will run several operations on the same chat.

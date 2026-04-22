@@ -1,275 +1,194 @@
 # Contact
 
-Class for contact management.
+The `Contact` entity represents any WhatsApp user your session is aware of — whether they started a chat, appear in a group, or were discovered via `onWhatsApp` lookups. Every contact ships with an eager `chat` property pointing to its 1:1 `Chat` instance, so you can jump from "who" to "where" without extra lookups.
+
+`Contact.get(uid)` is the single entry point and dispatches by identifier shape:
+
+- Plain phone (digits only, no `@`) → resolved through `socket.onWhatsApp(phone)`.
+- JID (`<number>@s.whatsapp.net`) → looked up in the engine, refreshed from socket if missing.
+- LID (`<number>@lid`) → resolved via the persisted LID↔JID mapping.
 
 ---
 
 ## Import
 
-The Contact class is accessed through the WhatsApp instance:
-
-```typescript
-const wa = new WhatsApp();
-// wa.Contact is available after instantiation
+```typescript title="imports.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+// or
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 ```
+
+Use the bound constructor via `wa.Contact`. The `contact(wa)` factory (internal) produces a `_Contact` subclass tied to the WhatsApp context — that is what static delegates operate on.
 
 ---
 
-## IContactRaw
+## Constructor
 
-Raw contact object stored in the engine:
+Like `Chat`, `Contact` instances are not intended to be built directly. They come from:
 
-```typescript
-interface IContactRaw {
-  id: string;
-  lid?: string | null;
-  name?: string | null;
-  notify?: string | null;
-  verifiedName?: string | null;
-  imgUrl?: string | null;
-  status?: string | null;
-}
+- `wa.Contact.get(uid)` — smart dispatch by phone, JID, or LID.
+- `wa.Contact.list(offset, limit)` — paginated reads.
+- `chat.members()` — group participants.
+- Event handlers for `contact:created`/`contact:updated`.
+- `msg.author()` — the sender of a message.
+
+```typescript title="bootstrap.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+});
+
+await wa.connect();
+
+// Phone number (digits only)
+const byPhone = await wa.Contact.get("5215555555555");
+
+// JID
+const byJid = await wa.Contact.get("5215555555555@s.whatsapp.net");
+
+// LID (hidden identifier assigned by WhatsApp)
+const byLid = await wa.Contact.get("192837465@lid");
+
+console.log(byPhone?.name, byJid?.phone, byLid?.id);
 ```
+
+!!! info "Why the smart dispatch?"
+    WhatsApp exposes three flavors of identifier for the same user. `Contact.get` normalizes them through an internal resolver plus a live `onWhatsApp` probe, so your code only ever passes strings in and gets back a normalized `Contact` (with a valid JID on `.id`).
 
 ---
 
 ## Properties
 
-Each Contact instance has the following properties:
+All properties are synchronous getters over the internal `_raw: IContactRaw` shape — except `chat`, which is hydrated eagerly at construction.
 
 | Property | Type | Description |
-|----------|------|-------------|
-| `id` | `string` | Contact ID (JID) |
-| `name` | `string` | Contact name (fallback chain: `raw.name` -> `raw.notify` -> phone from JID) |
-| `phone` | `string` | Phone number extracted from JID |
-| `photo` | `string \| null` | Profile photo URL or `null` |
-| `content` | `string` | Contact bio/status (empty string if not set) |
-| `raw` | `IContactRaw` | Raw contact data |
+| -------- | ---- | ----------- |
+| `id` | `string` | Canonical JID (e.g. `5215555555555@s.whatsapp.net`). |
+| `jid` | `string` | Alias of `id`. |
+| `lid` | `string \| null` | Linked device identifier (`@lid`) when available. |
+| `name` | `string` | Local name → push notify → phone fallback. |
+| `phone` | `string` | Digits before `@` in the JID. |
+| `photo` | `string \| null` | Profile picture URL (cached after first `refresh`/`get`). |
+| `content` | `string` | Status/bio text. |
+| `me` | `boolean` | `true` when the instance represents the authenticated account. |
+| `chat` | `Chat` | Eager 1:1 chat bound to this contact. |
 
-### rename()
+### `IContactRaw`
 
-Renames a contact by ID. Delegates to the instance method internally.
-
-```typescript
-const success = await wa.Contact.rename(uid: string, name: string): Promise<boolean>
-```
-
-**Example:**
-
-```typescript
-await wa.Contact.rename("5491112345678@s.whatsapp.net", "John Work");
-```
-
-### refresh()
-
-Refreshes a contact's data from WhatsApp by ID. Delegates to the instance method internally.
-
-```typescript
-const contact = await wa.Contact.refresh(uid: string): Promise<Contact | null>
-```
-
-**Example:**
-
-```typescript
-const contact = await wa.Contact.refresh("5491112345678@s.whatsapp.net");
-if (contact) {
-  console.log("Updated photo:", contact.photo);
+```typescript title="IContactRaw.ts"
+export interface IContactRaw {
+  id: string;
+  lid?: string | null;
+  name?: string | null;
+  notify?: string | null;
+  verified_name?: string | null;
+  img_url?: string | null;
+  status?: string | null;
 }
 ```
+
+### Eager `chat` property
+
+`Contact.chat` is not a function — it is a fully constructed `wa.Chat` instance available synchronously. It lets you pipeline calls like:
+
+```typescript title="eager-chat.ts"
+const contact = await wa.Contact.get("5215555555555");
+if (contact) {
+  await contact.chat.pin(true);
+  await contact.chat.typing(true);
+  await wa.Message.text(contact.chat.id, "Ready to go!");
+  await contact.chat.typing(false);
+}
+```
+
+!!! tip "`chat` for groups"
+    Only 1:1 chats are discovered by `Contact.get`. Group JIDs (`@g.us`) are filtered out — use `wa.Chat.get(groupJid)` when you need the group entity.
 
 ---
 
-## Instance methods
+## Methods
 
-### rename()
+### `rename(name: string)`
 
-Renames a contact locally. Returns `true` if the contact existed in storage and was updated, `false` otherwise.
+Renames the contact locally (device address book only). Does not propagate to WhatsApp servers, but the new value is immediately visible through `.name` and persisted via the engine.
 
-```typescript
-await contact.rename(name: string): Promise<boolean>
+```typescript title="rename.ts"
+const contact = await wa.Contact.get("5215555555555");
+await contact?.rename("Alice Example");
 ```
 
-**Example:**
+Returns `true` on success, `false` when the contact cannot be resolved.
 
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  const success = await contact.rename("John Work");
-  console.log("Renamed:", success);
-}
+### `refresh()`
+
+Re-hydrates `photo` and `content` (bio/status) from the live socket and rewrites the engine document. Returns `this` on success, `null` if there is no active socket.
+
+```typescript title="refresh.ts"
+const contact = await wa.Contact.get("5215555555555@s.whatsapp.net");
+await contact?.refresh();
+console.log(contact?.photo, contact?.content);
 ```
 
-### refresh()
-
-Refreshes profile data (photo and bio) from WhatsApp. Returns `this` on success, `null` if no socket is available.
-
-```typescript
-await contact.refresh(): Promise<this | null>
-```
-
-**Example:**
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  const refreshed = await contact.refresh();
-  if (refreshed) {
-    console.log("Updated photo:", refreshed.photo);
-    console.log("Updated bio:", refreshed.content);
-  }
-}
-```
-
-### chat()
-
-Gets or creates the chat associated with this contact.
-
-```typescript
-const chat = await contact.chat(): Promise<Chat | null>
-```
-
-**Example:**
-
-```typescript
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-if (contact) {
-  const chat = await contact.chat();
-  if (chat) {
-    console.log(`Chat with ${contact.name}: ${chat.id}`);
-  }
-}
-```
+!!! info "Automatic hydration"
+    `wa.Contact.get(uid)` already fetches profile data the first time a JID is seen. Call `refresh()` only when you need fresh metadata (e.g. the user updated their avatar).
 
 ---
 
-## Static methods
+## Static (delegate via `wa.Contact`)
 
-### get()
+| Delegate | Signature | Notes |
+| -------- | --------- | ----- |
+| `wa.Contact.get` | `(uid: string) => Promise<Contact \| null>` | Smart dispatch: phone / JID / LID. |
+| `wa.Contact.list` | `(offset?: number, limit?: number) => Promise<Contact[]>` | Paginated persisted contacts (mtime DESC). Defaults: `0, 50`. Each result has `chat` pre-loaded. |
+| `wa.Contact.rename` | `(uid: string, name: string) => Promise<boolean>` | Delegate to instance `rename`. |
+| `wa.Contact.refresh` | `(uid: string) => Promise<Contact \| null>` | Delegate to instance `refresh`. |
 
-Gets a specific contact. Accepts JID (`{phone}@s.whatsapp.net`), plain phone number, or LID (`{id}@lid`). When a LID is provided, it resolves to the actual JID via a reverse index (`lid/{lid}` key in the engine).
+```typescript title="delegates.ts"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 
-```typescript
-const contact = await wa.Contact.get(uid: string): Promise<Contact | null>
-```
+const wa = new WhatsApp({
+  engine: new FileSystemEngine({ path: "./.whatsapp" }),
+});
 
-**Parameters:**
+await wa.connect();
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `uid` | `string` | JID, phone number, or LID |
+// One-liner delegates
+await wa.Contact.rename("5215555555555", "Alice");
+await wa.Contact.refresh("5215555555555@s.whatsapp.net");
 
-**Example:**
-
-```typescript
-// By JID
-const contact = await wa.Contact.get("5491112345678@s.whatsapp.net");
-
-// By phone number (auto-appends @s.whatsapp.net)
-const contact = await wa.Contact.get("5491112345678");
-
-// By LID (resolves via reverse index)
-const contact = await wa.Contact.get("123456@lid");
-
-if (contact) {
-  console.log(`Name: ${contact.name}`);
-  console.log(`Phone: ${contact.phone}`);
-  console.log(`Photo: ${contact.photo ?? "No photo"}`);
-  console.log(`Bio: ${contact.content}`);
-}
-```
-
-### list()
-
-Lists contacts with pagination.
-
-```typescript
-const contacts = await wa.Contact.list(offset?: number, limit?: number): Promise<Contact[]>
-```
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Starting position |
-| `limit` | `number` | `50` | Maximum contacts |
-
-**Example:**
-
-```typescript
-// Get first 100 contacts
-const contacts = await wa.Contact.list(0, 100);
-console.log(`Total contacts: ${contacts.length}`);
-
-for (const contact of contacts) {
-  console.log(`- ${contact.name}: ${contact.phone}`);
-}
-
-// Paginate
-let page = 0;
-const page_size = 50;
-let all_contacts: typeof contacts = [];
-
+// Iterate every contact
+let offset = 0;
 while (true) {
-  const batch = await wa.Contact.list(page * page_size, page_size);
+  const batch = await wa.Contact.list(offset, 100);
   if (batch.length === 0) break;
-  all_contacts = [...all_contacts, ...batch];
-  page++;
+  for (const c of batch) {
+    console.log(c.phone, c.name, c.photo ?? "(no photo)");
+  }
+  offset += batch.length;
 }
 ```
 
 ---
 
-## JID formats
+## Persistence paths
 
-WhatsApp uses different JID formats:
+Contact-related records live under the following keys in the configured engine:
 
-| Format | Description | Example |
-|--------|-------------|---------|
-| `{phone}@s.whatsapp.net` | Individual user | `5491112345678@s.whatsapp.net` |
-| `{id}@g.us` | Group | `123456789@g.us` |
-| `{id}@lid` | Alternative contact ID (LID) | `123456@lid` |
+| Path | Value | Written by |
+| ---- | ----- | ---------- |
+| `/contact/{jid}` | Serialized `IContactRaw`. | `Contact.get`, `rename`, `refresh`, `contact:*` events. |
+| `/lid/{lid}` | Serialized JID string — reverse index for LID resolution. | `Contact.get` when a LID is discovered; `lid-mapping.update` event. |
+| `/chat/{jid}` | Serialized `IChatRaw` — the eager `contact.chat` loads from here. | `Chat.get`, message persistence, `chats.*` events. |
 
-LID identifiers are stored with a reverse index (`lid/{lid}` -> JID) so that `Contact.get()` can resolve them to the actual JID.
+!!! warning "Engine consistency"
+    When `autoclean` is `true` (default) and a remote `loggedOut` is received, the entire engine is wiped to force a fresh sync on the next login. Set `autoclean: false` in the `WhatsApp` constructor options if you want to keep contacts/chats/messages across re-auths.
 
----
+```typescript title="preserve-data.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
 
-## Complete example
-
-```typescript
-// Handle new contacts
-wa.event.on("contact:created", (contact) => {
-  console.log(`New contact: ${contact.name} (${contact.phone})`);
-});
-
-// Handle contact updates
-wa.event.on("contact:updated", (contact) => {
-  console.log(`Contact updated: ${contact.name}`);
-});
-
-// Search and rename contacts
-async function organize_contacts() {
-  const contacts = await wa.Contact.list(0, 1000);
-
-  for (const contact of contacts) {
-    // Add prefix to contacts without custom name
-    if (contact.name === contact.phone) {
-      await contact.rename(`Contact ${contact.phone}`);
-    }
-  }
-}
-
-// Get contact info when receiving message
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  const contact = await wa.Contact.get(msg.cid);
-
-  if (contact) {
-    console.log(`Message from: ${contact.name}`);
-    console.log(`Bio: ${contact.content}`);
-  } else {
-    const phone = msg.cid.split("@")[0];
-    console.log(`Message from: ${phone} (unknown)`);
-  }
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+  autoclean: false, // keep /contact/*, /lid/*, /chat/* across relogins
 });
 ```

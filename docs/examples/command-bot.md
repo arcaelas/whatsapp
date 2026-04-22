@@ -1,299 +1,185 @@
 # Command Bot
 
-Bot with structured and modular command system.
+A bot that handles textual commands like `/help`, `/ping`, `/info` and `/echo <text>` — without decorators. Just the raw `wa.on('message:created', ...)` event and a tiny dispatch table.
+
+This pattern is ideal when you want explicit control over routing, or when decorators are not an option (e.g. you're not using TypeScript with `experimentalDecorators`).
 
 ---
 
-## Project structure
+## Full example
 
-```
-my-bot/
-  src/
-    commands/
-      index.ts
-      ping.ts
-      help.ts
-      time.ts
-    index.ts
-  package.json
-  tsconfig.json
-```
+```typescript title="index.ts"
+import { join } from 'node:path';
+import { WhatsApp, FileSystemEngine, type Message, type Chat } from '@arcaelas/whatsapp';
 
----
+const PREFIX = '/';
 
-## Code
+type CommandHandler = (args: string, msg: Message, chat: Chat) => Promise<void>;
 
-### src/commands/index.ts
-
-```typescript
-import type { WhatsApp } from "@arcaelas/whatsapp";
-
-// Message type (inferred from wa.Message)
-type Message = InstanceType<WhatsApp["Message"]>;
-
-export interface CommandContext {
-  wa: WhatsApp;
-  msg: Message;
-  cid: string;
-  args: string[];
-  text: string;
-}
-
-export interface Command {
-  name: string;
-  description: string;
-  aliases?: string[];
-  execute: (ctx: CommandContext) => Promise<void>;
-}
-
-// Command registry
-export const commands = new Map<string, Command>();
-
-// Helper to register command
-export function register_command(cmd: Command) {
-  commands.set(cmd.name, cmd);
-  cmd.aliases?.forEach(alias => commands.set(alias, cmd));
-}
-
-// Import and register commands
-import "./ping";
-import "./help";
-import "./time";
-```
-
-### src/commands/ping.ts
-
-```typescript
-import { register_command } from "./index";
-
-register_command({
-  name: "ping",
-  description: "Check bot latency",
-  aliases: ["p"],
-  async execute({ wa, cid }) {
-    const start = Date.now();
-    await wa.Message.text(cid, "pong!");
-    console.log(`Latency: ${Date.now() - start}ms`);
-  },
+const wa = new WhatsApp({
+    engine: new FileSystemEngine(join(__dirname, 'session')),
+    phone: 584144709840,
 });
-```
 
-### src/commands/help.ts
+const commands = new Map<string, CommandHandler>();
 
-```typescript
-import { commands, register_command } from "./index";
-
-register_command({
-  name: "help",
-  description: "Show command list",
-  aliases: ["h", "?"],
-  async execute({ wa, cid }) {
-    const unique_commands = new Map<string, string>();
-
-    commands.forEach((cmd) => {
-      if (!unique_commands.has(cmd.name)) {
-        unique_commands.set(cmd.name, cmd.description);
-      }
-    });
-
-    let message = "*Available commands:*\n\n";
-    unique_commands.forEach((desc, name) => {
-      message += `!${name} - ${desc}\n`;
-    });
-
-    await wa.Message.text(cid, message);
-  },
+commands.set('help', async (_args, msg) => {
+    await msg.text(
+        [
+            'Available commands:',
+            '  /help          — show this message',
+            '  /ping          — health check',
+            '  /info          — chat metadata',
+            '  /echo <text>   — repeat <text>',
+        ].join('\n'),
+    );
 });
-```
 
-### src/commands/time.ts
-
-```typescript
-import { register_command } from "./index";
-
-register_command({
-  name: "time",
-  description: "Show current time",
-  aliases: ["t"],
-  async execute({ wa, cid }) {
-    const now = new Date();
-    const time = now.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    const date = now.toLocaleDateString("en-US", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
-
-    await wa.Message.text(cid, `${time}\n${date}`);
-  },
+commands.set('ping', async (_args, msg) => {
+    await msg.text('pong');
 });
-```
 
-### src/index.ts
+commands.set('info', async (_args, msg, chat) => {
+    const total = await wa.Message.count(chat.id);
+    await msg.text(
+        [
+            `chat:    ${chat.name}`,
+            `id:      ${chat.id}`,
+            `type:    ${chat.type}`,
+            `stored:  ${total} messages`,
+        ].join('\n'),
+    );
+});
 
-```typescript
-import { writeFileSync } from "fs";
-import { WhatsApp } from "@arcaelas/whatsapp";
-import { commands, CommandContext } from "./commands";
+commands.set('echo', async (args, msg) => {
+    if (!args) {
+        await msg.text('usage: /echo <text>');
+        return;
+    }
+    await msg.text(args);
+});
 
-const PREFIX = "!";
-
-async function main() {
-  const wa = new WhatsApp();
-
-  wa.event.on("open", () => console.log("Bot connected"));
-  wa.event.on("error", (e) => console.error("Error:", e.message));
-
-  wa.event.on("message:created", async (msg) => {
-    // Ignore own messages
-    if (msg.me) return;
-
-    // Only text
-    if (msg.type !== "text") return;
-
-    const text = (await msg.content()).toString();
-
-    // Check prefix
-    if (!text.startsWith(PREFIX)) return;
-
-    // Parse command and arguments
-    const [command_name, ...args] = text.slice(PREFIX.length).split(" ");
-    const cmd = commands.get(command_name.toLowerCase());
-
-    if (!cmd) {
-      await wa.Message.text(msg.cid, `Command not found. Type ${PREFIX}help`);
-      return;
+wa.on('message:created', async (msg, chat) => {
+    if (msg.me) {
+        return;
     }
 
-    // Execute command
-    const ctx: CommandContext = {
-      wa,
-      msg,
-      cid: msg.cid,
-      args,
-      text: text.slice(PREFIX.length + command_name.length + 1),
-    };
+    const text = msg.caption.trim();
+    if (!text.startsWith(PREFIX)) {
+        return;
+    }
+
+    const space = text.indexOf(' ');
+    const name = (space === -1 ? text.slice(PREFIX.length) : text.slice(PREFIX.length, space)).toLowerCase();
+    const args = space === -1 ? '' : text.slice(space + 1).trim();
+
+    const handler = commands.get(name);
+    if (!handler) {
+        await msg.text(`unknown command: /${name} — try /help`);
+        return;
+    }
 
     try {
-      await cmd.execute(ctx);
-    } catch (error) {
-      console.error(`Error in command ${cmd.name}:`, error);
-      await wa.Message.text(msg.cid, "An error occurred while executing the command");
+        await handler(args, msg, chat);
+    } catch (err) {
+        console.error(`[cmd:${name}] failed`, err);
+        await msg.text('internal error');
     }
-  });
+});
 
-  // Connect
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      writeFileSync("qr.png", data);
-      console.log("Scan qr.png");
+process.on('SIGINT', async () => {
+    await wa.disconnect();
+    process.exit(0);
+});
+
+wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log(`[wa] pairing code: ${auth}`);
+    } else {
+        console.log('[wa] scan the QR (PNG buffer received)');
     }
-  });
+}).catch((err) => {
+    console.error('[wa] connect failed:', err);
+    process.exit(1);
+});
+```
 
-  console.log("Bot ready!");
+---
+
+## Anatomy of the dispatcher
+
+### 1. Registry
+
+```typescript
+const commands = new Map<string, CommandHandler>();
+```
+
+A `Map` is enough — keys are command names, values are async handlers. Adding a new command is one `commands.set(...)` call. No reflection, no metadata.
+
+### 2. Parsing
+
+```typescript
+const text = msg.caption.trim();
+if (!text.startsWith(PREFIX)) {
+    return;
 }
 
-main().catch(console.error);
+const space = text.indexOf(' ');
+const name = (space === -1 ? text.slice(PREFIX.length) : text.slice(PREFIX.length, space)).toLowerCase();
+const args = space === -1 ? '' : text.slice(space + 1).trim();
+```
+
+Splitting on the **first** whitespace gives the command name and a single string of arguments. If you need richer parsing (flags, quoted strings) plug in a CLI parser like `minimist` or `yargs-parser` here.
+
+### 3. Dispatch
+
+```typescript
+const handler = commands.get(name);
+if (!handler) {
+    await msg.text(`unknown command: /${name} — try /help`);
+    return;
+}
+```
+
+Unknown commands get a friendly hint instead of silence — much better UX than ignoring them.
+
+### 4. Error isolation
+
+```typescript
+try {
+    await handler(args, msg, chat);
+} catch (err) {
+    console.error(`[cmd:${name}] failed`, err);
+    await msg.text('internal error');
+}
+```
+
+A `try/catch` around the handler keeps a single buggy command from crashing the whole bot.
+
+---
+
+## Sending without quoting
+
+`msg.text(...)` always replies with a citation. To send a standalone message in the same chat use the static delegate:
+
+```typescript
+await wa.Message.text(chat.id, 'standalone message — no quote');
 ```
 
 ---
 
-## Adding new commands
+## What if I want less boilerplate?
 
-### Command with arguments
+If you're writing many commands and want a more declarative style, the library ships with an optional `@command` decorator that handles parsing, dispatch and error wrapping for you.
 
-```typescript title="src/commands/say.ts"
-import { register_command } from "./index";
+!!! tip "Check out the decorator example"
+    See [`examples/decorator-bot.md`](./decorator-bot.md) for the same bot rewritten with `@command('help')`, `@command('echo')`, etc. The dispatch logic disappears entirely — you only declare the methods.
 
-register_command({
-  name: "say",
-  description: "Repeat a message",
-  aliases: ["echo"],
-  async execute({ wa, cid, text }) {
-    if (!text.trim()) {
-      await wa.Message.text(cid, "Usage: !say <message>");
-      return;
-    }
-    await wa.Message.text(cid, text);
-  },
-});
-```
-
-### Command with validation
-
-```typescript title="src/commands/dice.ts"
-import { register_command } from "./index";
-
-register_command({
-  name: "dice",
-  description: "Roll a dice",
-  aliases: ["roll"],
-  async execute({ wa, cid, args }) {
-    const sides = parseInt(args[0]) || 6;
-
-    if (sides < 2 || sides > 100) {
-      await wa.Message.text(cid, "Dice must have between 2 and 100 sides");
-      return;
-    }
-
-    const result = Math.floor(Math.random() * sides) + 1;
-    await wa.Message.text(cid, `${sides}-sided dice: ${result}`);
-  },
-});
-```
-
-### Groups only command
-
-```typescript title="src/commands/group.ts"
-import { register_command } from "./index";
-
-register_command({
-  name: "group",
-  description: "Group information",
-  aliases: ["g"],
-  async execute({ wa, cid }) {
-    // Only in groups
-    if (!cid.endsWith("@g.us")) {
-      await wa.Message.text(cid, "This command only works in groups");
-      return;
-    }
-
-    const chat = await wa.Chat.get(cid);
-    if (!chat) return;
-
-    const members = await chat.members(0, 1000);
-
-    await wa.Message.text(
-      cid,
-      `*${chat.name}*\n\n` +
-      `Members: ${members.length}`
-    );
-  },
-});
-```
+For one-off bots or when you need full control over routing, the `Map` pattern shown here stays the simplest, most explicit option.
 
 ---
 
-## Run
+## Next steps
 
-```bash
-npx tsx src/index.ts
-```
-
----
-
-## Usage
-
-```
-!ping          -> pong!
-!help          -> Command list
-!time          -> 2:30:45 PM - Monday, January 1, 2025
-!say Hello     -> Hello
-!dice 20       -> 20-sided dice: 15
-!group         -> Group information
-```
+- [Basic bot](./basic-bot.md) — even simpler, no commands.
+- [Custom engine](./custom-engine.md) — bring your own storage.

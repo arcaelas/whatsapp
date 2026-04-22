@@ -1,137 +1,173 @@
 # Polls
 
-Examples of creating and handling polls.
+Polls in WhatsApp are end-to-end encrypted: each vote is encrypted on the voter's
+device and only the poll creator (and `@arcaelas/whatsapp` running on their session)
+can decrypt the tally. The library handles key derivation and decryption transparently
+— you only deal with `content`, `options` and `count`.
+
+!!! info "Encryption is automatic"
+    The library derives the per-poll HMAC key, decrypts incoming
+    `pollUpdateMessage` payloads and merges them into the original `Poll` instance.
+    You never need to touch raw bytes or vote signatures.
 
 ---
 
-## Create poll
+## Setup
 
-```typescript
-// Simple poll
-await wa.Message.poll("123456789@g.us", {
-  content: "What's your favorite color?",
-  options: [
-    { content: "Red" },
-    { content: "Blue" },
-    { content: "Green" },
-    { content: "Yellow" }
-  ]
+```typescript title="client.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { FileSystemEngine } from '@arcaelas/whatsapp/engines';
+
+export const wa = new WhatsApp({
+    engine: new FileSystemEngine(__dirname),
+    phone: 14155551234,
 });
-```
 
----
-
-## Read poll data
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.type !== "poll") return;
-
-  // Poll content is JSON
-  const buffer = await msg.content();
-  const poll = JSON.parse(buffer.toString()) as {
-    content: string;
-    options: Array<{ content: string }>;
-  };
-
-  console.log(`Poll: ${poll.content}`);
-  console.log("Options:");
-  poll.options.forEach((opt, i) => {
-    console.log(`  ${i + 1}. ${opt.content}`);
-  });
-});
-```
-
----
-
-## Poll bot
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
-
-  const text = (await msg.content()).toString();
-
-  // Command: !poll Question | Option1 | Option2 | ...
-  if (text.startsWith("!poll ")) {
-    const content = text.slice(6);
-    const parts = content.split("|").map(s => s.trim());
-
-    if (parts.length < 3) {
-      await wa.Message.text(
-        msg.cid,
-        "Usage: !poll Question | Option1 | Option2 | ...\n\n" +
-        "Example:\n" +
-        "!poll What should we eat? | Pizza | Sushi | Burger"
-      );
-      return;
+await wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log('Pair code:', auth);
     }
-
-    const [question, ...options] = parts;
-
-    if (options.length > 12) {
-      await wa.Message.text(msg.cid, "Maximum 12 options allowed");
-      return;
-    }
-
-    await wa.Message.poll(msg.cid, {
-      content: question,
-      options: options.map(opt => ({ content: opt }))
-    });
-
-    await wa.Message.text(msg.cid, `Poll created: "${question}"`);
-  }
 });
 ```
 
 ---
 
-## Timed poll
+## Creating a poll
 
-```typescript
-async function create_timed_poll(
-  wa: WhatsApp,
-  chat_id: string,
-  question: string,
-  options: string[],
-  duration_minutes: number
-) {
-  // Create poll
-  const poll_msg = await wa.Message.poll(chat_id, {
-    content: question,
-    options: options.map(opt => ({ content: opt }))
-  });
+`wa.Message.poll(cid, { content, options })` posts a single-choice poll. `content`
+is the question; each entry in `options` is an object with a `content` string.
 
-  if (!poll_msg) return;
+```typescript title="create-poll.ts"
+import { wa } from './client';
 
-  await wa.Message.text(chat_id, `Poll active for ${duration_minutes} minutes`);
+const GROUP_CID = '120363025912345678@g.us';
 
-  // Wait duration
-  await new Promise(r => setTimeout(r, duration_minutes * 60 * 1000));
+await wa.Message.poll(GROUP_CID, {
+    content: 'What should we order for lunch?',
+    options: [
+        { content: 'Pizza' },
+        { content: 'Sushi' },
+        { content: 'Tacos' },
+    ],
+});
+```
 
-  // Announce end
-  await wa.Message.text(chat_id, `*Poll ended!*\n\nCheck results in the poll.`);
+---
+
+## Receiving votes
+
+Vote tallies arrive as `message:updated` events on the original poll. Detect with
+`instanceof wa.Message.Poll`, then read `options` (each entry is `{ content, count }`)
+and the `multiple` flag.
+
+```typescript title="watch-poll.ts"
+import { wa } from './client';
+
+wa.on('message:updated', (msg, chat) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    console.log(`[${chat.name}] ${msg.caption}`);
+    console.log(`Mode: ${msg.multiple ? 'multi-select' : 'single-select'}`);
+    for (const option of msg.options) {
+        console.log(`  ${option.content}: ${option.count}`);
+    }
+});
+```
+
+!!! tip "Per-message subscription"
+    If you only care about a specific poll, use `poll.watch(handler)` after creating
+    it — the library returns an unsubscribe function and only fires for that exact
+    message.
+
+---
+
+## Voting programmatically
+
+Call `poll.select(index)` to cast a single-choice vote, or `poll.select([i, j])` for
+multi-select polls. Indices map to the order of `options` in the original
+`PollOptions`.
+
+```typescript title="vote.ts"
+import { wa } from './client';
+
+const POLL_CID = '120363025912345678@g.us';
+const POLL_MID = '3EB0C7689C2E0F5A4F4E';
+
+const poll = await wa.Message.get(POLL_CID, POLL_MID);
+if (poll instanceof wa.Message.Poll) {
+    if (poll.multiple) {
+        await poll.select([0, 2]); // first and third option
+    } else {
+        await poll.select(1); // second option
+    }
 }
-
-// Usage
-await create_timed_poll(
-  wa,
-  "123456789@g.us",
-  "What movie should we watch?",
-  ["Action", "Comedy", "Horror", "Drama"],
-  5 // 5 minutes
-);
 ```
 
 ---
 
-## Important notes
+## Auto-vote bot (test helper)
 
-!!! info "Option limit"
-    WhatsApp allows maximum 12 options per poll.
+Useful for integration tests: whenever a poll arrives in a watched chat, the bot
+picks a random valid option and votes. Demonstrates create + receive + vote in a
+single example.
 
-!!! warning "Vote visibility"
-    Votes on WhatsApp are anonymous. You can only see total count, not who voted.
+```typescript title="auto-vote-bot.ts"
+import { wa } from './client';
 
-!!! tip "Polls in groups"
-    Polls work best in groups where there are more participants.
+const TEST_GROUP = '120363025912345678@g.us';
+
+wa.on('message:created', async (msg) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    if (msg.cid !== TEST_GROUP || msg.me) {
+        return;
+    }
+
+    const total_options = msg.options.length;
+    if (total_options === 0) {
+        return;
+    }
+
+    if (msg.multiple) {
+        // Pick a random non-empty subset.
+        const picks: number[] = [];
+        for (let i = 0; i < total_options; i++) {
+            if (Math.random() < 0.5) {
+                picks.push(i);
+            }
+        }
+        if (picks.length === 0) {
+            picks.push(Math.floor(Math.random() * total_options));
+        }
+        await msg.select(picks);
+    } else {
+        const choice = Math.floor(Math.random() * total_options);
+        await msg.select(choice);
+    }
+
+    console.log(`Auto-voted on "${msg.caption}"`);
+});
+```
+
+---
+
+## Quoting a poll in a reply
+
+Like every `Message` subclass, `Poll` inherits `text()`, `image()`, etc. — replying
+to a poll quotes it automatically.
+
+```typescript title="reply-to-poll.ts"
+import { wa } from './client';
+
+wa.on('message:updated', async (msg) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    const total = msg.options.reduce((sum, o) => sum + o.count, 0);
+    if (total >= 10) {
+        await msg.text(`Closing the vote — we got ${total} responses.`);
+    }
+});
+```

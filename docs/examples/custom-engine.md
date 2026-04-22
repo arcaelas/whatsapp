@@ -1,209 +1,241 @@
-# Custom Engine Bot
+# Custom Engine
 
-Production bot using a custom engine for storage.
+The `Engine` interface is the storage contract behind `@arcaelas/whatsapp`. The library ships with `FileSystemEngine` and `RedisEngine`, but nothing stops you from writing your own — useful for testing, debugging, or integrating with an existing datastore.
 
----
+This guide walks through two custom implementations:
 
-## Description
-
-This example shows how to create a bot that uses a custom engine
-(PostgreSQL, S3, etc.) instead of the default FileEngine.
-
-The library already includes `RedisEngine` as an official export, so you can use it directly
-without implementing your own.
+1. **`InMemoryEngine`** — a learning-grade engine backed by a `Map`.
+2. **`LoggingEngine`** — a pass-through wrapper that logs every call (great for debugging).
 
 ---
 
-## Example: Using the built-in RedisEngine
-
-### Use the engine
-
-```typescript title="bot.ts"
-import { writeFileSync } from "fs";
-import Redis from "ioredis";
-import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
-import "dotenv/config";
-
-async function main() {
-  // Create Redis connection
-  const client = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
-
-  // Use the built-in RedisEngine
-  const engine = new RedisEngine(client, "wa:my-bot");
-
-  // Create instance with Redis engine
-  const wa = new WhatsApp({ engine });
-
-  // Logging
-  wa.event.on("open", () => console.log("[INFO] Connected"));
-  wa.event.on("close", () => console.log("[WARN] Disconnected"));
-  wa.event.on("error", (e) => console.error("[ERROR]", e.message));
-
-  // Messages
-  wa.event.on("message:created", async (msg) => {
-    if (msg.me || msg.type !== "text") return;
-
-    const text = (await msg.content()).toString();
-    const prefix = process.env.BOT_PREFIX || "!";
-
-    if (!text.startsWith(prefix)) return;
-
-    const [cmd] = text.slice(prefix.length).split(" ");
-
-    switch (cmd.toLowerCase()) {
-      case "ping":
-        await wa.Message.text(msg.cid, "pong!");
-        break;
-
-      case "status":
-        await wa.Message.text(
-          msg.cid,
-          `*Bot Status*\n\n` +
-          `Engine: Redis\n` +
-          `Uptime: ${Math.floor(process.uptime() / 60)} minutes`
-        );
-        break;
-
-      case "help":
-        await wa.Message.text(
-          msg.cid,
-          `Commands:\n` +
-          `${prefix}ping - Test\n` +
-          `${prefix}status - Bot status\n` +
-          `${prefix}help - This message`
-        );
-        break;
-    }
-  });
-
-  // Connect
-  console.log("[INFO] Starting bot...");
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      writeFileSync("/tmp/qr.png", data);
-      console.log("[INFO] QR saved to /tmp/qr.png");
-    } else {
-      console.log("[INFO] Code:", data);
-    }
-  });
-
-  console.log("[INFO] Bot ready!");
-
-  // Keep process alive
-  process.on("SIGINT", () => {
-    console.log("[INFO] Closing...");
-    process.exit(0);
-  });
-}
-
-main().catch((e) => {
-  console.error("[FATAL]", e);
-  process.exit(1);
-});
-```
-
----
-
-## Custom Engine Example
-
-If you need a different backend, implement the `Engine` interface.
-The key contract for `set(key, null)` is that it must delete the key AND all sub-keys
-with that prefix (cascade delete).
-
-```typescript title="CustomEngine.ts"
-import type { Engine } from "@arcaelas/whatsapp";
-
-class MyEngine implements Engine {
-  async get(key: string): Promise<string | null> {
-    // Return stored value or null
-  }
-
-  async set(key: string, value: string | null): Promise<void> {
-    if (value === null) {
-      // IMPORTANT: Must cascade delete.
-      // Delete the exact key AND all keys starting with key + "/"
-      // Example: set("chat/123", null) must also delete
-      //   chat/123/index, chat/123/messages, chat/123/message/*/*, etc.
-    } else {
-      // Store the value
-    }
-  }
-
-  async list(prefix: string, offset = 0, limit = 50): Promise<string[]> {
-    // Return keys matching prefix, ordered by most recent
-  }
-}
-```
-
----
-
-## Docker
-
-```dockerfile title="Dockerfile"
-FROM node:20-alpine
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci --only=production
-
-COPY . .
-
-CMD ["node", "--import", "tsx", "bot.ts"]
-```
-
-```yaml title="docker-compose.yml"
-version: "3.8"
-
-services:
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-
-  bot:
-    build: .
-    restart: unless-stopped
-    depends_on:
-      - redis
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - BOT_PREFIX=!
-    volumes:
-      - /tmp:/tmp  # For temporary QR
-```
-
----
-
-## Health check
+## The Engine interface
 
 ```typescript
-import { createServer } from "http";
-
-// Add after initializing the bot
-const server = createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      status: "ok",
-      connected: wa.socket !== null,
-      uptime: process.uptime(),
-    }));
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
-
-server.listen(3000, () => {
-  console.log("[INFO] Health check at http://localhost:3000/health");
-});
+export interface Engine {
+    get(path: string): Promise<string | null>;
+    set(path: string, value: string): Promise<void>;
+    unset(path: string): Promise<boolean>;
+    list(path: string, offset?: number, limit?: number): Promise<string[]>;
+    count(path: string): Promise<number>;
+    clear(): Promise<void>;
+}
 ```
+
+Six methods, all path-based, all string in / string out. The library handles JSON serialization above the engine — your job is purely key-value persistence.
+
+Rules to honor:
+
+- **`set`** must refresh the modification time of the key — `list` orders by mtime DESC.
+- **`unset`** must cascade: removing `/chat/123` also removes `/chat/123/message/...`.
+- **`list`** returns only the **direct** children of a path, paginated, mtime DESC.
+- **`count`** must work without loading the values (use a counter or index).
 
 ---
 
-## Environment variables
+## 1. `InMemoryEngine`
 
-```bash title=".env"
-REDIS_URL=redis://localhost:6379
-BOT_PREFIX=!
+A volatile, single-process engine backed by two `Map`s — one for values, one for timestamps. Everything is lost when the process exits.
+
+```typescript title="in-memory-engine.ts"
+import type { Engine } from '@arcaelas/whatsapp';
+
+function normalize(path: string): string {
+    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
+}
+
+export class InMemoryEngine implements Engine {
+    private readonly _values = new Map<string, string>();
+    private readonly _mtimes = new Map<string, number>();
+
+    async get(path: string): Promise<string | null> {
+        return this._values.get(normalize(path)) ?? null;
+    }
+
+    async set(path: string, value: string): Promise<void> {
+        const key = normalize(path);
+        this._values.set(key, value);
+        this._mtimes.set(key, Date.now());
+    }
+
+    async unset(path: string): Promise<boolean> {
+        const key = normalize(path);
+        const prefix = `${key}/`;
+
+        this._values.delete(key);
+        this._mtimes.delete(key);
+
+        for (const k of [...this._values.keys()]) {
+            if (k.startsWith(prefix)) {
+                this._values.delete(k);
+                this._mtimes.delete(k);
+            }
+        }
+        return true;
+    }
+
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        const key = normalize(path);
+        const prefix = key === '' ? '' : `${key}/`;
+
+        const children: { full: string; mtime: number }[] = [];
+        const seen = new Set<string>();
+
+        for (const k of this._values.keys()) {
+            if (!k.startsWith(prefix) || k === key) {
+                continue;
+            }
+            const tail = k.slice(prefix.length);
+            const slash = tail.indexOf('/');
+            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
+
+            if (seen.has(direct) || !this._values.has(direct)) {
+                continue;
+            }
+            seen.add(direct);
+            children.push({ full: direct, mtime: this._mtimes.get(direct) ?? 0 });
+        }
+
+        children.sort((a, b) => b.mtime - a.mtime);
+        return children
+            .slice(offset, offset + limit)
+            .map((c) => this._values.get(c.full) ?? '');
+    }
+
+    async count(path: string): Promise<number> {
+        const key = normalize(path);
+        const prefix = key === '' ? '' : `${key}/`;
+        const seen = new Set<string>();
+
+        for (const k of this._values.keys()) {
+            if (!k.startsWith(prefix) || k === key) {
+                continue;
+            }
+            const tail = k.slice(prefix.length);
+            const slash = tail.indexOf('/');
+            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
+            if (this._values.has(direct)) {
+                seen.add(direct);
+            }
+        }
+        return seen.size;
+    }
+
+    async clear(): Promise<void> {
+        this._values.clear();
+        this._mtimes.clear();
+    }
+}
 ```
+
+Use it like any built-in engine:
+
+```typescript title="index.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { InMemoryEngine } from './in-memory-engine';
+
+const wa = new WhatsApp({
+    engine: new InMemoryEngine(),
+    phone: 584144709840,
+});
+
+wa.connect((auth) => {
+    console.log(typeof auth === 'string' ? `pin: ${auth}` : 'scan the QR');
+});
+```
+
+!!! warning "Not for production"
+    `InMemoryEngine` loses every byte when the process exits. That includes your session credentials — every restart will require a fresh QR/PIN pairing. Use `FileSystemEngine` for local development and `RedisEngine` for distributed deployments.
+
+!!! note "Use cases"
+    Where it *does* shine: unit tests, ephemeral one-shot scripts, exploring the API without polluting the disk, and CI pipelines that mock out persistence.
+
+---
+
+## 2. `LoggingEngine` — a pass-through wrapper
+
+Wrapping another engine to observe every call is one of the most useful debugging tools you can build. The pattern is mechanical: implement `Engine`, hold an inner engine, log around each call, then delegate.
+
+```typescript title="logging-engine.ts"
+import type { Engine } from '@arcaelas/whatsapp';
+
+export class LoggingEngine implements Engine {
+    constructor(
+        private readonly _inner: Engine,
+        private readonly _label = 'engine',
+    ) { }
+
+    private _log(op: string, path: string, extra?: string): void {
+        const tag = `[${this._label}]`;
+        console.log(extra ? `${tag} ${op} ${path} ${extra}` : `${tag} ${op} ${path}`);
+    }
+
+    async get(path: string): Promise<string | null> {
+        const value = await this._inner.get(path);
+        this._log('get', path, value === null ? 'MISS' : `HIT (${value.length}b)`);
+        return value;
+    }
+
+    async set(path: string, value: string): Promise<void> {
+        this._log('set', path, `${value.length}b`);
+        await this._inner.set(path, value);
+    }
+
+    async unset(path: string): Promise<boolean> {
+        this._log('unset', path);
+        return this._inner.unset(path);
+    }
+
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        const values = await this._inner.list(path, offset, limit);
+        this._log('list', path, `offset=${offset} limit=${limit} -> ${values.length} items`);
+        return values;
+    }
+
+    async count(path: string): Promise<number> {
+        const total = await this._inner.count(path);
+        this._log('count', path, `-> ${total}`);
+        return total;
+    }
+
+    async clear(): Promise<void> {
+        this._log('clear', '*');
+        await this._inner.clear();
+    }
+}
+```
+
+Wire it around any other engine — the bot doesn't know the difference:
+
+```typescript title="index.ts"
+import { join } from 'node:path';
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
+import { LoggingEngine } from './logging-engine';
+
+const wa = new WhatsApp({
+    engine: new LoggingEngine(
+        new FileSystemEngine(join(__dirname, 'session')),
+        'fs',
+    ),
+    phone: 584144709840,
+});
+```
+
+Now every read/write goes through the console:
+
+```text
+[fs] get /session/creds HIT (1842b)
+[fs] set /chat/584144709840@s.whatsapp.net 73b
+[fs] list /chat offset=0 limit=50 -> 12 items
+[fs] count /chat/584144709840@s.whatsapp.net/message -> 47
+```
+
+!!! tip "Composition is free"
+    The wrapper pattern composes — wrap a `RedisEngine` to log Redis traffic, wrap an `InMemoryEngine` for a chatty unit test, or even chain wrappers (e.g. metrics + logging). Because the contract is just six methods, decorators stay trivial.
+
+---
+
+## Next steps
+
+- [Basic bot](./basic-bot.md) — the smallest possible bot.
+- [Command bot](./command-bot.md) — dispatch table for textual commands.
