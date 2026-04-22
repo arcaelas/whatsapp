@@ -45,7 +45,7 @@ El `Engine` es la capa de persistencia para credenciales, chats, contactos y men
     Respalda la sesión con Redis y asigna un espacio de nombres a las claves con el prefijo que pasas. Te permite escalar horizontalmente y sobrevivir a reinicios de contenedor.
 
 !!! tip "Consejo"
-    También puedes implementar la interfaz `Engine` tú mismo para apuntar a SQLite, S3, DynamoDB o lo que sea. Consulta [Referencias](references/engine.es.md).
+    También puedes implementar la interfaz `Engine` tú mismo para apuntar a SQLite, S3, DynamoDB o lo que sea. Consulta [Engines](references/engines.es.md).
 
 ---
 
@@ -162,4 +162,4 @@ Algunas opciones del cliente que vale la pena conocer:
 - **`reconnect`** *(por defecto `true`)* — acepta `boolean`, un número de intentos máximos, o `{ max, interval }` (intervalo en segundos, por defecto 60). Los cierres transitorios disparados por el protocolo no consumen presupuesto de reintentos.
 - **`sync`** *(por defecto `false`)* — habilita la sincronización completa de historial de baileys; los chats, contactos y mensajes importados se persisten a través del motor.
 
-La lista completa de opciones, el mapa de eventos y las APIs de los delegados viven en [Referencias](references/whatsapp.es.md). Para recetas de extremo a extremo (bots, webhooks, decoradores, configuraciones multicuenta) navega los [Ejemplos](examples/index.es.md).
+La lista completa de opciones, el mapa de eventos y las APIs de los delegados viven en [Referencias](references/whatsapp.es.md). Para recetas de extremo a extremo (bots, webhooks, decoradores, configuraciones multicuenta) navega el ejemplo [Bot Básico](examples/basic-bot.es.md) o la demostración del [Bot con Decoradores](examples/decorator-bot.es.md).
