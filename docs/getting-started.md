@@ -45,7 +45,7 @@ The `Engine` is the persistence layer for credentials, chats, contacts, and mess
     Backs the session by Redis and namespaces keys with the prefix you pass. Lets you scale horizontally and survive container restarts.
 
 !!! tip
-    You can also implement the `Engine` interface yourself to target SQLite, S3, DynamoDB, or anything else. See [References](references/engine.md).
+    You can also implement the `Engine` interface yourself to target SQLite, S3, DynamoDB, or anything else. See [Engines](references/engines.md).
 
 ---
 
@@ -162,4 +162,4 @@ A few client options worth knowing about:
 - **`reconnect`** *(default `true`)* — accepts `boolean`, a number of max attempts, or `{ max, interval }` (interval in seconds, default 60). Transient closes triggered by the protocol do not consume retry budget.
 - **`sync`** *(default `false`)* — enables baileys' full history sync; imported chats, contacts, and messages are persisted through the engine.
 
-The complete option list, event map, and delegate APIs live in [References](references/whatsapp.md). For end-to-end recipes (bots, webhooks, decorators, multi-account setups) browse the [Examples](examples/index.md).
+The complete option list, event map, and delegate APIs live in [References](references/whatsapp.md). For end-to-end recipes (bots, webhooks, decorators, multi-account setups) browse the [Basic Bot](examples/basic-bot.md) example or the [Decorator Bot](examples/decorator-bot.md) showcase.
