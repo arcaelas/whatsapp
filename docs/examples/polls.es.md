@@ -1,139 +1,172 @@
-# Encuestas
+# Polls
 
-Ejemplos de creacion y manejo de encuestas.
+Las encuestas en WhatsApp están cifradas end-to-end: cada voto se cifra en el dispositivo del votante
+y solo el creador de la encuesta (y `@arcaelas/whatsapp` corriendo en su sesión)
+puede descifrar el conteo. La librería maneja la derivación de claves y el descifrado de forma transparente
+— solo tratas con `content`, `options` y `count`.
+
+!!! info "El cifrado es automático"
+    La librería deriva la clave HMAC por encuesta, descifra los payloads entrantes de
+    `pollUpdateMessage` y los fusiona en la instancia original de `Poll`.
+    Nunca necesitas tocar bytes crudos ni firmas de votos.
 
 ---
 
-## Crear encuesta
+## Configuración
 
-```typescript
-// Encuesta simple
-await wa.Message.poll("123456789@g.us", {
-  content: "Cual es tu color favorito?",
-  options: [
-    { content: "Rojo" },
-    { content: "Azul" },
-    { content: "Verde" },
-    { content: "Amarillo" }
-  ]
+```typescript title="client.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { FileSystemEngine } from '@arcaelas/whatsapp/engines';
+
+export const wa = new WhatsApp({
+    engine: new FileSystemEngine(__dirname),
+    phone: 14155551234,
 });
-```
 
----
-
-## Leer datos de encuesta
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.type !== "poll") return;
-
-  // El contenido de una encuesta es JSON
-  const buffer = await msg.content();
-  const poll = JSON.parse(buffer.toString()) as {
-    content: string;
-    options: Array<{ content: string }>;
-  };
-
-  console.log(`Encuesta: ${poll.content}`);
-  console.log("Opciones:");
-  poll.options.forEach((opt, i) => {
-    console.log(`  ${i + 1}. ${opt.content}`);
-  });
-});
-```
-
----
-
-## Bot de encuestas
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
-
-  const text = (await msg.content()).toString();
-
-  // Comando: !encuesta Pregunta | Opcion1 | Opcion2 | ...
-  if (text.startsWith("!encuesta ")) {
-    const content = text.slice(10);
-    const parts = content.split("|").map(s => s.trim());
-
-    if (parts.length < 3) {
-      await wa.Message.text(
-        msg.cid,
-        "Uso: !encuesta Pregunta | Opcion1 | Opcion2 | ...\n\n" +
-        "Ejemplo:\n" +
-        "!encuesta Que comemos hoy? | Pizza | Sushi | Hamburguesa"
-      );
-      return;
+await wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log('Pair code:', auth);
     }
-
-    const [question, ...options] = parts;
-
-    if (options.length > 12) {
-      await wa.Message.text(msg.cid, "Maximo 12 opciones permitidas");
-      return;
-    }
-
-    await wa.Message.poll(msg.cid, {
-      content: question,
-      options: options.map(opt => ({ content: opt }))
-    });
-
-    await wa.Message.text(msg.cid, `Encuesta creada: "${question}"`);
-  }
 });
 ```
 
 ---
 
-## Encuesta con temporizador
+## Crear una encuesta
 
-```typescript
-import type { WhatsApp } from "@arcaelas/whatsapp";
+`wa.Message.poll(cid, { content, options })` publica una encuesta de elección única. `content`
+es la pregunta; cada entrada en `options` es un objeto con un string `content`.
 
-async function create_timed_poll(
-  wa: WhatsApp,
-  chat_id: string,
-  question: string,
-  options: string[],
-  duration_minutes: number
-) {
-  // Crear encuesta
-  const poll_msg = await wa.Message.poll(chat_id, {
-    content: question,
-    options: options.map(opt => ({ content: opt }))
-  });
+```typescript title="create-poll.ts"
+import { wa } from './client';
 
-  if (!poll_msg) return;
+const GROUP_CID = '120363025912345678@g.us';
 
-  await wa.Message.text(chat_id, `Encuesta activa por ${duration_minutes} minutos`);
+await wa.Message.poll(GROUP_CID, {
+    content: 'What should we order for lunch?',
+    options: [
+        { content: 'Pizza' },
+        { content: 'Sushi' },
+        { content: 'Tacos' },
+    ],
+});
+```
 
-  // Esperar duracion
-  await new Promise(r => setTimeout(r, duration_minutes * 60 * 1000));
+---
 
-  // Anunciar que termino
-  await wa.Message.text(chat_id, `*Encuesta finalizada!*\n\nVer resultados en la encuesta.`);
+## Recibir votos
+
+Los conteos de votos llegan como eventos `message:updated` sobre la encuesta original. Detéctalos con
+`instanceof wa.Message.Poll`, luego lee `options` (cada entrada es `{ content, count }`)
+y la bandera `multiple`.
+
+```typescript title="watch-poll.ts"
+import { wa } from './client';
+
+wa.on('message:updated', (msg, chat) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    console.log(`[${chat.name}] ${msg.caption}`);
+    console.log(`Mode: ${msg.multiple ? 'multi-select' : 'single-select'}`);
+    for (const option of msg.options) {
+        console.log(`  ${option.content}: ${option.count}`);
+    }
+});
+```
+
+!!! tip "Suscripción por mensaje"
+    Si solo te importa una encuesta específica, usa `poll.watch(handler)` después de crearla
+    — la librería devuelve una función de desuscripción y solo se dispara para ese mensaje exacto.
+
+---
+
+## Votar programáticamente
+
+Llama a `poll.select(index)` para emitir un voto de elección única, o `poll.select([i, j])` para
+encuestas multi-select. Los índices mapean al orden de `options` en el `PollOptions`
+original.
+
+```typescript title="vote.ts"
+import { wa } from './client';
+
+const POLL_CID = '120363025912345678@g.us';
+const POLL_MID = '3EB0C7689C2E0F5A4F4E';
+
+const poll = await wa.Message.get(POLL_CID, POLL_MID);
+if (poll instanceof wa.Message.Poll) {
+    if (poll.multiple) {
+        await poll.select([0, 2]); // primera y tercera opción
+    } else {
+        await poll.select(1); // segunda opción
+    }
 }
-
-// Uso
-await create_timed_poll(
-  wa,
-  "123456789@g.us",
-  "Que pelicula vemos?",
-  ["Accion", "Comedia", "Terror", "Drama"],
-  5 // 5 minutos
-);
 ```
 
 ---
 
-## Notas importantes
+## Bot de auto-voto (helper de tests)
 
-!!! info "Limite de opciones"
-    WhatsApp permite maximo 12 opciones por encuesta.
+Útil para tests de integración: cada vez que llega una encuesta en un chat observado, el bot
+elige una opción válida al azar y vota. Demuestra crear + recibir + votar en un
+solo ejemplo.
 
-!!! warning "Visibilidad de votos"
-    Los votos en WhatsApp son anonimos. Solo puedes ver el conteo total, no quien voto.
+```typescript title="auto-vote-bot.ts"
+import { wa } from './client';
 
-!!! tip "Encuestas en grupos"
-    Las encuestas funcionan mejor en grupos donde hay mas participantes.
+const TEST_GROUP = '120363025912345678@g.us';
+
+wa.on('message:created', async (msg) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    if (msg.cid !== TEST_GROUP || msg.me) {
+        return;
+    }
+
+    const total_options = msg.options.length;
+    if (total_options === 0) {
+        return;
+    }
+
+    if (msg.multiple) {
+        // Elegir un subconjunto no vacío aleatorio.
+        const picks: number[] = [];
+        for (let i = 0; i < total_options; i++) {
+            if (Math.random() < 0.5) {
+                picks.push(i);
+            }
+        }
+        if (picks.length === 0) {
+            picks.push(Math.floor(Math.random() * total_options));
+        }
+        await msg.select(picks);
+    } else {
+        const choice = Math.floor(Math.random() * total_options);
+        await msg.select(choice);
+    }
+
+    console.log(`Auto-voted on "${msg.caption}"`);
+});
+```
+
+---
+
+## Citar una encuesta en una respuesta
+
+Como cada subclase de `Message`, `Poll` hereda `text()`, `image()`, etc. — responder
+a una encuesta la cita automáticamente.
+
+```typescript title="reply-to-poll.ts"
+import { wa } from './client';
+
+wa.on('message:updated', async (msg) => {
+    if (!(msg instanceof wa.Message.Poll)) {
+        return;
+    }
+    const total = msg.options.reduce((sum, o) => sum + o.count, 0);
+    if (total >= 10) {
+        await msg.text(`Closing the vote — we got ${total} responses.`);
+    }
+});
+```

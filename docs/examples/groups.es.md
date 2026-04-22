@@ -1,194 +1,197 @@
-# Gestion de Grupos
+# Groups
 
-Ejemplos de trabajo con grupos de WhatsApp.
+Los chats grupales usan la misma API que las conversaciones 1:1 — la única diferencia es que el
+CID termina con `@g.us`. La instancia `Chat` expone helpers específicos de grupo como
+`members()` y funciona con los delegados estáticos en `wa.Chat.*`.
+
+!!! info "Detección"
+    Usa `chat.type === 'group'` para ramificar entre chats de grupo y de contacto. La verificación se
+    deriva del sufijo del JID y siempre es síncrona.
 
 ---
 
-## Obtener informacion de grupo
+## Configuración
 
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
+```typescript title="client.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { FileSystemEngine } from '@arcaelas/whatsapp/engines';
 
-if (chat && chat.type === "group") {
-  console.log(`Nombre: ${chat.name}`);
-  console.log(`ID: ${chat.id}`);
+export const wa = new WhatsApp({
+    engine: new FileSystemEngine(__dirname),
+    phone: 14155551234,
+});
 
-  // Miembros
-  const members = await chat.members(0, 1000);
-  console.log(`Miembros: ${members.length}`);
+await wa.connect((auth) => {
+    if (typeof auth === 'string') {
+        console.log('Pair code:', auth);
+    }
+});
+```
 
-  for (const member of members) {
-    console.log(`  - ${member.name} (${member.phone})`);
-  }
+---
+
+## Detectar un mensaje de grupo
+
+```typescript title="detect-group.ts"
+import { wa } from './client';
+
+wa.on('message:created', async (msg, chat) => {
+    if (chat.type === 'group') {
+        const author = await msg.author();
+        console.log(`[${chat.name}] ${author.name}: ${msg.caption}`);
+    }
+});
+```
+
+---
+
+## Listar miembros
+
+`chat.members(offset, limit)` devuelve instancias de `Contact` hidratadas y está paginado.
+Para grupos típicos, traer los primeros 500 en una sola llamada es suficiente.
+
+```typescript title="list-members.ts"
+import { wa } from './client';
+
+const GROUP_CID = '120363025912345678@g.us';
+
+const chat = await wa.Chat.get(GROUP_CID);
+if (chat && chat.type === 'group') {
+    const members = await chat.members(0, 500);
+    console.log(`${chat.name} has ${members.length} members:`);
+    for (const member of members) {
+        console.log(`- ${member.name} (${member.id})`);
+    }
 }
 ```
 
 ---
 
-## Detectar grupos en eventos
+## Enviar a un grupo
 
-```typescript
-wa.event.on("chat:created", (chat) => {
-  if (chat.type === "group") {
-    console.log(`Grupo creado: ${chat.name}`);
-  }
-});
+Idéntico a un chat 1:1 — solo apunta al CID del grupo:
 
-wa.event.on("message:created", async (msg) => {
-  // Verificar si el mensaje es de un grupo
-  const is_group = msg.cid.endsWith("@g.us");
+```typescript title="send-to-group.ts"
+import { readFile } from 'node:fs/promises';
+import { wa } from './client';
 
-  if (is_group) {
-    console.log(`Mensaje en grupo: ${msg.cid}`);
-  }
-});
+const GROUP_CID = '120363025912345678@g.us';
+
+await wa.Message.text(GROUP_CID, 'Standup starts in 5 minutes');
+
+const banner = await readFile('./assets/standup.png');
+await wa.Message.image(GROUP_CID, banner, { caption: 'See you there!' });
 ```
+
+!!! warning "Mencionar usuarios"
+    La API de envío de v3 actualmente no expone un parámetro para `ContextInfo.mentionedJid`,
+    por lo que las menciones `@user` no pueden adjuntarse a mensajes salientes desde esta librería. La
+    lista de menciones cruda está disponible en mensajes **entrantes** vía `msg._doc.raw` si
+    necesitas reaccionar a menciones entrantes.
 
 ---
 
-## Enviar mensajes a grupos
+## Comandos solo para admins
 
-```typescript
-// Enviar texto a un grupo
-await wa.Message.text("123456789@g.us", "Hola grupo!");
+No hay verificación de roles incorporada — compara `msg.from` contra tu propia whitelist. El
+siguiente bot escucha `!purge` y solo actúa si el remitente está en el conjunto de admins.
 
-// Enviar imagen a un grupo
-import * as fs from "fs";
-const img = fs.readFileSync("foto.jpg");
-await wa.Message.image("123456789@g.us", img, "Foto para el grupo");
+```typescript title="admin-commands.ts"
+import { wa } from './client';
 
-// Crear encuesta en grupo
-await wa.Message.poll("123456789@g.us", {
-  content: "Donde nos juntamos?",
-  options: [
-    { content: "En mi casa" },
-    { content: "En el parque" },
-    { content: "En el centro" }
-  ]
-});
-```
+const ADMINS = new Set([
+    '14155550001@s.whatsapp.net',
+    '14155550002@s.whatsapp.net',
+]);
 
----
-
-## Responder en grupos
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  // Solo procesar mensajes de grupos
-  if (!msg.cid.endsWith("@g.us")) return;
-
-  if (msg.type !== "text") return;
-
-  const text = (await msg.content()).toString().toLowerCase();
-
-  // Responder
-  if (text.includes("hola")) {
-    await wa.Message.text(msg.cid, "Hola! Bienvenido al grupo");
-  }
+wa.on('message:created', async (msg, chat) => {
+    if (chat.type !== 'group') {
+        return;
+    }
+    if (!(msg instanceof wa.Message.Text)) {
+        return;
+    }
+    if (msg.caption.trim() !== '!purge') {
+        return;
+    }
+    if (!ADMINS.has(msg.from)) {
+        await msg.text('Only admins can run that command.');
+        return;
+    }
+    await chat.clear();
+    await msg.text('Local history cleared.');
 });
 ```
 
+!!! tip "Alternativa con decoradores"
+    Para bots más grandes prefiere el decorador `@from` de
+    `@arcaelas/whatsapp/decorators` — elimina el boilerplate de arriba y funciona
+    tanto con JIDs individuales como con arrays.
+
 ---
 
-## Obtener miembros de un grupo
+## Eventos de unión / salida
 
-```typescript
-const group_id = "123456789@g.us";
-const chat = await wa.Chat.get(group_id);
-if (!chat) throw new Error("Grupo no encontrado");
-const members = await chat.members(0, 1000);
+El mapa de eventos de v3 (`connected`, `chat:*`, `contact:*`, `message:*`) **no**
+incluye eventos dedicados `group:join` o `group:leave`. Para reaccionar a cambios de
+membresía hoy tienes dos opciones:
 
-console.log(`Grupo tiene ${members.length} miembros:`);
-for (const member of members) {
-  console.log(`  - ${member.name}: ${member.phone}`);
-}
+- Escuchar el evento de sistema `message:created` e inspeccionar el
+  `msg._doc.raw.messageStubType` subyacente para los stubs de grupo de Baileys (`GROUP_PARTICIPANT_ADD`,
+  `GROUP_PARTICIPANT_REMOVE`, etc.).
+- Hacer polling periódico de `chat.members()` y comparar contra un conjunto cacheado.
+
+```typescript title="membership-poll.ts"
+import { wa } from './client';
+
+const GROUP_CID = '120363025912345678@g.us';
+const known = new Set<string>();
+
+setInterval(async () => {
+    const chat = await wa.Chat.get(GROUP_CID);
+    if (!chat || chat.type !== 'group') {
+        return;
+    }
+    const current = await chat.members(0, 500);
+    const current_ids = new Set(current.map((c) => c.id));
+
+    for (const id of current_ids) {
+        if (!known.has(id)) {
+            console.log(`Joined: ${id}`);
+        }
+    }
+    for (const id of known) {
+        if (!current_ids.has(id)) {
+            console.log(`Left: ${id}`);
+        }
+    }
+    known.clear();
+    for (const id of current_ids) {
+        known.add(id);
+    }
+}, 30_000);
 ```
 
 ---
 
-## Exportar miembros a JSON
+## Archivar, fijar y silenciar
 
-```typescript
-import * as fs from "fs";
-import type { WhatsApp } from "@arcaelas/whatsapp";
+Los delegados estáticos en `wa.Chat` aceptan cualquier CID — incluyendo el de un grupo. Cada uno
+devuelve `true` en caso de éxito.
 
-async function export_group_members(wa: WhatsApp, group_id: string) {
-  const chat = await wa.Chat.get(group_id);
-  if (!chat || chat.type !== "group") {
-    throw new Error("Grupo no encontrado");
-  }
+```typescript title="manage-group.ts"
+import { wa } from './client';
 
-  const members = await chat.members(0, 10000);
+const GROUP_CID = '120363025912345678@g.us';
 
-  const data = {
-    group: {
-      id: chat.id,
-      name: chat.name,
-    },
-    exported_at: new Date().toISOString(),
-    members: members.map(m => ({
-      id: m.id,
-      phone: m.phone,
-      name: m.name,
-    })),
-  };
+await wa.Chat.archive(GROUP_CID, true);
+await wa.Chat.pin(GROUP_CID, true);
+await wa.Chat.mute(GROUP_CID, true);
 
-  const filename = `grupo_${chat.name.replace(/[^a-z0-9]/gi, "_")}.json`;
-  fs.writeFileSync(filename, JSON.stringify(data, null, 2));
-
-  console.log(`Exportados ${members.length} miembros a ${filename}`);
-}
+// Revertirlos luego
+await wa.Chat.mute(GROUP_CID, false);
+await wa.Chat.archive(GROUP_CID, false);
 ```
 
----
-
-## Bot de comandos para grupos
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me || msg.type !== "text") return;
-
-  // Solo en grupos
-  if (!msg.cid.endsWith("@g.us")) return;
-
-  const text = (await msg.content()).toString();
-  if (!text.startsWith("!")) return;
-
-  const [cmd] = text.slice(1).split(" ");
-
-  switch (cmd.toLowerCase()) {
-    case "info":
-      const chat = await wa.Chat.get(msg.cid);
-      if (chat) {
-        const members = await chat.members(0, 1000);
-        await wa.Message.text(
-          msg.cid,
-          `*${chat.name}*\n\n` +
-          `ID: ${chat.id}\n` +
-          `Miembros: ${members.length}`
-        );
-      }
-      break;
-
-    case "miembros":
-      const group_chat = await wa.Chat.get(msg.cid);
-      if (!group_chat) break;
-      const group_members = await group_chat.members(0, 50);
-      const list = group_members.map(m => `- ${m.name}`).join("\n");
-      await wa.Message.text(msg.cid, `*Miembros:*\n${list}`);
-      break;
-  }
-});
-```
-
----
-
-## Notas
-
-!!! info "JID de grupo"
-    Los grupos tienen JID con formato `{id}@g.us`
-
-!!! tip "Diferenciacion"
-    Usa `chat.type === "group"` o `cid.endsWith("@g.us")` para detectar grupos
+Los equivalentes a nivel de instancia (`chat.archive(true)`, `chat.pin(true)`,
+`chat.mute(true)`) funcionan idénticamente una vez que has llamado a `wa.Chat.get(cid)`.

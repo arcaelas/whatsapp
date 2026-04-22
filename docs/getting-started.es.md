@@ -1,295 +1,165 @@
-# Primeros Pasos
+# Primeros pasos
 
-Este tutorial te guiara paso a paso para crear tu primer bot de WhatsApp.
+Este tutorial te guía a través de una sesión completa de `@arcaelas/whatsapp`: inicializar un proyecto, elegir un motor de almacenamiento, escuchar eventos, emparejar el dispositivo, responder a un mensaje y apagar limpiamente.
 
 ---
 
-## 1. Crear el proyecto
+## 1. Inicializa el proyecto
+
+Crea un directorio nuevo y agrega el paquete:
 
 ```bash
-mkdir mi-bot-whatsapp
-cd mi-bot-whatsapp
-npm init -y
-npm install @arcaelas/whatsapp typescript tsx
+mkdir whatsapp-bot && cd whatsapp-bot
+yarn init -y
+yarn add @arcaelas/whatsapp
+yarn add -D tsx typescript @types/node
 ```
+
+Crea un archivo `index.ts` en la raíz del proyecto — ahí vivirá el resto de esta guía.
 
 ---
 
-## 2. Estructura basica
+## 2. Elige un motor
 
-Crea el archivo principal:
+El `Engine` es la capa de persistencia para credenciales, chats, contactos y mensajes. La librería entrega dos implementaciones:
+
+=== "FileSystemEngine (desarrollo local)"
+
+    ```typescript title="index.ts"
+    import { FileSystemEngine } from "@arcaelas/whatsapp";
+
+    const engine = new FileSystemEngine(__dirname + "/.session");
+    ```
+
+    Almacena todo como archivos bajo el directorio que proporciones. Ideal para desarrollo y despliegues de un solo proceso.
+
+=== "RedisEngine (producción)"
+
+    ```typescript title="index.ts"
+    import { RedisEngine } from "@arcaelas/whatsapp";
+    import Redis from "ioredis";
+
+    const engine = new RedisEngine(new Redis(process.env.REDIS_URL!), "bot:main");
+    ```
+
+    Respalda la sesión con Redis y asigna un espacio de nombres a las claves con el prefijo que pasas. Te permite escalar horizontalmente y sobrevivir a reinicios de contenedor.
+
+!!! tip "Consejo"
+    También puedes implementar la interfaz `Engine` tú mismo para apuntar a SQLite, S3, DynamoDB o lo que sea. Consulta [Referencias](references/engine.es.md).
+
+---
+
+## 3. Instancia el cliente
+
+`new WhatsApp(...)` no abre una conexión — solo conecta los delegados y el emisor de eventos.
+
+```typescript title="index.ts" hl_lines="4 5 6 7"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+
+const engine = new FileSystemEngine(__dirname + "/.session");
+const wa = new WhatsApp({
+    engine,
+    phone: 584144709840, // omite para usar emparejamiento por QR
+});
+```
+
+El campo `phone` decide el flujo de emparejamiento: provéelo para recibir un PIN de 8 caracteres, u omítelo para recibir un buffer PNG con el QR.
+
+---
+
+## 4. Registra listeners antes de conectar
+
+Siempre adjunta los listeners **antes** de llamar a `connect()` para que nunca pierdas los primeros eventos. Cada listener recibe el payload principal primero y la instancia `WhatsApp` al final; los eventos de mensaje y chat también reciben el `Chat` relacionado en medio.
 
 ```typescript title="index.ts"
-import { WhatsApp } from "@arcaelas/whatsapp";
+wa.on("connected", () => {
+    console.log("session ready");
+});
 
-async function main() {
-  // Crear instancia de WhatsApp
-  const wa = new WhatsApp();
+wa.on("disconnected", () => {
+    console.log("session closed");
+});
 
-  // Escuchar eventos antes de conectar
-  wa.event.on("open", () => console.log("Conectado!"));
-  wa.event.on("close", () => console.log("Desconectado"));
-  wa.event.on("error", (err) => console.error("Error:", err.message));
-
-  // Conectar mostrando QR en consola
-  console.log("Esperando QR...");
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      // Guardar QR como imagen
-      const fs = await import("fs");
-      fs.writeFileSync("qr.png", data);
-      console.log("QR guardado en qr.png - Escanea con tu telefono");
-    } else {
-      // Codigo de 8 digitos (si usas phone)
-      console.log("Codigo de emparejamiento:", data);
-    }
-  });
-
-  console.log("Bot iniciado!");
-}
-
-main().catch(console.error);
+wa.on("message:created", async (msg, chat, wa) => {
+    if (msg.me) return;
+    console.log(`[${chat.id}] ${msg.caption}`);
+});
 ```
+
+El mapa completo de eventos (`chat:*`, `contact:*`, `message:updated`, `message:reacted`, `message:seen`, etc.) está documentado en [Referencias](references/whatsapp.es.md).
 
 ---
 
-## 3. Ejecutar
+## 5. Conecta y maneja el payload de emparejamiento
+
+`connect(callback)` resuelve una vez que la sesión está sincronizada. El callback se dispara cada vez que baileys te entrega un nuevo artefacto de emparejamiento: un `string` (PIN) cuando `phone` está definido, o un `Buffer` (PNG QR) en caso contrario. El callback puede dispararse más de una vez si el código anterior expira antes de que el usuario complete el emparejamiento.
+
+```typescript title="index.ts"
+import { writeFileSync } from "node:fs";
+
+await wa.connect(async (code) => {
+    if (typeof code === "string") {
+        console.log("Pair code:", code);
+    } else if (Buffer.isBuffer(code)) {
+        writeFileSync("qr.png", code);
+        console.log("QR written to qr.png — scan it with WhatsApp");
+    }
+});
+```
+
+!!! success "Éxito"
+    Cuando `connect()` resuelve, el motor tiene las credenciales persistidas. Las ejecuciones subsiguientes las reutilizan automáticamente — no se requiere un segundo emparejamiento.
+
+---
+
+## 6. Responde a los mensajes entrantes
+
+El delegado `wa.Message` expone `text`, `image`, `video`, `audio`, `location` y `poll`. Pasa el id del chat (o cualquier identificador — teléfono, JID o LID) y el cuerpo:
+
+```typescript title="index.ts" hl_lines="3 4 5"
+wa.on("message:created", async (msg, chat, wa) => {
+    if (msg.me) return;
+    if (msg.caption?.toLowerCase() === "ping") {
+        await wa.Message.text(chat.id, "pong");
+    }
+});
+```
+
+Cada método también tiene una variante de instancia sobre el mensaje mismo (`msg.text("...")`) que cita el mensaje original en la respuesta.
+
+---
+
+## 7. Apagado limpio
+
+Cancela reconexiones pendientes y cierra el socket limpiamente en SIGINT:
+
+```typescript title="index.ts"
+process.on("SIGINT", async () => {
+    await wa.disconnect();
+    process.exit(0);
+});
+```
+
+Pasa `{ destroy: true }` para también limpiar el motor al salir — útil en pruebas o al rotar cuentas.
+
+---
+
+## 8. Ejecútalo
 
 ```bash
 npx tsx index.ts
 ```
 
-1. Aparecera el archivo `qr.png`
-2. Abrelo y escanea con WhatsApp > Dispositivos vinculados
-3. El bot se conectara automaticamente
-
-!!! success "Listo!"
-    Una vez conectado, la sesion se guarda en `.baileys/default/` y no necesitaras escanear de nuevo.
+La primera ejecución imprime el PIN (o escribe `qr.png`); empareja el dispositivo, espera el log `connected`, luego envía un mensaje a tu número para ver al listener dispararse.
 
 ---
 
-## 4. Escuchar mensajes
+## Profundizando
 
-Agrega un listener para mensajes entrantes:
+Algunas opciones del cliente que vale la pena conocer:
 
-```typescript title="index.ts" hl_lines="20-35"
-import { WhatsApp } from "@arcaelas/whatsapp";
+- **`autoclean`** *(por defecto `true`)* — ante un `loggedOut` remoto, limpia todo el motor para que el próximo `connect()` comience con un estado limpio. Ponlo en `false` para preservar el historial de chat/mensajes y solo descartar las credenciales.
+- **`reconnect`** *(por defecto `true`)* — acepta `boolean`, un número de intentos máximos, o `{ max, interval }` (intervalo en segundos, por defecto 60). Los cierres transitorios disparados por el protocolo no consumen presupuesto de reintentos.
+- **`sync`** *(por defecto `false`)* — habilita la sincronización completa de historial de baileys; los chats, contactos y mensajes importados se persisten a través del motor.
 
-async function main() {
-  const wa = new WhatsApp();
-
-  // Escuchar nuevos mensajes
-  wa.event.on("message:created", async (msg) => {
-    // Ignorar mensajes propios
-    if (msg.me) return;
-
-    // Solo procesar texto
-    if (msg.type !== "text") return;
-
-    // Obtener contenido como texto
-    const content = (await msg.content()).toString();
-    console.log(`[${msg.type}] ${msg.cid}: ${content}`);
-
-    const text = content.toLowerCase();
-
-    if (text === "hola") {
-      await wa.Message.text(msg.cid, "Hola! Soy un bot. Escribe 'ayuda' para ver comandos.");
-    }
-
-    if (text === "ayuda") {
-      await wa.Message.text(
-        msg.cid,
-        "Comandos disponibles:\n" +
-        "- hola: Saludo\n" +
-        "- hora: Hora actual\n" +
-        "- ping: Test de respuesta"
-      );
-    }
-
-    if (text === "hora") {
-      await wa.Message.text(msg.cid, `Son las ${new Date().toLocaleTimeString()}`);
-    }
-
-    if (text === "ping") {
-      await wa.Message.text(msg.cid, "pong!");
-    }
-  });
-
-  // Conectar
-  await wa.pair(async (data) => {
-    if (Buffer.isBuffer(data)) {
-      const fs = await import("fs");
-      fs.writeFileSync("qr.png", data);
-      console.log("Escanea qr.png");
-    }
-  });
-
-  console.log("Bot listo!");
-}
-
-main().catch(console.error);
-```
-
----
-
-## 5. Conexion con codigo de emparejamiento
-
-Si prefieres no escanear QR, usa el numero de telefono:
-
-```typescript
-const wa = new WhatsApp({
-  phone: "5491112345678", // Sin + ni espacios
-});
-
-await wa.pair(async (data) => {
-  if (typeof data === "string") {
-    console.log("Ingresa este codigo en tu telefono:", data);
-    // Ir a WhatsApp > Dispositivos vinculados > Vincular dispositivo
-    // Seleccionar "Vincular con numero de telefono"
-  }
-});
-```
-
----
-
-## 6. Manejar diferentes tipos de mensaje
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-
-  const buffer = await msg.content();
-
-  // Mensaje de texto
-  if (msg.type === "text") {
-    const text = buffer.toString();
-    console.log("Texto:", text);
-  }
-
-  // Imagen
-  if (msg.type === "image") {
-    console.log(`Imagen: ${buffer.length} bytes`);
-    if (msg.caption) {
-      console.log(`Caption: ${msg.caption}`);
-    }
-    // Guardar imagen
-    const fs = await import("fs");
-    fs.writeFileSync("imagen.jpg", buffer);
-  }
-
-  // Video
-  if (msg.type === "video") {
-    console.log(`Video: ${buffer.length} bytes`);
-  }
-
-  // Audio (nota de voz)
-  if (msg.type === "audio") {
-    console.log(`Audio: ${buffer.length} bytes`);
-  }
-
-  // Ubicacion
-  if (msg.type === "location") {
-    const coords = JSON.parse(buffer.toString());
-    console.log(`Ubicacion: ${coords.lat}, ${coords.lng}`);
-  }
-
-  // Encuesta
-  if (msg.type === "poll") {
-    const poll = JSON.parse(buffer.toString());
-    console.log(`Encuesta: ${poll.content}`);
-    poll.options.forEach((opt: { content: string }, i: number) => {
-      console.log(`  ${i + 1}. ${opt.content}`);
-    });
-  }
-});
-```
-
----
-
-## 7. Enviar mensajes
-
-```typescript
-const cid = "5491198765432@s.whatsapp.net";
-
-// Texto
-await wa.Message.text(cid, "Hola!");
-
-// Texto citando mensaje
-await wa.Message.text(cid, "Respuesta", "MESSAGE_ID_TO_QUOTE");
-
-// Imagen con caption
-import * as fs from "fs";
-const img = fs.readFileSync("foto.jpg");
-await wa.Message.image(cid, img, "Mira esta foto!");
-
-// Video
-const vid = fs.readFileSync("video.mp4");
-await wa.Message.video(cid, vid, "Video interesante");
-
-// Audio (nota de voz)
-const aud = fs.readFileSync("audio.ogg");
-await wa.Message.audio(cid, aud);
-
-// Ubicacion
-await wa.Message.location(cid, {
-  lat: -34.6037,
-  lng: -58.3816
-});
-
-// Encuesta
-await wa.Message.poll(cid, {
-  content: "Cual prefieres?",
-  options: [
-    { content: "Opcion A" },
-    { content: "Opcion B" },
-    { content: "Opcion C" }
-  ]
-});
-```
-
----
-
-## 8. Reaccionar a mensajes
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  if (msg.me) return;
-  if (msg.type !== "text") return;
-
-  const text = (await msg.content()).toString().toLowerCase();
-
-  // Reaccionar con emoji
-  if (text.includes("gracias")) {
-    await msg.react("❤️");
-  }
-
-  if (text.includes("jaja")) {
-    await msg.react("😂");
-  }
-
-  // Quitar reaccion
-  // await msg.react("");
-});
-```
-
----
-
-## 9. Marcar chat como leido
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  // Marcar chat como leido
-  await wa.Chat.seen(msg.cid);
-});
-```
-
----
-
-## Siguiente paso
-
-Ahora que tienes un bot basico funcionando, explora la documentacion detallada:
-
-- [Referencia de WhatsApp](references/whatsapp.es.md) - Configuracion y eventos
-- [Referencia de Chat](references/chat.es.md) - Gestion de conversaciones
-- [Referencia de Message](references/message.es.md) - Tipos de mensaje
-- [Ejemplos avanzados](examples/basic-bot.es.md) - Patrones recomendados
+La lista completa de opciones, el mapa de eventos y las APIs de los delegados viven en [Referencias](references/whatsapp.es.md). Para recetas de extremo a extremo (bots, webhooks, decoradores, configuraciones multicuenta) navega los [Ejemplos](examples/index.es.md).

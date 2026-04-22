@@ -1,140 +1,98 @@
-# Instalacion
+# Instalación
 
-## Requisitos
-
-- **Node.js** 18 o superior
-- **npm**, **yarn** o **pnpm**
-- Cuenta de WhatsApp activa
+Instala `@arcaelas/whatsapp` en cualquier proyecto de Node.js. El paquete se publica en npm como una compilación dual ESM/CJS con las declaraciones de TypeScript incluidas.
 
 ---
 
-## Instalacion del paquete
+## 1. Requisitos
 
-=== "npm"
-    ```bash
-    npm install @arcaelas/whatsapp
-    ```
+- **Node.js >= 20**. La librería incluye un polyfill de `Symbol.metadata` para que la sub-entrada `/decorators` funcione también en Node 20 y 21; en Node 22+ se usa el símbolo nativo.
+- Un **gestor de paquetes**. `yarn` es la opción recomendada; `npm` y `pnpm` también funcionan.
+
+!!! note "Nota"
+    No se requieren claves de API externas. El emparejamiento sucede localmente a través de baileys, ya sea por PIN telefónico o escaneando un código QR.
+
+---
+
+## 2. Instala el paquete
 
 === "yarn"
+
     ```bash
     yarn add @arcaelas/whatsapp
     ```
 
+=== "npm"
+
+    ```bash
+    npm install @arcaelas/whatsapp
+    ```
+
 === "pnpm"
+
     ```bash
     pnpm add @arcaelas/whatsapp
     ```
 
+Esto incorpora las únicas dependencias en tiempo de ejecución que la librería necesita: `baileys@7.0.0-rc.9`, `pino` y `qrcode`.
+
 ---
 
-## Configuracion de TypeScript
+## 3. Dependencias peer opcionales
 
-La libreria esta escrita en TypeScript y proporciona tipos completos. Asegurate de tener una configuracion compatible:
+El motor Redis depende de [`ioredis`](https://github.com/redis/ioredis) pero no te obliga a instalarlo a menos que realmente lo uses.
+
+```bash
+yarn add ioredis
+```
+
+Si solo usas `FileSystemEngine` o tu propia implementación personalizada de `Engine`, puedes omitir este paso por completo.
+
+---
+
+## 4. Exports del paquete
+
+El paquete expone dos puntos de entrada a través de su mapa `exports`:
+
+```typescript title="entrada principal"
+import { WhatsApp, FileSystemEngine, RedisEngine } from "@arcaelas/whatsapp";
+```
+
+```typescript title="DSL de decoradores"
+import { Bot, on, guard, command, pair } from "@arcaelas/whatsapp/decorators";
+```
+
+Ambas entradas entregan compilaciones ESM y CJS — tu bundler o cargador de Node elegirá la correcta automáticamente.
+
+---
+
+## 5. Configuración de TypeScript
+
+La entrada principal no necesita flags especiales del compilador. Para la sub-entrada de decoradores tampoco hay nada que configurar: la librería apunta a **decoradores Stage 3** (la forma estándar soportada nativamente por TypeScript 5+), por lo que **no** necesitas `experimentalDecorators` ni `emitDecoratorMetadata` en tu `tsconfig.json`.
+
+Un `tsconfig.json` mínimo es suficiente:
 
 ```json title="tsconfig.json"
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "strict": true,
-    "skipLibCheck": true
-  }
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "esModuleInterop": true
+    }
 }
 ```
 
----
-
-## Estructura de archivos
-
-Cuando uses `FileEngine` (default), la libreria crea la siguiente estructura:
-
-```
-.baileys/
-  default/                    # o el nombre que especifiques
-    session/
-      creds                   # Credenciales de sesion
-      {type}/{id}             # Keys de senales (ej: session/pre-key/1)
-    contact/
-      {jid}/index             # Datos de contacto
-    chat/
-      {jid}/
-        index                 # Datos del chat
-        messages              # Indice "TIMESTAMP MID" por linea
-        message/
-          {mid}/
-            index             # Metadata del mensaje (JSON)
-            raw               # WAMessage raw del protocolo (JSON)
-            content           # Contenido binario (base64)
-```
-
-!!! note "Normalizacion de IDs"
-    Los caracteres `@` en JIDs se reemplazan por `_at_` en los nombres de directorios.
-    Ejemplo: `5491112345678@s.whatsapp.net` → `5491112345678_at_s.whatsapp.net`
-
 !!! tip "Consejo"
-    Agrega `.baileys/` a tu `.gitignore` para no subir credenciales al repositorio.
+    Para ejecutar TypeScript directamente sin un paso de compilación explícito, usa [`tsx`](https://github.com/privatenumber/tsx): `npx tsx index.ts`.
 
 ---
 
-## Verificar instalacion
+## 6. Entorno
 
-Crea un archivo de prueba:
-
-```typescript title="test.ts"
-import { WhatsApp, FileEngine } from "@arcaelas/whatsapp";
-
-const wa = new WhatsApp({
-  engine: new FileEngine(".baileys/test"),
-});
-
-console.log("Instalacion correcta!");
-console.log("Clases disponibles:", {
-  Chat: wa.Chat,
-  Contact: wa.Contact,
-  Message: wa.Message,
-});
-```
-
-Ejecuta:
-
-```bash
-npx tsx test.ts
-```
-
-Si ves el mensaje de exito, la instalacion esta completa.
+No se requiere configuración de `.env` para comenzar. baileys maneja el protocolo de WhatsApp Web localmente y persiste los datos de sesión a través del `Engine` que proporciones. Si eliges `RedisEngine`, configura tu conexión a Redis mediante `ioredis` como lo harías normalmente.
 
 ---
 
-## Problemas comunes
-
-### Error: Cannot find module 'baileys'
-
-Asegurate de que baileys este instalado como dependencia:
-
-```bash
-npm install baileys
-```
-
-### Error: libffi.so.7 not found (Linux)
-
-Instala las dependencias del sistema:
-
-```bash
-# Debian/Ubuntu
-sudo apt-get install libffi-dev
-
-# CentOS/RHEL
-sudo yum install libffi-devel
-```
-
-### Error: ENOENT .baileys/default
-
-El directorio se crea automaticamente en la primera conexion. Si persiste, verifica permisos de escritura.
-
----
-
-## Siguiente paso
-
-[:octicons-arrow-right-24: Primeros pasos](getting-started.es.md)
+Una vez instalado, dirígete a [Primeros pasos](getting-started.es.md) para configurar tu primera sesión.

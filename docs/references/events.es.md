@@ -1,475 +1,188 @@
-# Eventos
+# Events
 
-Referencia completa de todos los eventos emitidos por WhatsApp.
+`WhatsApp` expone una API de eventos tipada sobre la propia instancia. Usa `wa.on(event, handler)` para
+suscribirte; la llamada devuelve una **función de desuscripción** para que puedas desconectar el oyente sin
+mantener una referencia al handler original. `wa.once(event, handler)` funciona del mismo modo y se
+autodesconecta tras el primer disparo.
+
+Cada payload de evento termina con la instancia de `WhatsApp` como **último argumento**, lo que hace
+ergonómicos los handlers inline sin cerrar sobre `wa` desde el ámbito exterior.
 
 ---
 
-## Escuchar eventos
+## Importación
 
-WhatsApp expone un EventEmitter tipado a traves de `wa.event`:
+```typescript title="ESM / TypeScript"
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
-```typescript
-import { WhatsApp } from "@arcaelas/whatsapp";
-
-const wa = new WhatsApp();
-
-// Escuchar evento
-wa.event.on("message:created", (msg) => {
-  // msg esta tipado correctamente
-});
-
-// Escuchar una sola vez
-wa.event.once("open", () => {
-  console.log("Primera conexion exitosa");
-});
-
-// Remover listener
-const handler = (msg) => console.log(msg);
-wa.event.on("message:created", handler);
-wa.event.off("message:created", handler);
+const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 ```
 
 ---
 
-## Eventos de conexion
+## API
 
-### `open`
+| Método               | Devuelve       | Descripción                                                            |
+| -------------------- | -------------- | ---------------------------------------------------------------------- |
+| `wa.on(event, h)`    | `() => void`   | Registra un oyente. Llama a la función devuelta para desconectarlo.    |
+| `wa.once(event, h)`  | `() => void`   | Registra un oyente de un solo disparo. La función devuelta lo desconecta antes. |
+| `wa.off(event, h)`   | `this`         | Elimina un oyente previamente registrado.                              |
 
-Emitido cuando la conexion es exitosa.
-
-```typescript
-wa.event.on("open", () => {
-  console.log("Conectado a WhatsApp");
-  // Aqui puedes empezar a enviar mensajes
+```typescript title="Suscribirse y desuscribirse"
+const off = wa.on('message:created', (msg, chat) => {
+    console.log(`[${chat.id}] ${msg.caption}`);
 });
-```
 
-**Payload:** ninguno
+// luego
+off();
+```
 
 ---
 
-### `close`
+## Conexión
 
-Emitido cuando la conexion se cierra. La reconexion es automatica.
+| Evento          | Signatura       | Se dispara cuando...                                                         |
+| --------------- | --------------- | ---------------------------------------------------------------------------- |
+| `connected`     | `[wa]`          | El socket alcanza `connection === 'open'` y la sesión está lista.            |
+| `disconnected`  | `[wa]`          | Ocurre un cierre no transitorio después de que la sesión estaba en línea (la limpieza del motor ya se completó cuando esto se dispara). |
 
-```typescript
-wa.event.on("close", () => {
-  console.log("Desconectado, reconectando...");
-});
+!!! info "Los cierres transitorios son silenciosos"
+    El `restartRequired` obligatorio del protocolo (status `515`) justo después de la sincronización inicial **no**
+    dispara `disconnected`. La librería reconecta con cero delay y el consumidor
+    ve una sesión ininterrumpida.
+
+```typescript title="Ciclo de vida de conexión"
+wa.on('connected',    (client) => console.log('online'));
+wa.on('disconnected', (client) => console.log('offline'));
 ```
-
-**Payload:** ninguno
 
 ---
 
-### `error`
+## Contacts
 
-Emitido cuando ocurre un error fatal que no permite reconexion.
+| Evento             | Signatura                | Se dispara cuando...                                                   |
+| ------------------ | ------------------------ | ---------------------------------------------------------------------- |
+| `contact:created`  | `[contact, chat, wa]`    | Un nuevo contacto es insertado, o auto-creado desde un mensaje entrante. |
+| `contact:updated`  | `[contact, chat, wa]`    | El nombre, notify, imagen, status o LID de un contacto cambia.          |
+| `contact:deleted`  | `[contact, chat, wa]`    | Baileys reporta una eliminación de contacto (`contacts.delete`).       |
 
-```typescript
-wa.event.on("error", (error) => {
-  console.error("Error fatal:", error.message);
+El argumento `chat` es el chat 1:1 del contacto (creado al vuelo desde la caché cuando se necesita),
+para que puedas responder o traer el historial sin un lookup extra.
 
-  // Error comun:
-  // - "Logged out" - Sesion cerrada desde telefono
+```typescript title="Saludar a nuevos contactos"
+wa.on('contact:created', async (contact, chat) => {
+    await chat.text(`Welcome, ${contact.name ?? contact.notify ?? 'friend'}!`);
 });
 ```
-
-**Payload:** `Error`
 
 ---
 
-## Eventos de contacto
+## Chats
 
-### `contact:created`
+| Evento             | Signatura        | Se dispara cuando...                                                                     |
+| ------------------ | ---------------- | ---------------------------------------------------------------------------------------- |
+| `chat:created`     | `[chat, wa]`     | Un nuevo chat es insertado, o auto-creado desde un mensaje entrante.                     |
+| `chat:deleted`     | `[chat, wa]`     | Baileys reporta una eliminación de chat (`chats.delete`).                                |
+| `chat:pinned`      | `[chat, wa]`     | El chat es fijado.                                                                       |
+| `chat:unpinned`    | `[chat, wa]`     | El chat es desfijado.                                                                    |
+| `chat:archived`    | `[chat, wa]`     | El chat es archivado.                                                                    |
+| `chat:unarchived`  | `[chat, wa]`     | El chat es desarchivado.                                                                 |
+| `chat:muted`       | `[chat, wa]`     | Se observa un `muteEndTime` en el futuro.                                                |
+| `chat:unmuted`     | `[chat, wa]`     | `muteEndTime` es limpiado o establecido en el pasado.                                    |
 
-Emitido cuando se crea un nuevo contacto.
-
-```typescript
-wa.event.on("contact:created", (contact) => {
-  console.log(`Nuevo contacto: ${contact.name}`);
-  console.log(`  ID: ${contact.id}`);
-  console.log(`  Telefono: ${contact.phone}`);
-});
+```typescript title="Auditar moderación de chats"
+wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
+wa.on('chat:unarchived', (chat) => console.log('unarchived', chat.id));
 ```
-
-**Payload:** `Contact`
 
 ---
 
-### `contact:updated`
+## Messages
 
-Emitido cuando se actualiza un contacto existente.
+| Evento               | Signatura                       | Se dispara cuando...                                                              |
+| -------------------- | ------------------------------- | --------------------------------------------------------------------------------- |
+| `message:created`    | `[message, chat, wa]`           | Un nuevo mensaje es insertado (entrante o saliente).                              |
+| `message:updated`    | `[message, chat, wa]`           | Un mensaje es editado, tiene un cambio de estado o su contenido se actualiza (ubicación en vivo). |
+| `message:deleted`    | `[message, chat, wa]`           | Un mensaje es revocado (`protocolMessage.REVOKE`).                                |
+| `message:reacted`    | `[message, chat, emoji, wa]`    | Llega una reacción. `emoji` es `''` cuando la reacción se elimina.                |
+| `message:starred`    | `[message, chat, wa]`           | Un mensaje es destacado.                                                          |
+| `message:unstarred`  | `[message, chat, wa]`           | A un mensaje se le quita el destacado.                                            |
+| `message:forwarded`  | `[message, chat, wa]`           | Un mensaje entrante lleva la bandera `forwarded`.                                 |
+| `message:seen`       | `[message, chat, wa]`           | Se observa un recibo de lectura o reproducción para el mensaje.                   |
 
-```typescript
-wa.event.on("contact:updated", (contact) => {
-  console.log(`Contacto actualizado: ${contact.name}`);
+```typescript title="Bot react-when-mentioned" hl_lines="3"
+wa.on('message:created', async (msg, chat) => {
+    if (msg.caption?.toLowerCase().includes('@bot')) {
+        await chat.text('here!');
+    }
+});
+
+wa.on('message:reacted', (msg, chat, emoji) => {
+    console.log(`Reacted ${emoji || '∅'} on ${msg.id}`);
 });
 ```
-
-**Payload:** `Contact`
 
 ---
 
-## Eventos de chat
-
-### `chat:created`
-
-Emitido cuando se crea un nuevo chat.
-
-```typescript
-wa.event.on("chat:created", (chat) => {
-  if (chat.type === "group") {
-    console.log(`Nuevo grupo: ${chat.name}`);
-  } else {
-    console.log(`Nuevo chat: ${chat.name}`);
-  }
-});
-```
-
-**Payload:** `Chat`
-
----
-
-### `chat:updated`
-
-Emitido cuando se actualiza un chat existente.
-
-```typescript
-wa.event.on("chat:updated", (chat) => {
-  console.log(`Chat actualizado: ${chat.name}`);
-});
-```
-
-**Payload:** `Chat`
-
----
-
-### `chat:pinned`
-
-Emitido cuando se fija o desfija un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:pinned", (chat) => {
-  if (chat.pinned) {
-    console.log(`Chat ${chat.name} fijado`);
-  } else {
-    console.log(`Chat ${chat.name} desfijado`);
-  }
-});
-```
-
-**Payload:** `Chat`
-
----
-
-### `chat:archived`
-
-Emitido cuando se archiva o desarchiva un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:archived", (chat) => {
-  console.log(`Chat ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`);
-});
-```
-
-**Payload:** `Chat`
-
----
-
-### `chat:muted`
-
-Emitido cuando se silencia o desilencia un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:muted", (chat) => {
-  if (chat.muted) {
-    console.log(`Chat ${chat.name} silenciado hasta ${new Date(chat.muted)}`);
-  } else {
-    console.log(`Chat ${chat.name} desilenciado`);
-  }
-});
-```
-
-**Payload:** `Chat`
-
----
-
-### `chat:deleted`
-
-Emitido cuando se elimina un chat.
-
-```typescript
-wa.event.on("chat:deleted", (cid) => {
-  console.log(`Chat eliminado: ${cid}`);
-});
-```
-
-**Payload:** `(cid: string)`
-
----
-
-## Eventos de mensaje
-
-### `message:created`
-
-Emitido cuando se recibe un nuevo mensaje.
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  console.log(`Nuevo mensaje:`);
-  console.log(`  ID: ${msg.id}`);
-  console.log(`  Chat: ${msg.cid}`);
-  console.log(`  Tipo: ${msg.type}`);
-  console.log(`  Mio: ${msg.me}`);
-  console.log(`  Autor: ${msg.author}`);
-  console.log(`  Caption: ${msg.caption}`);
-  console.log(`  Creado: ${new Date(msg.created_at)}`);
-
-  if (msg.mid) {
-    console.log(`  Respuesta a: ${msg.mid}`);
-  }
-
-  // Obtener contenido
-  if (msg.type === "text") {
-    const text = (await msg.content()).toString();
-    console.log(`  Texto: ${text}`);
-  }
-});
-```
-
-**Payload:** `Message`
-
-**Propiedades disponibles:**
-
-- `id` - ID del mensaje
-- `cid` - JID del chat
-- `mid` - ID del mensaje padre (reply) o `null`
-- `me` - true si es mensaje propio
-- `author` - JID del autor del mensaje
-- `type` - Tipo de mensaje (text, image, video, audio, location, poll)
-- `mime` - MIME type
-- `caption` - Caption/texto
-- `status` - Estado del mensaje (enum)
-- `starred` - true si esta destacado
-- `forwarded` - true si fue reenviado
-- `edited` - true si fue editado
-- `created_at` - Timestamp de creacion en milisegundos
-- `deleted_at` - Timestamp de expiracion en ms o `null`
-
----
-
-### `message:updated`
-
-Emitido cuando se edita un mensaje.
-
-```typescript
-wa.event.on("message:updated", async (msg) => {
-  console.log(`Mensaje editado: ${msg.id}`);
-  console.log(`  edited: ${msg.edited}`); // true
-
-  if (msg.type === "text") {
-    const new_text = (await msg.content()).toString();
-    console.log(`  Nuevo texto: ${new_text}`);
-  }
-});
-```
-
-**Payload:** `Message`
-
----
-
-### `message:reacted`
-
-Emitido cuando alguien reacciona a un mensaje.
-
-```typescript
-wa.event.on("message:reacted", (cid, mid, emoji) => {
-  console.log(`Reaccion en mensaje:`);
-  console.log(`  Chat: ${cid}`);
-  console.log(`  Mensaje: ${mid}`);
-  console.log(`  Emoji: ${emoji}`); // "" si se quito la reaccion
-});
-```
-
-**Payload:** `(cid: string, mid: string, emoji: string)`
-
----
-
-### `message:deleted`
-
-Emitido cuando se elimina un mensaje.
-
-```typescript
-wa.event.on("message:deleted", (cid, mid) => {
-  console.log(`Mensaje eliminado:`);
-  console.log(`  Chat: ${cid}`);
-  console.log(`  Mensaje: ${mid}`);
-});
-```
-
-**Payload:** `(cid: string, mid: string)`
-
----
-
-## Patrones de uso
-
-### Logger completo
-
-```typescript
-function setup_logger(wa: WhatsApp) {
-  // Conexion
-  wa.event.on("open", () => console.log("[INFO] Conectado"));
-  wa.event.on("close", () => console.log("[WARN] Desconectado"));
-  wa.event.on("error", (e) => console.error("[ERROR]", e.message));
-
-  // Contactos
-  wa.event.on("contact:created", (c) =>
-    console.log(`[CONTACT:NEW] ${c.name} (${c.phone})`)
-  );
-  wa.event.on("contact:updated", (c) =>
-    console.log(`[CONTACT:UPD] ${c.name}`)
-  );
-
-  // Chats
-  wa.event.on("chat:created", (c) =>
-    console.log(`[CHAT:NEW] ${c.name} (${c.type})`)
-  );
-  wa.event.on("chat:updated", (c) =>
-    console.log(`[CHAT:UPD] ${c.name}`)
-  );
-  wa.event.on("chat:pinned", (chat) =>
-    console.log(`[CHAT:PIN] ${chat.name}: ${chat.pinned ? "fijado" : "desfijado"}`)
-  );
-  wa.event.on("chat:archived", (chat) =>
-    console.log(`[CHAT:ARC] ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`)
-  );
-  wa.event.on("chat:muted", (chat) =>
-    console.log(`[CHAT:MUTE] ${chat.name}: ${chat.muted ? "silenciado" : "desilenciado"}`)
-  );
-  wa.event.on("chat:deleted", (cid) =>
-    console.log(`[CHAT:DEL] ${cid}`)
-  );
-
-  // Mensajes
-  wa.event.on("message:created", (m) =>
-    console.log(`[MSG:NEW] ${m.cid} <- ${m.type} by ${m.author}`)
-  );
-  wa.event.on("message:updated", (m) =>
-    console.log(`[MSG:EDIT] ${m.id}`)
-  );
-  wa.event.on("message:reacted", (cid, mid, emoji) =>
-    console.log(`[MSG:REACT] ${mid}: ${emoji}`)
-  );
-  wa.event.on("message:deleted", (cid, mid) =>
-    console.log(`[MSG:DEL] ${mid} from ${cid}`)
-  );
-}
-```
-
-### Filtrar por chat
-
-```typescript
-const MONITORED_CHAT = "5491112345678@s.whatsapp.net";
-
-wa.event.on("message:created", async (msg) => {
-  if (msg.cid !== MONITORED_CHAT) return;
-  // Solo procesar mensajes de este chat
-});
-```
-
-### Filtrar por tipo
-
-```typescript
-wa.event.on("message:created", async (msg) => {
-  // Solo imagenes
-  if (msg.type !== "image") return;
-
-  const buffer = await msg.content();
-  console.log(`Imagen recibida: ${buffer.length} bytes`);
-});
-```
-
-### Cola de procesamiento
-
-```typescript
-const queue: Array<{ id: string; cid: string; type: string }> = [];
-let processing = false;
-
-wa.event.on("message:created", (msg) => {
-  queue.push(msg);
-  process_queue();
-});
-
-async function process_queue() {
-  if (processing || queue.length === 0) return;
-
-  processing = true;
-  const msg = queue.shift()!;
-
-  try {
-    await handle_message(msg);
-  } catch (error) {
-    console.error("Error procesando mensaje:", error);
-  }
-
-  processing = false;
-  process_queue();
+## Escuchar todos los eventos
+
+Como los nombres de eventos forman un conjunto conocido, puedes adjuntar un oyente a cada uno con un
+solo bucle. El ejemplo de abajo loggea cada evento que fluye por el cliente — útil para
+debugging.
+
+```typescript title="Trazar todos los eventos"
+import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
+
+const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
+
+const events = [
+    'connected', 'disconnected',
+    'contact:created', 'contact:updated', 'contact:deleted',
+    'chat:created', 'chat:deleted',
+    'chat:pinned', 'chat:unpinned',
+    'chat:archived', 'chat:unarchived',
+    'chat:muted', 'chat:unmuted',
+    'message:created', 'message:updated', 'message:deleted',
+    'message:reacted',
+    'message:starred', 'message:unstarred',
+    'message:forwarded', 'message:seen',
+] as const;
+
+for (const event of events) {
+    wa.on(event, (...args) => {
+        console.log(`[${event}]`, args.length, 'args');
+    });
 }
 
-async function handle_message(msg: any) {
-  // Procesar mensaje
-}
-```
-
-### Estadisticas en tiempo real
-
-```typescript
-const stats = {
-  messages: 0,
-  text: 0,
-  image: 0,
-  video: 0,
-  audio: 0,
-  location: 0,
-  poll: 0,
-};
-
-wa.event.on("message:created", (msg) => {
-  stats.messages++;
-  stats[msg.type as keyof typeof stats]++;
-
-  console.log("Estadisticas:", stats);
-});
+await wa.connect((qr) => console.log('QR length:', (qr as Buffer).length));
 ```
 
 ---
 
-## Interfaz WhatsAppEventMap
+## Semántica de `once`
 
-```typescript
-interface WhatsAppEventMap {
-  // Conexion
-  open: [];
-  close: [];
-  error: [Error];
+`wa.once(event, handler)` se dispara como máximo una vez y luego se autodesconecta. La función devuelta por
+`once` te permite cancelar la suscripción antes de que el evento siquiera llegue:
 
-  // Contactos
-  "contact:created": [Contact];
-  "contact:updated": [Contact];
+```typescript title="Esperar al primer mensaje"
+const cancel = wa.once('message:created', (msg, chat) => {
+    console.log('first message:', chat.id, msg.caption);
+});
 
-  // Chats
-  "chat:created": [Chat];
-  "chat:updated": [Chat];
-  "chat:pinned": [chat: Chat];
-  "chat:archived": [chat: Chat];
-  "chat:muted": [chat: Chat];
-  "chat:deleted": [cid: string];
-
-  // Mensajes
-  "message:created": [Message];
-  "message:updated": [Message];
-  "message:reacted": [cid: string, mid: string, emoji: string];
-  "message:deleted": [cid: string, mid: string];
-}
+// Opcional: abortar antes de que llegue cualquier mensaje.
+setTimeout(cancel, 60_000);
 ```
+
+---
+
+## Migración desde v2
+
+!!! warning "Cambio de signatura"
+    En v2, los handlers de mensaje y contacto recibían `[entity, wa]`. En v3, el **chat** ahora se
+    inserta justo antes de `wa`:
+
+    - `message:*`  → `[message, chat, wa]`
+    - `contact:*`  → `[contact, chat, wa]`
+    - `message:reacted` → `[message, chat, emoji, wa]`
+
+    Actualiza las listas de parámetros de tus handlers al actualizar.

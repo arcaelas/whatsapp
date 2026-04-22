@@ -1,470 +1,259 @@
 # Chat
 
-Clase para gestionar conversaciones de WhatsApp (contactos individuales y grupos).
+La entidad `Chat` representa una conversación de WhatsApp, ya sea un chat 1:1 con un contacto o un grupo. Expone metadatos de solo lectura (nombre, descripción, estado fijado/archivado/silenciado) y métodos mutables que propagan los cambios a los servidores de WhatsApp y a la persistencia local vía el motor configurado.
+
+Cada instancia está vinculada a un contexto `WhatsApp` a través de la factory `chat(wa)`, que también expone delegados estáticos como `wa.Chat.get(cid)`, `wa.Chat.list(offset, limit)` y atajos por acción (`pin`, `archive`, `mute`, `seen`, `clear`, `delete`).
 
 ---
 
-## Importacion
+## Importación
 
-La clase se accede desde la instancia de WhatsApp:
-
-```typescript
-const wa = new WhatsApp();
-wa.Chat // Clase Chat enlazada
+```typescript title="imports.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+// o
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 ```
+
+La clase `Chat` en sí no se exporta como un nombre de nivel superior. Accede al constructor vinculado a través de `wa.Chat` (devuelto por la factory `chat(wa)` cableada internamente por el constructor de `WhatsApp`).
+
+---
+
+## Constructor
+
+Las instancias de `Chat` no están pensadas para construirse manualmente. Se producen mediante:
+
+- `wa.Chat.get(cid)` — carga o inicializa por CID.
+- `wa.Chat.list(offset, limit)` — lectura paginada de chats persistidos.
+- `contact.chat` — propiedad eager en una instancia de `Contact` (chats 1:1).
+- Payloads de eventos (`message:created`, `message:updated`, etc.) — el segundo argumento es siempre el `Chat` al que pertenece el mensaje.
+
+```typescript title="bootstrap.ts"
+import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+
+const wa = new WhatsApp({
+  engine: new RedisEngine({ url: "redis://127.0.0.1:6379" }),
+});
+
+await wa.connect();
+
+const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");
+if (chat) {
+  console.log(chat.name, chat.type);
+}
+```
+
+!!! info "Auto-bootstrap"
+    `wa.Chat.get(cid)` resuelve el CID (teléfono, JID o LID). Si no existe un registro en el motor pero el contacto es alcanzable, se crea y persiste un documento `IChatRaw` mínimo antes de devolver la instancia.
 
 ---
 
 ## Propiedades
 
-| Propiedad | Tipo | Descripcion |
-|-----------|------|-------------|
-| `id` | `string` | JID del chat (ej: `123@s.whatsapp.net` o `123@g.us`) |
-| `name` | `string` | Nombre del chat o grupo |
-| `type` | `'contact' \| 'group'` | Tipo de chat |
-| `content` | `string` | Descripcion del chat/grupo (string vacio si no tiene) |
-| `pinned` | `boolean` | `true` si el chat esta fijado |
-| `archived` | `boolean` | `true` si el chat esta archivado |
-| `muted` | `number` | Timestamp de expiracion del silencio (0 si no esta silenciado) |
-| `read` | `boolean` | `true` si el chat esta leido |
-| `readonly` | `boolean` | `true` si el chat es solo lectura |
+Todas las propiedades son getters síncronos sobre el documento interno `_raw: IChatRaw`.
 
----
+| Propiedad | Tipo | Descripción |
+| --------- | ---- | ----------- |
+| `id` | `string` | JID del chat (p. ej. `5215555555555@s.whatsapp.net` o `120363...@g.us`). |
+| `cid` | `string` | Alias de `id`. Usa el que se lea mejor en tu código. |
+| `type` | `"contact" \| "group"` | Derivado del sufijo del JID (`@g.us` → grupo). |
+| `name` | `string` | Nombre local → display name → fallback del teléfono. |
+| `content` | `string` | Descripción del grupo (string vacío para chats 1:1). |
+| `pinned` | `boolean` | `true` cuando la bandera de pin está activada. |
+| `archived` | `boolean` | `true` si el chat está archivado. |
+| `muted` | `boolean` | `true` cuando el chat está silenciado y la ventana de silencio no ha expirado. |
+| `read` | `boolean` | `true` cuando `unread_count === 0` y el chat no está marcado como no leído. |
+| `readonly` | `boolean` | `true` para canales de broadcast/anuncios únicamente. |
 
-## Metodos estaticos
+### `IChatRaw`
 
-### `Chat.get(cid)`
+Forma persistida que respalda cada instancia de `Chat`.
 
-Obtiene un chat por su ID. Si no existe pero el contacto si, crea el chat automaticamente.
-
-```typescript
-// Chat individual
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-
-// Grupo
-const group = await wa.Chat.get("123456789@g.us");
-
-if (chat) {
-  console.log(`Chat: ${chat.name} (${chat.type})`);
+```typescript title="IChatRaw.ts"
+export interface IChatRaw {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  unread_count?: number | null;
+  read_only?: boolean | null;
+  archived?: boolean | null;
+  pinned?: number | null;
+  mute_end_time?: number | null;
+  marked_as_unread?: boolean | null;
+  participants?: GroupParticipant[] | null;
+  created_by?: string | null;
+  created_at?: number | null;
+  ephemeral_expiration?: number | null;
 }
-```
 
-### `Chat.list(offset?, limit?)`
-
-Obtiene chats paginados.
-
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Posicion inicial |
-| `limit` | `number` | `50` | Cantidad maxima de resultados |
-
-```typescript
-const chats = await wa.Chat.list(0, 100);
-for (const chat of chats) {
-  console.log(`${chat.name} (${chat.type})`);
+export interface GroupParticipant {
+  id: string;
+  admin: string | null; // "admin" | "superadmin" | null
 }
-```
-
-### `Chat.pin(cid, value)`
-
-Fija o desfija un chat por su ID. Delega a la instancia internamente.
-
-```typescript
-// Fijar
-await wa.Chat.pin("5491112345678@s.whatsapp.net", true);
-
-// Desfijar
-await wa.Chat.pin("5491112345678@s.whatsapp.net", false);
-```
-
-### `Chat.archive(cid, value)`
-
-Archiva o desarchiva un chat por su ID. Delega a la instancia internamente.
-
-```typescript
-// Archivar
-await wa.Chat.archive("5491112345678@s.whatsapp.net", true);
-
-// Desarchivar
-await wa.Chat.archive("5491112345678@s.whatsapp.net", false);
-```
-
-### `Chat.mute(cid, duration)`
-
-Silencia o desilencia un chat por su ID. Delega a la instancia internamente.
-
-| Parametro | Tipo | Descripcion |
-|-----------|------|-------------|
-| `cid` | `string` | ID del chat |
-| `duration` | `number \| null` | Duracion en milisegundos o `null` para desilenciar |
-
-```typescript
-// Silenciar por 8 horas
-await wa.Chat.mute(
-  "5491112345678@s.whatsapp.net",
-  8 * 60 * 60 * 1000
-);
-
-// Desilenciar
-await wa.Chat.mute("5491112345678@s.whatsapp.net", null);
-```
-
-### `Chat.seen(cid)`
-
-Marca el ultimo mensaje del chat como leido. Delega a la instancia internamente.
-
-```typescript
-await wa.Chat.seen("5491112345678@s.whatsapp.net");
-```
-
-### `Chat.remove(cid)`
-
-Elimina un chat por su ID. Si es grupo, sale del grupo antes de eliminar. Delega a la instancia internamente.
-
-```typescript
-await wa.Chat.remove("5491112345678@s.whatsapp.net");
 ```
 
 ---
 
-## Metodos de instancia
+## Métodos
+
+Los métodos de instancia que mutan estado siempre escriben primero al socket y luego persisten el nuevo snapshot al motor.
 
 ### `refresh()`
 
-Actualiza los datos del chat desde WhatsApp. En grupos, obtiene metadata (nombre, descripcion, participantes, creador). En chats individuales, actualiza el contacto asociado. Persiste los cambios en el engine.
+Re-hidrata los metadatos del chat desde el socket en vivo. Para grupos, obtiene los metadatos completos del grupo (subject, descripción, participantes, dueño). Para 1:1, refresca el perfil del contacto asociado y sincroniza el display name.
 
-Retorna `this` si se actualizo correctamente, o `null` si no hay socket conectado.
-
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
-if (chat) {
-  await chat.refresh();
-  console.log(`Nombre actualizado: ${chat.name}`);
-  console.log(`Descripcion: ${chat.content}`);
-}
+```typescript title="refresh.ts"
+const chat = await wa.Chat.get(cid);
+await chat?.refresh();
 ```
 
-### `remove()`
+Devuelve `this` en caso de éxito, `null` si no hay socket activo.
 
-Elimina el chat. Si es grupo, sale del grupo primero. Ejecuta cascade delete en el engine (elimina `chat/{cid}` y todas las sub-keys).
+### `pin(value: boolean)`
 
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.remove();
-}
+Fija o desfija el chat. Propaga a WhatsApp vía `chatModify` y requiere una referencia al último mensaje del chat.
+
+```typescript title="pin.ts"
+await chat.pin(true);  // fijar
+await chat.pin(false); // desfijar
 ```
 
-### `pin(value)`
-
-Fija o desfija el chat.
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.pin(true);  // Fijar
-  await chat.pin(false); // Desfijar
-}
-```
-
-### `archive(value)`
+### `archive(value: boolean)`
 
 Archiva o desarchiva el chat.
 
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.archive(true);  // Archivar
-  await chat.archive(false); // Desarchivar
-}
+```typescript title="archive.ts"
+await chat.archive(true);
 ```
 
-### `mute(duration)`
+### `mute(value: boolean)`
 
-Silencia o desilencia el chat.
+Silencia el chat. `true` silencia para siempre (internamente establecido a ~100 años). `false` restaura las notificaciones.
 
-| Parametro | Tipo | Descripcion |
-|-----------|------|-------------|
-| `duration` | `number \| null` | Duracion en ms o `null` para desilenciar |
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.mute(8 * 60 * 60 * 1000); // Silenciar 8 horas
-  await chat.mute(null);                // Desilenciar
-}
+```typescript title="mute.ts"
+await chat.mute(true);  // silenciar para siempre
+await chat.mute(false); // reactivar notificaciones
 ```
 
 ### `seen()`
 
-Marca el chat como leido. Usa el ultimo mensaje del indice para notificar a WhatsApp.
+Marca cada mensaje del chat como leído. Lee el último mensaje persistido para construir la clave de ack.
 
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  await chat.seen();
-}
+```typescript title="seen.ts"
+await chat.seen();
 ```
 
-### `members(offset?, limit?)`
+### `typing(on: boolean)` / `recording(on: boolean)`
 
-Obtiene los miembros del chat.
+Alternan los indicadores de presencia. Envían una llamada `sendPresenceUpdate` con `composing`/`recording` o `paused`.
 
-- En chats individuales: retorna el contacto asociado
-- En grupos: retorna los participantes del grupo
+```typescript title="typing.ts"
+await chat.typing(true);
+await new Promise((r) => setTimeout(r, 1_500));
+await chat.typing(false);
+```
 
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Posicion inicial |
-| `limit` | `number` | `50` | Cantidad maxima |
+!!! tip "Cadencia natural"
+    Activa `typing(true)`, envía el mensaje, y luego `typing(false)` para imitar el comportamiento humano. Mantén la ventana corta (1-3 s); WhatsApp limpia `composing` automáticamente después de unos segundos.
 
-```typescript
-const chat = await wa.Chat.get("123456789@g.us");
-if (chat) {
-  const members = await chat.members(0, 50);
-  for (const member of members) {
-    console.log(`${member.name} (${member.phone})`);
+### `clear()`
+
+Limpia todos los mensajes persistidos del chat en el motor local. No toca el chat remoto.
+
+```typescript title="clear.ts"
+await chat.clear();
+```
+
+### `delete()`
+
+Elimina el chat local y remotamente. Para grupos, abandona el grupo (`groupLeave`). Para 1:1, dispara `chatModify { delete: true }`. Elimina el documento del chat y todos los mensajes del motor.
+
+```typescript title="delete.ts"
+await chat.delete();
+```
+
+!!! warning "Irreversible"
+    `delete()` hace cascada en el prefijo local `/chat/{cid}/message`. Haz un respaldo del snapshot de tu motor si necesitas el historial.
+
+### `members(offset?: number, limit?: number)`
+
+Devuelve los participantes del chat como instancias de `Contact`. Para chats 1:1, produce la otra parte (solo cuando `offset === 0`). Para grupos, pagina a través de `groupMetadata().participants`, hidratando cada participante vía `wa.Contact.get`.
+
+```typescript title="members.ts"
+const chat = await wa.Chat.get("120363000000000000@g.us");
+if (chat?.type === "group") {
+  let offset = 0;
+  while (true) {
+    const batch = await chat.members(offset, 50);
+    if (batch.length === 0) break;
+    for (const member of batch) {
+      console.log(member.phone, member.name);
+    }
+    offset += batch.length;
   }
 }
 ```
 
-### `messages(offset?, limit?)`
+### `messages(offset?: number, limit?: number)`
 
-Obtiene los mensajes del chat con paginacion. Delega a `Message.list(cid, offset, limit)`.
+Atajo para `wa.Message.list(this.id, offset, limit)`. Devuelve mensajes ordenados por mtime del motor DESC.
 
-| Parametro | Tipo | Default | Descripcion |
-|-----------|------|---------|-------------|
-| `offset` | `number` | `0` | Posicion inicial |
-| `limit` | `number` | `50` | Cantidad maxima de mensajes |
-
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  const messages = await chat.messages(0, 100);
-  for (const msg of messages) {
-    console.log(`${msg.type}: ${msg.caption}`);
-  }
+```typescript title="messages.ts"
+const latest = await chat.messages(0, 20);
+for (const msg of latest) {
+  console.log(msg.type, msg.caption);
 }
 ```
 
-### `contact()`
+### `contact()` *(solo 1:1)*
 
-Obtiene el contacto asociado al chat (solo chats individuales). Para grupos retorna `null`.
+Para chats 1:1, la forma más rápida de obtener la contraparte es a través de `wa.Contact.get(chat.id)`. Para el inverso (contacto → chat), usa la propiedad eager `contact.chat`.
 
-```typescript
-const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-if (chat) {
-  const contact = await chat.contact();
-  if (contact) {
-    console.log(`Contacto: ${contact.name}`);
-  }
-}
-```
-
----
-
-## Eventos de Chat
-
-Los eventos se escuchan a traves de `wa.event`:
-
-### `chat:created`
-
-Emitido cuando se crea un nuevo chat.
-
-```typescript
-wa.event.on("chat:created", (chat) => {
-  console.log(`Nuevo chat: ${chat.name} (${chat.type})`);
-});
-```
-
-### `chat:updated`
-
-Emitido cuando se actualiza un chat existente.
-
-```typescript
-wa.event.on("chat:updated", (chat) => {
-  console.log(`Chat actualizado: ${chat.name}`);
-});
-```
-
-### `chat:pinned`
-
-Emitido cuando se fija o desfija un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:pinned", (chat) => {
-  if (chat.pinned) {
-    console.log(`Chat ${chat.name} fijado`);
-  } else {
-    console.log(`Chat ${chat.name} desfijado`);
-  }
-});
-```
-
-### `chat:archived`
-
-Emitido cuando se archiva o desarchiva un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:archived", (chat) => {
-  console.log(`Chat ${chat.name}: ${chat.archived ? "archivado" : "desarchivado"}`);
-});
-```
-
-### `chat:muted`
-
-Emitido cuando se silencia o desilencia un chat. El payload es la instancia de Chat actualizada.
-
-```typescript
-wa.event.on("chat:muted", (chat) => {
-  if (chat.muted) {
-    console.log(`Chat ${chat.name} silenciado hasta ${new Date(chat.muted)}`);
-  } else {
-    console.log(`Chat ${chat.name} desilenciado`);
-  }
-});
-```
-
-### `chat:deleted`
-
-Emitido cuando se elimina un chat.
-
-```typescript
-wa.event.on("chat:deleted", (cid) => {
-  console.log(`Chat eliminado: ${cid}`);
-});
-```
-
----
-
-## Diferenciar contactos de grupos
-
-```typescript
-wa.event.on("chat:created", (chat) => {
-  if (chat.type === "group") {
-    console.log(`Grupo: ${chat.name}`);
-  } else {
-    console.log(`Chat individual: ${chat.name}`);
-  }
-});
-
-// O verificar por JID
-function is_group(cid: string): boolean {
-  return cid.endsWith("@g.us");
+```typescript title="contact-from-chat.ts"
+const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");
+if (chat?.type === "contact") {
+  const contact = await wa.Contact.get(chat.id);
+  console.log(contact?.name);
 }
 ```
 
 ---
 
-## Ejemplos
+## Estáticos (delegado vía `wa.Chat`)
 
-### Listar miembros de un grupo
+Cada método mutable tiene un delegado estático vinculado a la instancia de `WhatsApp`. Resuelven el CID internamente y retornan `false`/`null` cuando no hay chat coincidente.
 
-```typescript
-const group = await wa.Chat.get("123456789@g.us");
-if (group) {
-  const members = await group.members(0, 1000);
-  console.log(`Grupo tiene ${members.length} miembros:`);
-  for (const member of members) {
-    console.log(`  - ${member.name}`);
-  }
-}
-```
+| Delegado | Signatura | Notas |
+| -------- | --------- | ----- |
+| `wa.Chat.get` | `(cid: string) => Promise<Chat \| null>` | Resuelve teléfono/JID/LID e inicializa desde contacto cuando falta. |
+| `wa.Chat.list` | `(offset?: number, limit?: number) => Promise<Chat[]>` | Pagina chats persistidos por mtime DESC. Por defecto: `0, 50`. |
+| `wa.Chat.pin` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.archive` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.mute` | `(cid: string, value: boolean) => Promise<boolean>` | |
+| `wa.Chat.seen` | `(cid: string) => Promise<boolean>` | |
+| `wa.Chat.clear` | `(cid: string) => Promise<boolean>` | Solo local. |
+| `wa.Chat.delete` | `(cid: string) => Promise<boolean>` | Remoto + local. |
 
-### Silenciar grupos nuevos automaticamente
+```typescript title="delegates.ts" hl_lines="12 13 14"
+import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
 
-```typescript
-wa.event.on("chat:created", async (chat) => {
-  if (chat.type === "group") {
-    await chat.mute(365 * 24 * 60 * 60 * 1000);
-    console.log(`Grupo ${chat.name} silenciado automaticamente`);
-  }
+const wa = new WhatsApp({
+  engine: new FileSystemEngine({ path: "./.whatsapp" }),
 });
+
+await wa.connect();
+
+const cid = "5215555555555@s.whatsapp.net";
+
+// Delegados de una línea — no necesitas hidratar la instancia de Chat primero
+await wa.Chat.pin(cid, true);
+await wa.Chat.mute(cid, true);
+await wa.Chat.seen(cid);
+
+// Listado paginado
+const chats = await wa.Chat.list(0, 100);
+console.log(`Tracking ${chats.length} chats.`);
 ```
 
-### Archivar chats inactivos
-
-```typescript
-async function archive_inactive(wa: WhatsApp) {
-  const chat = await wa.Chat.get("5491112345678@s.whatsapp.net");
-  if (chat && !chat.pinned && !chat.archived) {
-    await chat.archive(true);
-  }
-}
-```
-
-### Enviar mensaje a todos los miembros de un grupo
-
-```typescript
-async function broadcast_to_members(wa: WhatsApp, group_id: string, text: string) {
-  const group = await wa.Chat.get(group_id);
-  if (!group) return;
-
-  const members = await group.members(0, 1000);
-  for (const member of members) {
-    await wa.Message.text(member.id, text);
-    // Esperar entre mensajes para evitar ban
-    await new Promise(r => setTimeout(r, 2000));
-  }
-}
-```
-
----
-
-## Interfaz IChatRaw
-
-Objeto raw del chat almacenado en el engine (protocolo).
-
-```typescript
-interface IChatRaw {
-  id: string;
-  name?: string | null;
-  displayName?: string | null;
-  description?: string | null;
-  unreadCount?: number | null;
-  readOnly?: boolean | null;
-  archived?: boolean | null;
-  pinned?: number | null;
-  muteEndTime?: number | null;
-  markedAsUnread?: boolean | null;
-  participant?: IGroupParticipant[] | null;
-  createdBy?: string | null;
-  createdAt?: number | null;
-  ephemeralExpiration?: number | null;
-}
-
-interface IGroupParticipant {
-  id: string;
-  admin: string | null;
-}
-```
-
-| Campo | Tipo | Descripcion |
-|-------|------|-------------|
-| `id` | `string` | JID unico del chat |
-| `name` | `string \| null` | Nombre del chat o grupo |
-| `displayName` | `string \| null` | Nombre alternativo para mostrar |
-| `description` | `string \| null` | Descripcion del grupo |
-| `unreadCount` | `number \| null` | Cantidad de mensajes no leidos |
-| `readOnly` | `boolean \| null` | Si el chat es solo lectura |
-| `archived` | `boolean \| null` | Si el chat esta archivado |
-| `pinned` | `number \| null` | Timestamp de cuando se fijo el chat |
-| `muteEndTime` | `number \| null` | Timestamp de expiracion del silencio |
-| `markedAsUnread` | `boolean \| null` | Si fue marcado manualmente como no leido |
-| `participant` | `IGroupParticipant[] \| null` | Participantes del grupo |
-| `createdBy` | `string \| null` | JID del creador del grupo |
-| `createdAt` | `number \| null` | Timestamp de creacion |
-| `ephemeralExpiration` | `number \| null` | Duracion de mensajes temporales (segundos) |
-
----
-
-## Notas
-
-> **JID de chats:**
-> - Chats individuales: `{numero}@s.whatsapp.net` (ej: `5491112345678@s.whatsapp.net`)
-> - Grupos: `{id}@g.us` (ej: `123456789@g.us`)
-> - Linked IDs (LID): `{id}@lid` (formato interno de WhatsApp)
-
-> **Salir de grupos:** Al llamar `remove()` en un grupo, primero se sale del grupo y luego se elimina el chat local con cascade delete.
-
-> **Propiedad pinned:** El getter `pinned` retorna `boolean` (`true` si `raw.pinned` existe). El timestamp real de fijacion esta en `raw.pinned`. No confundir el getter booleano con el campo numerico del raw.
+!!! tip "Cuándo usar estáticos vs instancias"
+    Usa delegados estáticos cuando ya tienes una cadena `cid` de un payload de evento o una referencia almacenada: ahorran un round-trip. Instancia un `Chat` cuando necesites metadatos (`name`, `type`, `members()`) o vayas a ejecutar varias operaciones sobre el mismo chat.
