@@ -6,6 +6,14 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [3.0.1] - 2026-04-30
+
+### Fixes
+
+- **Build**: `build:esm` now passes `--resolve-full-paths` to `tsc-alias` so emitted ESM imports include explicit `.js` extensions and `/index.js` for directory imports. Without this, Node.js raised `ERR_UNSUPPORTED_DIR_IMPORT` when consumers loaded the package (`@arcaelas/whatsapp` and `@arcaelas/whatsapp/decorators`). Republished 3.0.0 was unpublished and superseded by 3.0.1.
+
+---
+
 ## [3.0.0] - 2026-04-21
 
 ### BREAKING
