@@ -189,6 +189,10 @@ export class Message {
     get from(): string {
         return this._doc.author;
     }
+    /** MIME type del contenido. `text/plain` para texto, `application/json` para location/poll, mimetype real para media. */
+    get mime(): string {
+        return this._doc.mime;
+    }
     get mid(): string | null {
         return this._doc.mid;
     }
@@ -253,6 +257,18 @@ export class Message {
             await this._wa.engine.get(`/chat/${this._doc.cid}/message/${this._doc.id}/content`)
         );
         return cached?.data ? Buffer.from(cached.data, 'base64') : Buffer.alloc(0);
+    }
+
+    /**
+     * Devuelve un `Readable` con los bytes del mensaje. Para media (image/video/audio)
+     * lee desde el cache del engine o, si falta, descarga desde baileys. Para text/location/poll
+     * retorna el mismo binario que `content()` envuelto en un Readable.
+     * Returns a `Readable` of the message bytes. For media (image/video/audio) it reads
+     * from the engine cache or, if missing, downloads from baileys. For text/location/poll
+     * it wraps the `content()` buffer in a Readable.
+     */
+    async stream(): Promise<Readable> {
+        return _media_stream(this);
     }
 
     /** Reacciona al mensaje (emoji vacío para retirar). */
@@ -488,43 +504,35 @@ async function _drain(readable: Readable): Promise<Buffer> {
 }
 
 /**
- * Mensaje de imagen. `stream()`/`content()` para bytes; `caption` heredado.
- * Image message. `stream()`/`content()` for bytes; `caption` inherited.
+ * Mensaje de imagen. Hereda `stream()` de la clase base; `content()` drena el stream.
+ * Image message. Inherits `stream()` from the base class; `content()` drains the stream.
  */
 export class Image extends Message {
-    async stream(): Promise<Readable> {
-        return _media_stream(this);
-    }
     async content(): Promise<Buffer> {
         return _drain(await this.stream());
     }
 }
 
 /**
- * Mensaje de video. `stream()`/`content()` para bytes; `caption` heredado.
- * Video message. `stream()`/`content()` for bytes; `caption` inherited.
+ * Mensaje de video. Hereda `stream()` de la clase base; `content()` drena el stream.
+ * Video message. Inherits `stream()` from the base class; `content()` drains the stream.
  */
 export class Video extends Message {
-    async stream(): Promise<Readable> {
-        return _media_stream(this);
-    }
     async content(): Promise<Buffer> {
         return _drain(await this.stream());
     }
 }
 
 /**
- * Mensaje de audio. `stream()`/`content()` para bytes; `ptt` indica si es nota de voz.
- * Los audios no usan `caption` semánticamente.
- * Audio message. `stream()`/`content()` for bytes; `ptt` flags voice notes.
+ * Mensaje de audio. Hereda `stream()` de la clase base; `content()` drena el stream.
+ * `ptt` indica si es nota de voz (push-to-talk).
+ * Audio message. Inherits `stream()` from the base class; `content()` drains the stream.
+ * `ptt` flags voice notes.
  */
 export class Audio extends Message {
     /** true si es nota de voz (push-to-talk). / true if push-to-talk voice note. */
     get ptt(): boolean {
         return this._doc.raw.message?.audioMessage?.ptt === true;
-    }
-    async stream(): Promise<Readable> {
-        return _media_stream(this);
     }
     async content(): Promise<Buffer> {
         return _drain(await this.stream());
