@@ -1,6 +1,6 @@
 {
   "name": "@arcaelas/whatsapp",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "A small box of tools, which are implemented in different factions of the library.",
   "license": "ISC",
   "main": "./build/cjs/index.js",
@@ -48,7 +48,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build:esm": "tsc --module ESNext --moduleResolution bundler --outDir build/esm && tsc-alias --outDir build/esm && echo '{\"type\":\"module\"}' > build/esm/package.json",
+    "build:esm": "tsc --module ESNext --moduleResolution bundler --outDir build/esm && tsc-alias --resolve-full-paths --outDir build/esm && echo '{\"type\":\"module\"}' > build/esm/package.json",
     "build:cjs": "tsc --module commonjs --moduleResolution node --outDir build/cjs && tsc-alias --outDir build/cjs && echo '{\"type\":\"commonjs\"}' > build/cjs/package.json",
     "build": "yarn build:esm && yarn build:cjs",
     "docs": "mkdocs gh-deploy --force",
