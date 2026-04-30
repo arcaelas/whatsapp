@@ -6,6 +6,19 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [3.0.2] - 2026-04-30
+
+### Features
+
+- **`Message.mime`**: synchronous getter exposed on the base `Message` class (returns `_doc.mime`). Previously the field was only accessible on the internal document.
+- **`Message.stream()`**: instance method moved to the base class so any `Message` typed reference can call it (was only defined on `Image`/`Video`/`Audio`). Returns a `Readable` of the media bytes (cache → baileys download → empty buffer fallback). The subclasses now inherit it directly.
+
+### Internal
+
+- Removed redundant `stream()` overrides on `Image`, `Video`, `Audio`. Their `content()` overrides remain (they drain the inherited stream).
+
+---
+
 ## [3.0.1] - 2026-04-30
 
 ### Fixes
