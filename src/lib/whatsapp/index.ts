@@ -30,6 +30,7 @@ import * as QRCode from 'qrcode';
 import { chat, type IChatRaw } from '~/lib/chat';
 import { contact, type IContactRaw } from '~/lib/contact';
 import { message, Message, MessageStatus, type IMessage } from '~/lib/message';
+import Feed, { TTL_MS as FEED_TTL_MS, type FeedType, type IFeedRaw } from '~/lib/status';
 import { deserialize, serialize, type Engine } from '~/lib/store';
 
 /**
@@ -108,6 +109,9 @@ interface WhatsAppEventMap {
     'message:unstarred': [MessageInstance, ChatInstance, WhatsApp];
     'message:forwarded': [MessageInstance, ChatInstance, WhatsApp];
     'message:seen': [MessageInstance, ChatInstance, WhatsApp];
+    'feed:created': [Feed, WhatsApp];
+    'feed:updated': [Feed, WhatsApp];
+    'feed:deleted': [Feed, WhatsApp];
 }
 
 /**
@@ -121,7 +125,8 @@ interface WhatsAppEventMap {
  */
 export class WhatsApp {
     private readonly _phone?: string;
-    private readonly _event: EventEmitter<WhatsAppEventMap>;
+    /** @internal */
+    readonly _event: EventEmitter<WhatsAppEventMap>;
     private readonly _autoclean: boolean;
     private readonly _reconnect: { max: number | null; interval_ms: number };
     private readonly _sync: boolean;
@@ -555,7 +560,7 @@ export class WhatsApp {
     /** @internal */
     private async _handle_chats_update(chats: Partial<BaileysChat>[]): Promise<void> {
         for (const ch of chats) {
-            if (ch.id) {
+            if (ch.id && ch.id !== 'status@broadcast') {
                 const current = deserialize<IChatRaw>(await this.engine.get(`/chat/${ch.id}`)) ?? {
                     id: ch.id,
                     name: ch.name ?? null,
@@ -637,6 +642,19 @@ export class WhatsApp {
     /** @internal */
     private async _handle_message_receipt(updates: MessageUserReceiptUpdate[]): Promise<void> {
         for (const { key, receipt } of updates) {
+            // Receipt sobre status@broadcast → marca el feed como visto y emite feed:updated.
+            // Receipt on status@broadcast → marks feed viewed and emits feed:updated.
+            if (key.remoteJid === 'status@broadcast' && key.id) {
+                const feed_raw = deserialize<IFeedRaw>(
+                    await this.engine.get(`/status/${key.id}`),
+                );
+                if (feed_raw && !feed_raw.viewed) {
+                    feed_raw.viewed = true;
+                    await this.engine.set(`/status/${key.id}`, serialize(feed_raw));
+                    this._event.emit('feed:updated', new Feed({ wa: this, doc: feed_raw }), this);
+                }
+                continue;
+            }
             if (key.remoteJid && key.id && (receipt.readTimestamp != null || receipt.playedTimestamp != null)) {
                 const doc = deserialize<IMessage>(await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`));
                 if (doc) {
@@ -656,6 +674,91 @@ export class WhatsApp {
                 const content_type = getContentType(msg.message ?? {});
 
                 if (content_type === 'reactionMessage') {
+                    continue;
+                }
+
+                // Status broadcast — flujo dedicado. Nunca emite `message:*`.
+                // Status broadcast — dedicated flow. Never emits `message:*`.
+                if (msg.key.remoteJid === 'status@broadcast') {
+                    if (content_type === 'protocolMessage') {
+                        const protocol = msg.message?.protocolMessage;
+                        if (
+                            protocol?.type === proto.Message.ProtocolMessage.Type.REVOKE &&
+                            protocol.key?.id
+                        ) {
+                            const feed_raw = deserialize<IFeedRaw>(
+                                await this.engine.get(`/status/${protocol.key.id}`),
+                            );
+                            if (feed_raw) {
+                                await this.engine.unset(`/status/${protocol.key.id}`);
+                                this._event.emit('feed:deleted', new Feed({ wa: this, doc: feed_raw }), this);
+                            }
+                        }
+                        continue;
+                    }
+                    const FEED_TYPE_MAP: Record<string, FeedType> = {
+                        conversation: 'text',
+                        extendedTextMessage: 'text',
+                        imageMessage: 'image',
+                        videoMessage: 'video',
+                        audioMessage: 'audio',
+                    };
+                    const feed_type = FEED_TYPE_MAP[content_type ?? ''];
+                    const author = msg.key.participant ?? '';
+                    if (!feed_type || !author) {
+                        continue;
+                    }
+                    const msg_content = msg.message?.[content_type as keyof typeof msg.message] as
+                        | Record<string, unknown>
+                        | string
+                        | undefined;
+                    let caption = '';
+                    let mime = 'text/plain';
+                    if (typeof msg_content === 'string') {
+                        caption = msg_content;
+                    } else if (msg_content && typeof msg_content === 'object') {
+                        caption =
+                            (msg_content.caption as string) ??
+                            (msg_content.text as string) ??
+                            '';
+                        if (feed_type !== 'text') {
+                            mime = (msg_content.mimetype as string) ?? 'application/octet-stream';
+                        }
+                    }
+                    const created_at =
+                        (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
+                    const feed_raw: IFeedRaw = {
+                        id: mid,
+                        author_jid: author,
+                        type: feed_type,
+                        caption,
+                        mime,
+                        created_at,
+                        expires_at: created_at + FEED_TTL_MS,
+                        viewed: false,
+                        raw: msg,
+                    };
+                    let content_buf: Buffer = Buffer.alloc(0);
+                    if (feed_type === 'text') {
+                        content_buf = Buffer.from(caption, 'utf-8');
+                    } else if (this._socket) {
+                        try {
+                            const buf = await downloadMediaMessage(msg, 'buffer', {});
+                            if (Buffer.isBuffer(buf)) {
+                                content_buf = buf as unknown as Buffer;
+                            }
+                        } catch {
+                            /* media download may fail */
+                        }
+                    }
+                    await this.engine.set(`/status/${mid}`, serialize(feed_raw));
+                    if (content_buf.length > 0) {
+                        await this.engine.set(
+                            `/status/${mid}/content`,
+                            serialize({ data: content_buf.toString('base64') }),
+                        );
+                    }
+                    this._event.emit('feed:created', new Feed({ wa: this, doc: feed_raw }), this);
                     continue;
                 }
 
@@ -864,6 +967,13 @@ export class WhatsApp {
     private async _handle_messages_update(updates: WAMessageUpdate[]): Promise<void> {
         for (const { key, update: upd } of updates) {
             if (key.remoteJid && key.id) {
+                // Updates sobre `status@broadcast` se descartan: el feed sólo se
+                // muta vía reacciones (`messages.reaction`), `Feed.view()` o REVOKE.
+                // Updates on `status@broadcast` are discarded: feed mutates only via
+                // reactions, `Feed.view()` or REVOKE.
+                if (key.remoteJid === 'status@broadcast') {
+                    continue;
+                }
                 const doc = deserialize<IMessage>(
                     await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
                 );
@@ -927,12 +1037,23 @@ export class WhatsApp {
     /** @internal */
     private async _handle_messages_reaction(
         reactions: Array<{
-            key: { remoteJid?: string | null; id?: string | null };
+            key: { remoteJid?: string | null; id?: string | null; participant?: string | null };
             reaction: { text?: string | null };
         }>
     ): Promise<void> {
         for (const { key, reaction } of reactions) {
             if (key.remoteJid && key.id) {
+                // Reacciones sobre status@broadcast → feed:updated (no message:reacted).
+                // Reactions on status@broadcast → feed:updated (not message:reacted).
+                if (key.remoteJid === 'status@broadcast') {
+                    const feed_raw = deserialize<IFeedRaw>(
+                        await this.engine.get(`/status/${key.id}`),
+                    );
+                    if (feed_raw) {
+                        this._event.emit('feed:updated', new Feed({ wa: this, doc: feed_raw }), this);
+                    }
+                    continue;
+                }
                 const doc = deserialize<IMessage>(
                     await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
                 );

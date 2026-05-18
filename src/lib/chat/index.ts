@@ -128,6 +128,9 @@ export function chat(wa: WhatsApp) {
   }
 
   return class _Chat extends Chat {
+    /** @internal Cache TTL (15s) de la promesa de participants del grupo. Evita round-trips a `groupMetadata` y deduplica llamadas concurrentes. */
+    _members_cache: Promise<{ id: string }[]> | null = null;
+
     /**
      * Obtiene un chat por CID. Si no está persistido, lo crea a partir del contacto.
      * Retrieves a chat by CID. If not persisted, creates it from the contact.
@@ -347,7 +350,14 @@ export function chat(wa: WhatsApp) {
       return true;
     }
 
-    /** Participantes del chat paginados (incluyéndome en grupos). / Chat participants paginated (self included in groups). */
+    /**
+     * Participantes del chat paginados (incluyéndome en grupos). Para grupos,
+     * el `groupMetadata` se memoiza en la instancia con TTL de 15s para evitar
+     * round-trips repetidos al socket.
+     * Chat participants paginated (self included in groups). For groups,
+     * `groupMetadata` is memoized on the instance with a 15s TTL to avoid
+     * repeated socket round-trips.
+     */
     async members(offset = 0, limit = 50): Promise<InstanceType<typeof wa.Contact>[]> {
       const result: InstanceType<typeof wa.Contact>[] = [];
       if (this.type !== 'group') {
@@ -359,8 +369,13 @@ export function chat(wa: WhatsApp) {
         }
       } else if (wa._socket) {
         try {
-          const meta = await wa._socket.groupMetadata(this.id);
-          const slice = meta.participants.slice(offset, offset + limit);
+          const socket = wa._socket;
+          const participants = await (this._members_cache ??= (async () => {
+            const meta = await socket.groupMetadata(this.id);
+            setTimeout(() => { this._members_cache = null; }, 15_000);
+            return meta.participants;
+          })());
+          const slice = participants.slice(offset, offset + limit);
           for (const p of slice) {
             const existing = await wa.Contact.get(p.id);
             if (existing) {

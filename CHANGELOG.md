@@ -6,6 +6,32 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [3.1.0] - 2026-05-18
+
+### BREAKING
+
+- **`status@broadcast` messages no longer emit `message:*`**: publications, edits, reactions and revocations on status broadcasts are routed to the new `feed:*` event channel. Consumers that filtered statuses inside `message:created` handlers must migrate to the dedicated `feed:*` listeners.
+- **`status@broadcast` no longer emits `chat:*`**: `chats.update` entries with `id === 'status@broadcast'` are silenced. Previously the orchestrator persisted a virtual `/chat/status@broadcast` and emitted `chat:archived`/`chat:muted`/`chat:pinned` against it.
+- **Storage layout**: status documents live at `/status/{id}` (was `/chat/status@broadcast/message/{id}`). Pre-existing status entries become orphaned (expire naturally within 24h).
+
+### Features
+
+- **`Feed` entity** (`src/lib/status`): represents a status broadcast post. Exposes `id`, `type`, `viewed`, `caption`, `created_at`, `expires_at`, plus `author()`, `stream()`, `content()` and `view()`. The 24h TTL is exported as `FEED_TTL_MS`.
+- **New events**: `feed:created` (publication), `feed:updated` (reaction via `messages.reaction` or read receipt via `message-receipt.update` or `Feed.view()` call), `feed:deleted` (`protocolMessage` REVOKE).
+- **Public exports**: `Feed`, `FEED_TTL_MS`, `IFeedRaw`, `FeedType` from `@arcaelas/whatsapp`.
+
+### Performance
+
+- **`Message.author()`** and **`Message.chat()`**: instance-memoized via promise cache (`??=`). First call hits the engine; subsequent calls reuse the same resolved promise — race-free under concurrent access.
+- **`Feed.author()`**: harmonized to the same promise-memoized pattern.
+- **`Chat.members()`** (groups only): the underlying `groupMetadata` response is memoized on the instance with a 15s TTL. Concurrent calls within the window share a single socket round-trip.
+
+### Internal
+
+- `WhatsApp._event` exposed as `@internal readonly` (was `private`) so entities in sibling modules can emit (e.g. `Feed.view()` emits `feed:updated`).
+
+---
+
 ## [3.0.2] - 2026-04-30
 
 ### Features
