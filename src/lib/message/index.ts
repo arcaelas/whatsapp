@@ -17,6 +17,7 @@ import {
     jidNormalizedUser,
     proto,
     sha256,
+    updateMessageWithPollUpdate,
     type WAMessage,
 } from 'baileys';
 import { randomBytes } from 'node:crypto';
@@ -53,6 +54,10 @@ export interface SendMediaOptions extends SendOptions {
 export interface SendAudioOptions extends SendOptions {
     ptt?: boolean;
 }
+export interface SendPollOptions extends SendOptions {
+    /** true para selección múltiple; default false (single). / true for multi-select; default false (single). */
+    multiple?: boolean;
+}
 export interface LocationOptions {
     lat: number;
     lng: number;
@@ -81,6 +86,16 @@ export interface IMessage {
     mime: string;
     caption: string;
     edited: boolean;
+    /**
+     * Solo para polls: discriminador explícito de selección múltiple seteado al enviar.
+     * Cuando está definido, `Poll.multiple` lo prefiere sobre el conteo del proto
+     * (WhatsApp normaliza `selectableOptionsCount` en el echo de polls auto-emitidos
+     * y pierde el discriminador, por eso necesitamos persistirlo nosotros).
+     * Poll-only: explicit multi-select flag set at send time. When defined, `Poll.multiple`
+     * prefers it over the proto count (WhatsApp normalizes `selectableOptionsCount` on
+     * own-poll echo, losing the discriminator).
+     */
+    multiple?: boolean;
     raw: WAMessage;
 }
 
@@ -482,7 +497,7 @@ export class Message {
     }
 
     /** Responde con encuesta. */
-    async poll(poll: PollOptions, opts: SendOptions = {}) {
+    async poll(poll: PollOptions, opts: SendPollOptions = {}) {
         return this._wa.Message.poll(this.cid, poll, { ...opts, mid: this.id });
     }
 }
@@ -599,8 +614,18 @@ export class Poll extends Message {
         return m?.pollCreationMessage ?? m?.pollCreationMessageV2 ?? m?.pollCreationMessageV3;
     }
 
-    /** true si admite múltiples respuestas. / true if it accepts multiple answers. */
+    /**
+     * true si admite múltiples respuestas. Lee primero el flag explícito persistido
+     * al enviar (caso propio, donde WhatsApp pierde el discriminador en el echo);
+     * fallback al `selectableOptionsCount` del proto (polls foráneos o de UI móvil).
+     * true if the poll accepts multiple answers. Prefers the persisted send-time
+     * flag (own polls, since WhatsApp drops the discriminator on echo); falls back
+     * to the proto `selectableOptionsCount` (foreign or mobile-UI polls).
+     */
     get multiple(): boolean {
+        if (typeof this._doc.multiple === 'boolean') {
+            return this._doc.multiple;
+        }
         return (this._poll?.selectableOptionsCount ?? 1) !== 1;
     }
 
@@ -643,13 +668,36 @@ export class Poll extends Message {
             .filter((i) => i >= 0 && i < opts.length)
             .map((i) => sha256(Buffer.from(opts[i].optionName ?? '')));
 
-        const poll_enc_key = _doc.raw.message?.messageContextInfo?.messageSecret;
+        // messageSecret puede llegar como Buffer (raw runtime) o string base64 (post-deserialize
+        // del engine). Normaliza a Buffer antes de derivar el HMAC.
+        // messageSecret may arrive as Buffer (runtime raw) or base64 string (post engine
+        // deserialize). Normalize to Buffer before deriving the HMAC.
+        const secret_raw = _doc.raw.message?.messageContextInfo?.messageSecret;
+        const poll_enc_key =
+            typeof secret_raw === 'string' ? Buffer.from(secret_raw, 'base64') : secret_raw;
         if (!poll_enc_key || !_wa._socket || selected_options.length === 0) {
             return false;
         }
 
-        const voter_jid = jidNormalizedUser(_wa._socket.user?.id ?? '');
-        const poll_creator_jid = getKeyAuthor(_doc.raw.key, _wa._socket.user?.id);
+        // WhatsApp moderno usa la identidad LID para HMAC de poll votes (ver patch
+        // devmsh/whatsapp-bridge: "EncryptPollVote uses getOwnID() (Phone JID) but
+        // SendMessage uses LID identity. This causes silent decryption failure on
+        // poll votes"). Siempre que tengamos LID, lo usamos normalizado (sin device).
+        // Modern WhatsApp expects LID identity for poll vote HMAC. Use normalized
+        // LID whenever available; fall back to phone JID only if no LID is known.
+        const poll_key = _doc.raw.key ?? {};
+        const self_id = _wa._socket.user?.id ?? '';
+        const self_lid = (_wa._socket.user as { lid?: string })?.lid ?? '';
+        const voter_jid = jidNormalizedUser(self_lid || self_id);
+        let poll_creator_raw: string;
+        if (poll_key.fromMe) {
+            poll_creator_raw = self_lid || self_id;
+        } else if (poll_key.remoteJid?.endsWith('@lid')) {
+            poll_creator_raw = poll_key.remoteJid;
+        } else {
+            poll_creator_raw = getKeyAuthor(poll_key, self_id);
+        }
+        const poll_creator_jid = jidNormalizedUser(poll_creator_raw);
         const poll_msg_id = this.id;
 
         // Derivar clave y encriptar el voto (mismo algoritmo que baileys.decryptPollVote)
@@ -660,7 +708,7 @@ export class Poll extends Message {
             Buffer.from('Poll Vote'),
             new Uint8Array([1]),
         ]);
-        const key0 = hmacSign(Buffer.from(poll_enc_key), new Uint8Array(32), 'sha256');
+        const key0 = hmacSign(poll_enc_key, new Uint8Array(32), 'sha256');
         const enc_key = hmacSign(sign, key0, 'sha256');
         const payload = proto.Message.PollVoteMessage.encode({
             selectedOptions: selected_options,
@@ -681,6 +729,27 @@ export class Poll extends Message {
             },
             { messageId: msg_id }
         );
+        // baileys.relayMessage no echa upsert local al companion que envió el voto.
+        // Mergemos el voto propio en el doc para que `options[].count` y el evento
+        // `message:updated` reflejen el cambio sin esperar (nunca) un echo del servidor.
+        // baileys.relayMessage doesn't emit a local upsert on the originating companion.
+        // We merge the own vote into the doc so `options[].count` and the `message:updated`
+        // event reflect the change without waiting for a server echo that never comes.
+        const own_update_key = {
+            remoteJid: _doc.raw.key?.remoteJid ?? _doc.cid,
+            fromMe: true,
+            id: msg_id,
+        };
+        updateMessageWithPollUpdate(_doc.raw, {
+            pollUpdateMessageKey: own_update_key,
+            vote: { selectedOptions: selected_options },
+            senderTimestampMs: Date.now(),
+        });
+        await _wa.engine.set(
+            `/chat/${_doc.cid}/message/${_doc.id}`,
+            serialize(_doc),
+        );
+        _wa._event.emit('message:updated', this, await this.chat(), _wa);
         return true;
     }
 }
@@ -717,7 +786,8 @@ export function message(wa: WhatsApp) {
         cid: string,
         content: Record<string, unknown>,
         binary?: Buffer,
-        reply_to?: string
+        reply_to?: string,
+        doc_overrides?: Partial<IMessage>,
     ): Promise<Message | null> {
         let result: Message | null = null;
         const jid = await wa._resolve_jid(cid);
@@ -738,6 +808,9 @@ export function message(wa: WhatsApp) {
             const sent_id = raw?.key?.id;
             if (raw && sent_id) {
                 const doc = build_message_doc(raw, wa._socket?.user?.id);
+                if (doc_overrides) {
+                    Object.assign(doc, doc_overrides);
+                }
                 await wa.engine.set(`/chat/${jid}/message/${sent_id}`, serialize(doc));
                 if (binary) {
                     await wa.engine.set(
@@ -820,12 +893,20 @@ export function message(wa: WhatsApp) {
             );
         },
 
-        async poll(cid: string, p: PollOptions, opts: SendOptions = {}) {
+        async poll(cid: string, p: PollOptions, opts: SendPollOptions = {}) {
+            const multiple = opts.multiple ?? false;
             return send(
                 cid,
-                { poll: { name: p.content, values: p.options.map((o) => o.content), selectableCount: 1 } },
+                {
+                    poll: {
+                        name: p.content,
+                        values: p.options.map((o) => o.content),
+                        selectableCount: multiple ? 0 : 1,
+                    },
+                },
                 undefined,
-                opts.mid
+                opts.mid,
+                { multiple },
             );
         },
 

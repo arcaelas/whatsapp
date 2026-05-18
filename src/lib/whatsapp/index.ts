@@ -12,6 +12,7 @@ import {
     fetchLatestBaileysVersion,
     getContentType,
     initAuthCreds,
+    jidNormalizedUser,
     makeWASocket,
     proto,
     updateMessageWithPollUpdate,
@@ -783,28 +784,31 @@ export class WhatsApp {
                         if (poll_doc && message_secret) {
                             try {
                                 const poll_key = poll_doc.raw.key ?? {};
-                                // Modo LID: si la conversación usa addressing LID, usar LIDs en el HMAC
-                                const use_lid =
-                                    (msg.key as { addressingMode?: string }).addressingMode === 'lid' ||
-                                    msg.key.remoteJid?.endsWith('@lid') === true;
+                                // WhatsApp moderno usa LID normalizado para identidad del HMAC
+                                // tanto en votos propios (echo) como foráneos. Espejo del fix de
+                                // `Poll.select()` (ver `src/lib/message`).
+                                // Modern WhatsApp uses normalized LID identity for HMAC on both
+                                // own-vote echoes and foreign votes. Mirrors the `Poll.select()` fix.
                                 const self_id = this._socket?.user?.id ?? '';
                                 const self_lid = (this._socket?.user as { lid?: string })?.lid ?? '';
-                                const voter_jid = use_lid
-                                    ? (msg.key.remoteJid ?? '')
-                                    : msg.key.participant ||
-                                    (msg.key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                    msg.key.remoteJid ||
-                                    '';
-                                const poll_creator_jid = poll_key.fromMe
-                                    ? use_lid
-                                        ? self_lid
-                                        : self_id
-                                    : use_lid
-                                        ? (poll_key.remoteJid ?? '')
+                                const voter_raw = msg.key.fromMe
+                                    ? (self_lid || self_id)
+                                    : msg.key.remoteJid?.endsWith('@lid')
+                                        ? msg.key.remoteJid
+                                        : msg.key.participant ||
+                                          (msg.key as { remoteJidAlt?: string }).remoteJidAlt ||
+                                          msg.key.remoteJid ||
+                                          '';
+                                const creator_raw = poll_key.fromMe
+                                    ? (self_lid || self_id)
+                                    : poll_key.remoteJid?.endsWith('@lid')
+                                        ? poll_key.remoteJid
                                         : poll_key.participant ||
-                                        (poll_key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                        poll_key.remoteJid ||
-                                        '';
+                                          (poll_key as { remoteJidAlt?: string }).remoteJidAlt ||
+                                          poll_key.remoteJid ||
+                                          '';
+                                const voter_jid = jidNormalizedUser(voter_raw);
+                                const poll_creator_jid = jidNormalizedUser(creator_raw);
                                 const decrypted = decryptPollVote(
                                     { encPayload: update.vote.encPayload, encIv: update.vote.encIv },
                                     {
@@ -912,6 +916,16 @@ export class WhatsApp {
                     }
                 }
 
+                // Preservar flags explícitos persistidos por el send (ej: `multiple` en polls
+                // auto-emitidos, donde el echo de WhatsApp pierde el discriminador del proto).
+                // Preserve send-time flags (e.g. `multiple` on own polls, since WhatsApp drops
+                // the proto discriminator on echo).
+                const existing_doc = deserialize<IMessage>(
+                    await this.engine.get(`/chat/${cid}/message/${mid}`),
+                );
+                if (existing_doc && typeof existing_doc.multiple === 'boolean') {
+                    doc.multiple = existing_doc.multiple;
+                }
                 await this.engine.set(`/chat/${cid}/message/${mid}`, serialize(doc));
 
                 let content_buf: Buffer = Buffer.alloc(0);
