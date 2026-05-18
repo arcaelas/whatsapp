@@ -456,9 +456,11 @@ export class WhatsApp {
         socket.ev.on('message-receipt.update', (updates) => {
             void this._handle_message_receipt(updates);
         });
-        socket.ev.on('messages.reaction', (reactions) => {
-            void this._handle_messages_reaction(reactions);
-        });
+        // Las reacciones llegan duplicadas por `messages.reaction` Y `messages.upsert`
+        // (como `reactionMessage`). Se usa solo `messages.upsert` para evitar el doble disparo.
+        // socket.ev.on('messages.reaction', (reactions) => {
+        //     void this._handle_messages_reaction(reactions);
+        // });
     }
 
     /** @internal */
@@ -675,6 +677,16 @@ export class WhatsApp {
                 const content_type = getContentType(msg.message ?? {});
 
                 if (content_type === 'reactionMessage') {
+                    // Canal único para reacciones: se procesa aquí y se ignora `messages.reaction`.
+                    // Single channel for reactions: handled here; `messages.reaction` is disabled.
+                    const reaction = msg.message?.reactionMessage;
+                    if (reaction?.key?.id && reaction.key.remoteJid) {
+                        const target_cid = (await this._resolve_jid(reaction.key.remoteJid)) ?? reaction.key.remoteJid;
+                        await this._handle_messages_reaction([{
+                            key: { remoteJid: target_cid, id: reaction.key.id },
+                            reaction: { text: reaction.text ?? '' },
+                        }]);
+                    }
                     continue;
                 }
 
