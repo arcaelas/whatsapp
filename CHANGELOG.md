@@ -6,6 +6,22 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [3.1.1] - 2026-05-18
+
+### Fixes
+
+- **Poll vote encryption**: `Poll.select()` now derives the HMAC with the normalized LID identity (`socket.user.lid` stripped of device suffix) for both voter and creator JIDs. WhatsApp silently dropped votes whose HMAC used the phone JID. Mirrors the fix `devmsh/whatsapp-bridge` applies to whatsmeow.
+- **`messageSecret` base64 normalization**: `Poll.select()` decodes `messageContextInfo.messageSecret` from base64 string when needed (proto deserialization may produce string instead of `Buffer`), avoiding a wrong HMAC key.
+- **Orchestrator `pollUpdateMessage` decrypt**: aligned to the same LID-normalized identity. Previously self-vote echoes silently failed `decryptPollVote` because the voter JID was taken from `msg.key.remoteJid` (counterpart) instead of our own LID.
+- **Local merge after `Poll.select()`**: `socket.relayMessage` does not emit a local upsert to the originating companion, so the bot's own vote never came back through `messages.upsert`. `Poll.select()` now merges the vote into `_doc.raw.pollUpdates` and emits `message:updated` directly so `options[].count` reflects the change without waiting for a non-existent echo.
+
+### Features
+
+- **`SendPollOptions` export**: new public type extending `SendOptions` with `multiple?: boolean`. `wa.Message.poll(cid, p, { multiple: true })` and `msg.poll(p, { multiple: true })` now accept the flag. Internally maps to baileys' `selectableCount` (`1` → single via V3 proto, `0` → multi via V1 proto).
+- **`IMessage.multiple` persisted flag**: `wa.Message.poll()` writes the explicit `multiple` to the persisted doc. `Poll.multiple` reads this flag first because WhatsApp normalizes `selectableOptionsCount` to `0` on echo of own polls regardless of intent. Foreign polls keep falling back to the proto count.
+
+---
+
 ## [3.1.0] - 2026-05-18
 
 ### BREAKING
