@@ -9,3 +9,6 @@ export type { IWhatsApp, DisconnectOptions, ReconnectOption } from '~/lib/whatsa
 
 export { FileSystemEngine, RedisEngine } from '~/lib/store';
 export type { Engine, RedisClient } from '~/lib/store';
+
+export { default as Feed, TTL_MS as FEED_TTL_MS } from '~/lib/status';
+export type { IFeedRaw, FeedType } from '~/lib/status';

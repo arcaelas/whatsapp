@@ -21,13 +21,16 @@ import {
 } from 'baileys';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { Chat, type IChatRaw } from '~/lib/chat';
-import { Contact } from '~/lib/contact';
+import { Chat, chat, type IChatRaw } from '~/lib/chat';
+import { Contact, contact } from '~/lib/contact';
 import { deserialize, serialize } from '~/lib/store';
 import type { WhatsApp } from '~/lib/whatsapp';
 
 /** Destino aceptado por `forward`: CID (string), Chat o Contact. */
 export type ForwardTarget = string | Chat | Contact;
+
+type ChatInstance = InstanceType<ReturnType<typeof chat>>;
+type ContactInstance = InstanceType<ReturnType<typeof contact>>;
 
 /** Tipos de mensaje internos (no expuestos como getter público). */
 export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'location' | 'poll';
@@ -170,6 +173,10 @@ export class Message {
     protected readonly _wa: WhatsApp;
     /** @internal */
     protected readonly _doc: IMessage;
+    /** @internal Cache de la promesa de `author()` para evitar engine round-trips repetidos. */
+    private _author_cache: Promise<ContactInstance> | null = null;
+    /** @internal Cache de la promesa de `chat()` para evitar engine round-trips repetidos. */
+    private _chat_cache: Promise<ChatInstance> | null = null;
 
     constructor(options: { wa: WhatsApp; doc: IMessage }) {
         this._wa = options.wa;
@@ -224,31 +231,47 @@ export class Message {
         return this._doc.edited;
     }
 
-    /** Contacto del autor (resuelve vía `wa.Contact.get`; fallback a instancia mínima). */
-    async author(): Promise<InstanceType<typeof this._wa.Contact>> {
-        const { _wa, _doc } = this;
-        const fetched = _doc.author ? await _wa.Contact.get(_doc.author) : null;
-        return (
-            fetched ??
-            new _wa.Contact(
-                {
-                    id: _doc.author,
-                    lid: null,
-                    name: null,
-                    notify: null,
-                    verified_name: null,
-                    img_url: null,
-                    status: null,
-                },
-                new _wa.Chat({ id: _doc.author, name: _doc.author.split('@')[0] })
-            )
-        );
+    /**
+     * Contacto del autor (resuelve vía `wa.Contact.get`; fallback a instancia mínima).
+     * Memoizado por instancia: la primera llamada va al engine; las siguientes
+     * reutilizan la misma promesa sin nuevos round-trips.
+     * Author contact (resolves via `wa.Contact.get`; falls back to a minimal instance).
+     * Instance-memoized: first call hits the engine; subsequent calls reuse the
+     * same promise without further round-trips.
+     */
+    async author(): Promise<ContactInstance> {
+        return (this._author_cache ??= (async () => {
+            const { _wa, _doc } = this;
+            const fetched = _doc.author ? await _wa.Contact.get(_doc.author) : null;
+            return (
+                fetched ??
+                new _wa.Contact(
+                    {
+                        id: _doc.author,
+                        lid: null,
+                        name: null,
+                        notify: null,
+                        verified_name: null,
+                        img_url: null,
+                        status: null,
+                    },
+                    new _wa.Chat({ id: _doc.author, name: _doc.author.split('@')[0] })
+                )
+            );
+        })());
     }
 
-    /** Chat al que pertenece el mensaje. */
-    async chat(): Promise<InstanceType<typeof this._wa.Chat>> {
-        const cached = deserialize<IChatRaw>(await this._wa.engine.get(`/chat/${this._doc.cid}`));
-        return new this._wa.Chat(cached ?? { id: this._doc.cid, name: this._doc.cid.split('@')[0] });
+    /**
+     * Chat al que pertenece el mensaje. Memoizado por instancia: la primera llamada
+     * va al engine; las siguientes reutilizan la misma promesa.
+     * Chat the message belongs to. Instance-memoized: first call hits the engine;
+     * subsequent calls reuse the same promise.
+     */
+    async chat(): Promise<ChatInstance> {
+        return (this._chat_cache ??= (async () => {
+            const cached = deserialize<IChatRaw>(await this._wa.engine.get(`/chat/${this._doc.cid}`));
+            return new this._wa.Chat(cached ?? { id: this._doc.cid, name: this._doc.cid.split('@')[0] });
+        })());
     }
 
     /** Contenido sin parsear, directo del engine. Las subclases override según su tipo. */
