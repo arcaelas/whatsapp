@@ -384,8 +384,9 @@ export class Message {
         const { _wa, _doc } = this;
         let ok = false;
         if (_wa._socket) {
+            const is_group = _doc.cid.endsWith('@g.us');
             await _wa._socket.readMessages([
-                { remoteJid: _doc.cid, id: _doc.id, participant: _doc.me ? undefined : _doc.author },
+                { remoteJid: _doc.cid, id: _doc.id, participant: is_group ? _doc.author : undefined },
             ]);
             ok = true;
         }
@@ -442,20 +443,24 @@ export class Message {
         const { _wa: wa, _doc: doc } = this;
         let ok = false;
         if (wa._socket && doc.me) {
-            await wa._socket.sendMessage(doc.cid, {
-                text,
-                edit: { remoteJid: doc.cid, id: doc.id, fromMe: true },
-            } as never);
-            const content_type = getContentType(doc.raw.message ?? {});
-            if (content_type === 'conversation') {
-                doc.raw.message = { conversation: text };
-            } else if (content_type === 'extendedTextMessage') {
-                doc.raw.message = { extendedTextMessage: { text } };
+            try {
+                await wa._socket.sendMessage(doc.cid, {
+                    text,
+                    edit: { remoteJid: doc.cid, id: doc.id, fromMe: true },
+                } as never);
+                const content_type = getContentType(doc.raw.message ?? {});
+                if (content_type === 'conversation') {
+                    doc.raw.message = { conversation: text };
+                } else if (content_type === 'extendedTextMessage') {
+                    doc.raw.message = { extendedTextMessage: { text } };
+                }
+                doc.caption = text;
+                doc.edited = true;
+                await wa.engine.set(`/chat/${doc.cid}/message/${doc.id}`, serialize(doc));
+                ok = true;
+            } catch {
+                ok = false;
             }
-            doc.caption = text;
-            doc.edited = true;
-            await wa.engine.set(`/chat/${doc.cid}/message/${doc.id}`, serialize(doc));
-            ok = true;
         }
         return ok;
     }
