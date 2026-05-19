@@ -184,12 +184,6 @@ export function chat(wa: WhatsApp) {
       return c ? c.mute(value) : false;
     }
 
-    /** Marca todos los mensajes del chat como leídos. / Marks all chat messages as read. */
-    static async seen(cid: string): Promise<boolean> {
-      const c = await _Chat.get(cid);
-      return c ? c.seen() : false;
-    }
-
     /** Vacía mensajes del chat (local). / Clears the chat's messages (local only). */
     static async clear(cid: string): Promise<boolean> {
       const c = await _Chat.get(cid);
@@ -275,29 +269,6 @@ export function chat(wa: WhatsApp) {
         this._raw.mute_end_time = mute_end;
         await wa.engine.set(`/chat/${this.id}`, serialize(this._raw));
         ok = true;
-      }
-      return ok;
-    }
-
-    /** Marca todos los mensajes del chat como leídos. / Marks all chat messages as read. */
-    async seen(): Promise<boolean> {
-      let ok = false;
-      if (wa._socket) {
-        const last = await last_messages(this.id);
-        if (last.length > 0) {
-          const msg = last[0];
-          await wa._socket.readMessages([
-            {
-              remoteJid: this.id,
-              id: msg.key.id,
-              participant: msg.key.fromMe ? undefined : msg.key.remoteJid,
-            },
-          ]);
-          this._raw.unread_count = 0;
-          this._raw.marked_as_unread = false;
-          await wa.engine.set(`/chat/${this.id}`, serialize(this._raw));
-          ok = true;
-        }
       }
       return ok;
     }
