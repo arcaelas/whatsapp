@@ -176,6 +176,7 @@ export class WhatsAppBot extends WhatsApp {
             const schema = metadata[HANDLERS] as BotSchema | undefined;
             if (schema) {
                 const intervals: Array<{ ms: number; run: () => Promise<void> }> = [];
+                const delays: Array<{ ms: number; run: () => Promise<void> }> = [];
 
                 for (const meta of Object.values(schema.handlers)) {
                     const method = (this as unknown as Record<string, unknown>)[meta.method];
@@ -205,6 +206,11 @@ export class WhatsAppBot extends WhatsApp {
                                 if (Number.isFinite(ms) && ms > 0) {
                                     intervals.push({ ms, run: () => invoke() });
                                 }
+                            } else if (event.startsWith('__delay:')) {
+                                const ms = parseInt(event.slice('__delay:'.length), 10);
+                                if (Number.isFinite(ms) && ms > 0) {
+                                    delays.push({ ms, run: () => invoke() });
+                                }
                             } else if (event !== '__pair') {
                                 const register = meta.once ? this.once.bind(this) : this.on.bind(this);
                                 register(event as never, invoke as never);
@@ -225,6 +231,24 @@ export class WhatsAppBot extends WhatsApp {
                             clearInterval(id);
                         }
                         timer_ids = [];
+                    });
+                }
+
+                if (delays.length > 0) {
+                    let active = false;
+                    this.on('connected', () => {
+                        active = true;
+                        for (const { ms, run } of delays) {
+                            const loop = async (): Promise<void> => {
+                                if (!active) return;
+                                await run();
+                                if (active) setTimeout(() => void loop(), ms);
+                            };
+                            setTimeout(() => void loop(), ms);
+                        }
+                    });
+                    this.on('disconnected', () => {
+                        active = false;
                     });
                 }
 

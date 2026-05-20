@@ -98,15 +98,38 @@ export function disconnect() {
 
 /**
  * Ejecuta el método cada `ms` milisegundos mientras el bot esté conectado.
+ * Usa `setInterval` — las ejecuciones son independientes del tiempo que tarde
+ * el método, por lo que pueden solaparse si tarda más de `ms`.
  * Los timers arrancan en `connected` y se cancelan en `disconnected`.
- * Runs the method every `ms` milliseconds while the bot is connected. Timers
- * start on `connected` and are cancelled on `disconnected`.
+ * Runs the method every `ms` milliseconds while the bot is connected.
+ * Uses `setInterval` — executions are independent of how long the method takes,
+ * so they may overlap if it runs longer than `ms`.
+ * Timers start on `connected` and are cancelled on `disconnected`.
  *
  * @param ms - Intervalo en milisegundos / Interval in milliseconds
  */
 export function every(ms: number) {
     return decorator<[]>((_meta, h) => {
         h.events.push(`__every:${ms}`);
+    })();
+}
+
+/**
+ * Ejecuta el método con un retardo de `ms` milisegundos entre ejecuciones,
+ * usando `setTimeout` recursivo. A diferencia de `@every`, la siguiente
+ * ejecución solo empieza cuando la anterior ha terminado — nunca hay
+ * ejecuciones en paralelo. Arranca en `connected` y se detiene en
+ * `disconnected`.
+ * Runs the method with `ms` milliseconds between executions using a recursive
+ * `setTimeout`. Unlike `@every`, the next execution only starts after the
+ * previous one finishes — executions never overlap. Starts on `connected`
+ * and stops on `disconnected`.
+ *
+ * @param ms - Retardo entre ejecuciones en milisegundos / Delay between executions in milliseconds
+ */
+export function delay(ms: number) {
+    return decorator<[]>((_meta, h) => {
+        h.events.push(`__delay:${ms}`);
     })();
 }
 

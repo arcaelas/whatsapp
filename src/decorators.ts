@@ -17,6 +17,7 @@ export {
     connect,
     disconnect,
     every,
+    delay,
     pipe,
     pair,
     HANDLERS,
