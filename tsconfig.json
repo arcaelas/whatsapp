@@ -18,8 +18,10 @@
     "noImplicitAny": false,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "downlevelIteration": true,
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM"],
     "useDefineForClassFields": false,
     "strictPropertyInitialization": false
   },
