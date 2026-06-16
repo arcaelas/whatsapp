@@ -1,11 +1,14 @@
 # Message
 
-`Message` is the root class for every incoming or outgoing WhatsApp message. It follows a single-base-class architecture: `Message` owns the full instance API (getters, persistence, reactions, replies, forwarding, deletion, edits), and six specialized subclasses override `content()` and add payload-specific helpers:
+`Message` is the root class for every incoming or outgoing WhatsApp message. It follows a single-base-class architecture: `Message` owns the full instance API (getters, persistence, reactions, replies, forwarding, deletion, edits), and nine specialized subclasses override `content()` and add payload-specific helpers:
 
 - `Text` — conversation and extended text.
 - `Image` / `Video` / `Audio` — media with `stream()` and `content()` helpers.
 - `Gps` — static and live location, with `lat`, `lng`, `link`, `live` getters.
 - `Poll` — multi-option polls with vote aggregation and `select()` for voting.
+- `Document` — any file sent as a document (PDF, image, audio, video, etc.), with `file_name`, `size`, `pages`, `title` getters.
+- `VCard` — contact card(s); `contacts` getter with `{ name, phone }[]`.
+- `Event` — calendar event; `name`, `start`, `end`, `canceled`, `link`, `place` getters (description in `caption`).
 
 The `message(wa)` factory returns a delegate object mounted as `wa.Message`, which exposes both the subclasses (for `instanceof` checks) and the static send/CRUD methods.
 
@@ -21,7 +24,8 @@ Subclasses live on `wa.Message`:
 
 ```typescript title="subclasses.ts"
 // wa.Message.Text, wa.Message.Image, wa.Message.Video,
-// wa.Message.Audio, wa.Message.Gps, wa.Message.Poll
+// wa.Message.Audio, wa.Message.Gps, wa.Message.Poll, wa.Message.Document,
+// wa.Message.VCard, wa.Message.Event
 ```
 
 ---
@@ -37,7 +41,7 @@ new wa.Message.Text({ wa, doc });
 // doc: IMessage — the persisted document from the engine.
 ```
 
-Under the hood, every send helper calls an internal `build_instance(doc)` that picks the right subclass based on `doc.type` (`'text' | 'image' | 'video' | 'audio' | 'location' | 'poll'`).
+Under the hood, every send helper calls an internal `build_instance(doc)` that picks the right subclass based on `doc.type` (`'text' | 'image' | 'video' | 'audio' | 'location' | 'poll' | 'document' | 'vcard' | 'event'`).
 
 ---
 
@@ -67,6 +71,15 @@ wa.on("message:created", async (msg, chat) => {
   if (msg instanceof wa.Message.Poll) {
     console.log("question:", msg.caption, "opts:", msg.options);
   }
+  if (msg instanceof wa.Message.Document) {
+    console.log("file:", msg.file_name, msg.size, "bytes");
+  }
+  if (msg instanceof wa.Message.VCard) {
+    console.log("contacts:", msg.contacts);
+  }
+  if (msg instanceof wa.Message.Event) {
+    console.log("event:", msg.name, "@", msg.start, msg.caption);
+  }
 });
 ```
 
@@ -80,6 +93,9 @@ switch (msg.type) {
   case "audio": /* ... */ break;
   case "location": /* ... */ break;
   case "poll": /* ... */ break;
+  case "document": /* ... */ break;
+  case "vcard": /* ... */ break;
+  case "event": /* ... */ break;
 }
 ```
 
@@ -93,7 +109,7 @@ switch (msg.type) {
 | -------- | ---- | ----------- |
 | `id` | `string` | Message id (the `key.id` in Baileys). |
 | `cid` | `string` | JID of the chat the message belongs to. |
-| `type` | `MessageType` | `'text' \| 'image' \| 'video' \| 'audio' \| 'location' \| 'poll'`. |
+| `type` | `MessageType` | `'text' \| 'image' \| 'video' \| 'audio' \| 'location' \| 'poll' \| 'document'`. |
 | `from` | `string` | JID of the author (sync — no contact hydration). |
 | `mid` | `string \| null` | Quoted message id (reply reference). |
 | `me` | `boolean` | `true` when the message was sent by the authenticated account. |
@@ -143,13 +159,40 @@ export enum MessageStatus {
 | `multiple` | `boolean` | `true` when multiple options can be selected. |
 | `options` | `{ content: string; count: number }[]` | Up-to-date choices with live vote counts. |
 
+`Document`
+
+| Property | Type | Notes |
+| -------- | ---- | ----- |
+| `file_name` | `string` | File name. |
+| `size` | `number` | Size in bytes (0 if unknown). |
+| `pages` | `number` | Page count (PDF); 0 when not applicable. |
+| `title` | `string` | Document title. |
+
+`VCard`
+
+| Property | Type | Notes |
+| -------- | ---- | ----- |
+| `contacts` | `{ name: string; phone: string }[]` | Contact cards (name + phone parsed from the vCard). |
+
+`Event`
+
+| Property | Type | Notes |
+| -------- | ---- | ----- |
+| `name` | `string` | Event name. |
+| `caption` | `string` | Description (inherited from `Message`). |
+| `start` | `number` | Start epoch ms. |
+| `end` | `number \| null` | End epoch ms, or `null`. |
+| `canceled` | `boolean` | `true` if the event was canceled. |
+| `link` | `string` | Join link (audio/video), if any. |
+| `place` | `{ lat: number; lng: number } \| null` | Event location, or `null`. |
+
 ### `IMessage`
 
 ```typescript title="IMessage.ts"
 import type { WAMessage } from "baileys";
 
 export type MessageType =
-  | "text" | "image" | "video" | "audio" | "location" | "poll";
+  | "text" | "image" | "video" | "audio" | "location" | "poll" | "document" | "vcard" | "event";
 
 export interface IMessage {
   id: string;
@@ -199,8 +242,8 @@ Returns the message payload as a `Buffer`. Each subclass overrides this method:
 | Subclass | Return |
 | -------- | ------ |
 | `Text` | `Buffer.from(caption, 'utf-8')` — no engine round-trip. |
-| `Image` / `Video` / `Audio` | Binary body (engine cache → fallback to `downloadMediaMessage`). |
-| `Gps` / `Poll` | Raw persisted bytes, if any. |
+| `Image` / `Video` / `Audio` / `Document` | Binary body (engine cache → fallback to `downloadMediaMessage`). |
+| `Gps` / `Poll` / `VCard` / `Event` | Raw persisted bytes, if any. |
 | Base `Message` | Raw persisted bytes, or empty buffer. |
 
 ```typescript title="content.ts"
@@ -210,7 +253,7 @@ if (msg instanceof wa.Message.Image) {
 }
 ```
 
-### `stream(): Promise<Readable>` *(Image/Video/Audio only)*
+### `stream(): Promise<Readable>` *(Image/Video/Audio/Document only)*
 
 Returns a `Readable` that you can pipe without loading the full media into memory. Falls through engine cache → `downloadMediaMessage` → empty buffer.
 
@@ -307,6 +350,9 @@ Every send helper is mirrored on the instance as a reply (automatically fills `m
 | `msg.audio(buf, opts?)` | `(Buffer, SendAudioOptions) => Promise<Message \| null>` |
 | `msg.location(loc, opts?)` | `(LocationOptions, SendOptions) => Promise<Message \| null>` |
 | `msg.poll(poll, opts?)` | `(PollOptions, SendOptions) => Promise<Message \| null>` |
+| `msg.document(buf, opts?)` | `(Buffer, SendDocumentOptions) => Promise<Message \| null>` |
+| `msg.vcard(contacts, opts?)` | `(VCardInput[], SendOptions) => Promise<Message \| null>` |
+| `msg.event(data, opts?)` | `(EventInput, SendOptions) => Promise<Message \| null>` |
 
 ```typescript title="reply.ts"
 wa.on("message:created", async (msg, chat) => {
