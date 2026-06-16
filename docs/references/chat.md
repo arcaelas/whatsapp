@@ -24,7 +24,7 @@ The `Chat` class itself is not exported as a top-level name. Access the bound co
 
 - `wa.Chat.get(cid)` — load or bootstrap by CID.
 - `wa.Chat.list(offset, limit)` — paginated read of persisted chats.
-- `contact.chat` — eager property on a `Contact` instance (1:1 chats).
+- `contact.chat()` — method on a `Contact` instance resolving the 1:1 chat.
 - Event payloads (`message:created`, `message:updated`, etc.) — the second argument is always the `Chat` the message belongs to.
 
 ```typescript title="bootstrap.ts"
@@ -207,7 +207,7 @@ for (const msg of latest) {
 
 ### `contact()` *(1:1 only)*
 
-For 1:1 chats, the fastest way to obtain the counterpart is through `wa.Contact.get(chat.id)`. For the inverse (contact → chat), use the eager `contact.chat` property.
+For 1:1 chats, the fastest way to obtain the counterpart is through `wa.Contact.get(chat.id)`. For the inverse (contact → chat), use the `contact.chat()` method.
 
 ```typescript title="contact-from-chat.ts"
 const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");

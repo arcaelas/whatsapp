@@ -326,7 +326,11 @@ export class Message {
     async forward(target: ForwardTarget): Promise<boolean> {
         const { _wa, _doc } = this;
         const to_cid =
-            typeof target === 'string' ? target : target instanceof Chat ? target.id : target.chat.id;
+            typeof target === 'string'
+                ? target
+                : target instanceof Chat
+                    ? target.id
+                    : (await target.chat()).id;
         let ok = false;
         if (_wa._socket) {
             const jid = await _wa._resolve_jid(to_cid);

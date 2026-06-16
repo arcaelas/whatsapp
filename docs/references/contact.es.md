@@ -1,6 +1,6 @@
 # Contact
 
-La entidad `Contact` representa a cualquier usuario de WhatsApp del que tu sesión tenga conocimiento, ya sea que haya iniciado un chat, aparezca en un grupo o haya sido descubierto vía lookups `onWhatsApp`. Cada contacto incluye una propiedad eager `chat` apuntando a su instancia `Chat` 1:1, de modo que puedes saltar de "quién" a "dónde" sin lookups adicionales.
+La entidad `Contact` representa a cualquier usuario de WhatsApp del que tu sesión tenga conocimiento, ya sea que haya iniciado un chat, aparezca en un grupo o haya sido descubierto vía lookups `onWhatsApp`. Cada contacto expone un método `chat()` que resuelve su instancia `Chat` 1:1 (ya hidratada en la construcción), de modo que puedes saltar de "quién" a "dónde" sin lookups adicionales.
 
 `Contact.get(uid)` es el único punto de entrada y despacha según la forma del identificador:
 
@@ -60,7 +60,7 @@ console.log(byPhone?.name, byJid?.phone, byLid?.id);
 
 ## Propiedades
 
-Todas las propiedades son getters síncronos sobre la forma interna `_raw: IContactRaw`, excepto `chat`, que se hidrata eagerly en la construcción.
+Todas las propiedades son getters síncronos sobre la forma interna `_raw: IContactRaw`. El chat 1:1 asociado se obtiene aparte mediante el método `chat()`.
 
 | Propiedad | Tipo | Descripción |
 | --------- | ---- | ----------- |
@@ -72,7 +72,6 @@ Todas las propiedades son getters síncronos sobre la forma interna `_raw: ICont
 | `photo` | `string \| null` | URL de foto de perfil (cacheada después del primer `refresh`/`get`). |
 | `content` | `string` | Texto de estado/bio. |
 | `me` | `boolean` | `true` cuando la instancia representa la cuenta autenticada. |
-| `chat` | `Chat` | Chat 1:1 eager vinculado a este contacto. |
 
 ### `IContactRaw`
 
@@ -88,26 +87,27 @@ export interface IContactRaw {
 }
 ```
 
-### Propiedad eager `chat`
-
-`Contact.chat` no es una función, es una instancia `wa.Chat` completamente construida disponible sincrónicamente. Te permite encadenar llamadas como:
-
-```typescript title="eager-chat.ts"
-const contact = await wa.Contact.get("5215555555555");
-if (contact) {
-  await contact.chat.pin(true);
-  await contact.chat.typing(true);
-  await wa.Message.text(contact.chat.id, "Ready to go!");
-  await contact.chat.typing(false);
-}
-```
-
-!!! tip "`chat` para grupos"
-    Solo los chats 1:1 son descubiertos por `Contact.get`. Los JIDs de grupo (`@g.us`) se filtran; usa `wa.Chat.get(groupJid)` cuando necesites la entidad del grupo.
-
 ---
 
 ## Métodos
+
+### `chat()`
+
+Resuelve el `Chat` 1:1 del contacto. Es asíncrono por coherencia con `msg.chat()` / `msg.author()`, aunque la instancia ya viene hidratada desde la construcción, por lo que no hay lookup adicional al motor.
+
+```typescript title="contact-chat.ts"
+const contact = await wa.Contact.get("5215555555555");
+if (contact) {
+  const chat = await contact.chat();
+  await chat.pin(true);
+  await chat.typing(true);
+  await wa.Message.text(chat.id, "Ready to go!");
+  await chat.typing(false);
+}
+```
+
+!!! tip "`chat()` para grupos"
+    Solo los chats 1:1 son descubiertos por `Contact.get`. Los JIDs de grupo (`@g.us`) se filtran; usa `wa.Chat.get(groupJid)` cuando necesites la entidad del grupo.
 
 ### `rename(name: string)`
 
@@ -140,7 +140,7 @@ console.log(contact?.photo, contact?.content);
 | Delegado | Signatura | Notas |
 | -------- | --------- | ----- |
 | `wa.Contact.get` | `(uid: string) => Promise<Contact \| null>` | Despacho inteligente: teléfono / JID / LID. |
-| `wa.Contact.list` | `(offset?: number, limit?: number) => Promise<Contact[]>` | Contactos persistidos paginados (mtime DESC). Por defecto: `0, 50`. Cada resultado tiene `chat` pre-cargado. |
+| `wa.Contact.list` | `(offset?: number, limit?: number) => Promise<Contact[]>` | Contactos persistidos paginados (mtime DESC). Por defecto: `0, 50`. Cada resultado tiene su `chat()` pre-hidratado. |
 | `wa.Contact.rename` | `(uid: string, name: string) => Promise<boolean>` | Delega en la instancia `rename`. |
 | `wa.Contact.refresh` | `(uid: string) => Promise<Contact \| null>` | Delega en la instancia `refresh`. |
 
@@ -179,7 +179,7 @@ Los registros relacionados con contactos viven bajo las siguientes claves en el 
 | ---- | ----- | ----------- |
 | `/contact/{jid}` | `IContactRaw` serializado. | `Contact.get`, `rename`, `refresh`, eventos `contact:*`. |
 | `/lid/{lid}` | String JID serializado — índice inverso para resolución de LID. | `Contact.get` cuando se descubre un LID; evento `lid-mapping.update`. |
-| `/chat/{jid}` | `IChatRaw` serializado — el `contact.chat` eager se carga desde aquí. | `Chat.get`, persistencia de mensajes, eventos `chats.*`. |
+| `/chat/{jid}` | `IChatRaw` serializado — el `chat()` del contacto se hidrata desde aquí. | `Chat.get`, persistencia de mensajes, eventos `chats.*`. |
 
 !!! warning "Consistencia del motor"
     Cuando `autoclean` es `true` (por defecto) y se recibe un `loggedOut` remoto, todo el motor se borra para forzar una sincronización fresca en el próximo login. Establece `autoclean: false` en las opciones del constructor de `WhatsApp` si deseas conservar contactos/chats/mensajes entre reautenticaciones.
