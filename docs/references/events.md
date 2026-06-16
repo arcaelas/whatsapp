@@ -64,7 +64,6 @@ wa.on('disconnected', (client) => console.log('offline'));
 | ------------------ | ------------------------ | ---------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`    | A new contact is upserted, or auto-created from an inbound message.    |
 | `contact:updated`  | `[contact, chat, wa]`    | A contact's name, notify, image, status, or LID changes.               |
-| `contact:deleted`  | `[contact, chat, wa]`    | Baileys reports a contact deletion (`contacts.delete`).                |
 
 The `chat` argument is the contact's 1:1 chat (created on the fly from the cache when needed),
 so you can reply or fetch history without an extra lookup.
@@ -137,7 +136,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 const events = [
     'connected', 'disconnected',
-    'contact:created', 'contact:updated', 'contact:deleted',
+    'contact:created', 'contact:updated',
     'chat:created', 'chat:deleted',
     'chat:pinned', 'chat:unpinned',
     'chat:archived', 'chat:unarchived',
