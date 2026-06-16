@@ -24,7 +24,7 @@ Las instancias de `Chat` no están pensadas para construirse manualmente. Se pro
 
 - `wa.Chat.get(cid)` — carga o inicializa por CID.
 - `wa.Chat.list(offset, limit)` — lectura paginada de chats persistidos.
-- `contact.chat` — propiedad eager en una instancia de `Contact` (chats 1:1).
+- `contact.chat()` — método en una instancia de `Contact` que resuelve el chat 1:1.
 - Payloads de eventos (`message:created`, `message:updated`, etc.) — el segundo argumento es siempre el `Chat` al que pertenece el mensaje.
 
 ```typescript title="bootstrap.ts"
@@ -207,7 +207,7 @@ for (const msg of latest) {
 
 ### `contact()` *(solo 1:1)*
 
-Para chats 1:1, la forma más rápida de obtener la contraparte es a través de `wa.Contact.get(chat.id)`. Para el inverso (contacto → chat), usa la propiedad eager `contact.chat`.
+Para chats 1:1, la forma más rápida de obtener la contraparte es a través de `wa.Contact.get(chat.id)`. Para el inverso (contacto → chat), usa el método `contact.chat()`.
 
 ```typescript title="contact-from-chat.ts"
 const chat = await wa.Chat.get("5215555555555@s.whatsapp.net");

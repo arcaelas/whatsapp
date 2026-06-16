@@ -235,7 +235,7 @@ await msg.react(""); // eliminar
 
 ### `forward(target: ForwardTarget)`
 
-`ForwardTarget = string | Chat | Contact`. Acepta un CID, un `Chat` o un `Contact` (usa `contact.chat.id`). Intenta un relay nativo primero y luego recurre a reenviar el payload como un nuevo mensaje para el tipo de contenido.
+`ForwardTarget = string | Chat | Contact`. Acepta un CID, un `Chat` o un `Contact` (usa `(await contact.chat()).id`). Intenta un relay nativo primero y luego recurre a reenviar el payload como un nuevo mensaje para el tipo de contenido.
 
 ```typescript title="forward.ts"
 await msg.forward("5215555555555@s.whatsapp.net");
@@ -411,7 +411,7 @@ Entradas aceptadas:
 
 - `string` — un CID (teléfono, JID o LID); resuelto internamente.
 - `Chat` — usa `chat.id`.
-- `Contact` — usa `contact.chat.id` (el JID 1:1).
+- `Contact` — usa `(await contact.chat()).id` (el JID 1:1).
 
 ---
 

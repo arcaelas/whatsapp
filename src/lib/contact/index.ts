@@ -30,12 +30,12 @@ export interface IContactRaw {
 export class Contact {
   /** @internal Shape persistido. Uso interno (convención underscore). / Internal persisted shape. */
   readonly _raw: IContactRaw;
-  /** Chat 1:1 asociado (hidratado). / Associated 1:1 chat (hydrated). */
-  readonly chat: Chat;
+  /** @internal Chat 1:1 asociado ya hidratado. / Internal already-hydrated 1:1 chat. */
+  readonly _chat: Chat;
 
   constructor(raw: IContactRaw, chat: Chat) {
     this._raw = raw;
-    this.chat = chat;
+    this._chat = chat;
   }
 
   /** JID único. / Unique JID. */
@@ -65,6 +65,16 @@ export class Contact {
   /** Bio del contacto. / Contact bio. */
   get content(): string {
     return this._raw.status ?? '';
+  }
+
+  /**
+   * Chat 1:1 asociado al contacto. Async por coherencia con `Message.chat()` /
+   * `Message.author()`, aunque la instancia ya está hidratada en memoria.
+   * 1:1 chat associated with the contact. Async for consistency with
+   * `Message.chat()` / `Message.author()`, though already hydrated in memory.
+   */
+  async chat(): Promise<Chat> {
+    return this._chat;
   }
 }
 
@@ -133,11 +143,16 @@ export function contact(wa: WhatsApp) {
   }
 
   return class _Contact extends Contact {
-    /** Chat 1:1 asociado como subclase enriquecida. / Associated 1:1 chat as enriched subclass. */
-    declare readonly chat: InstanceType<typeof wa.Chat>;
+    /** @internal Chat 1:1 hidratado como subclase enriquecida. / Internal hydrated 1:1 chat as enriched subclass. */
+    declare readonly _chat: InstanceType<typeof wa.Chat>;
 
     constructor(raw: IContactRaw, chat: InstanceType<typeof wa.Chat>) {
       super(raw, chat);
+    }
+
+    /** Chat 1:1 asociado (subclase enriquecida). / Associated 1:1 chat (enriched subclass). */
+    override async chat(): Promise<InstanceType<typeof wa.Chat>> {
+      return this._chat;
     }
 
     /** true si la instancia representa la cuenta autenticada. / true if this instance is the authenticated account. */
