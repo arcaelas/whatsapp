@@ -6,6 +6,25 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ---
 
+## [4.1.0] - 2026-06-16
+
+### BREAKING CHANGES
+
+- **`Contact.chat` is now an async method** — `chat(): Promise<Chat>` instead of an eager sync property, for consistency with `Message.chat()` / `Message.author()`. Call sites must switch from `contact.chat` to `(await contact.chat())`.
+- **Removed the `contact:deleted` event** — baileys never emits `contacts.delete`, so the event and its dead listener were removed from `WhatsAppEventMap`.
+
+### Changed
+
+- **baileys upgraded to `7.0.0-rc13`** — `shouldSyncHistoryMessage` is now set explicitly to preserve the rc.9 history-sync behavior (rc13 changed its default); removed the deprecated `printQRInTerminal`; `disconnect()` now awaits the async `socket.end()`.
+
+### Added
+
+- **`Document` entity** (`documentMessage`) — files sent as documents (PDF, image, audio, video, etc.), with `file_name`, `size`, `pages`, `title` getters and `wa.Message.document(cid, buf, { file_name, mimetype?, caption? })`.
+- **`VCard` entity** (`contactMessage` / `contactsArrayMessage`) — contact cards with a `contacts: { name, phone }[]` getter and `wa.Message.vcard(cid, [{ name, phone }])` (the vCard is generated with a clickable `waid`).
+- **`Event` entity** (`eventMessage`) — calendar events with `name`, `start`, `end`, `canceled`, `link`, `place` getters (description via the inherited `caption`) and `wa.Message.event(cid, { name, caption?, start, end?, place? })`.
+
+---
+
 ## [3.1.1] - 2026-05-18
 
 ### Fixes
