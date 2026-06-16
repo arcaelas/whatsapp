@@ -93,7 +93,6 @@ interface WhatsAppEventMap {
     disconnected: [WhatsApp];
     'contact:created': [ContactInstance, ChatInstance, WhatsApp];
     'contact:updated': [ContactInstance, ChatInstance, WhatsApp];
-    'contact:deleted': [ContactInstance, ChatInstance, WhatsApp];
     'chat:created': [ChatInstance, WhatsApp];
     'chat:deleted': [ChatInstance, WhatsApp];
     'chat:pinned': [ChatInstance, WhatsApp];
@@ -296,9 +295,15 @@ export class WhatsApp {
                         },
                     },
                     browser: Browsers.windows('Chrome'),
-                    printQRInTerminal: false,
                     logger: pino({ level: 'silent' }),
                     syncFullHistory: this._sync,
+                    // rc13 cambió el default de `shouldSyncHistoryMessage` a
+                    // `({ syncType }) => syncType !== FULL` (independiente de `syncFullHistory`).
+                    // Replicamos el comportamiento previo (rc.9), donde el sync de historial
+                    // dependía únicamente de `sync`.
+                    // rc13 changed the `shouldSyncHistoryMessage` default; we keep the rc.9
+                    // behavior where history sync depended solely on `sync`.
+                    shouldSyncHistoryMessage: () => this._sync,
                     markOnlineOnConnect: false,
                 });
 
@@ -399,7 +404,7 @@ export class WhatsApp {
                 const intentional = Object.assign(new Error('intentional close'), {
                     output: { statusCode: DisconnectReason.connectionClosed },
                 });
-                this._socket.end(intentional);
+                await this._socket.end(intentional);
             } catch {
                 /* socket may already be closed */
             }
@@ -431,10 +436,6 @@ export class WhatsApp {
         socket.ev.on('contacts.update', (contacts) => {
             void this._handle_contacts_update(contacts);
         });
-        (socket.ev as unknown as { on: (ev: string, cb: (ids: string[]) => void) => void }).on(
-            'contacts.delete',
-            (ids) => { void this._handle_contacts_delete(ids); },
-        );
         socket.ev.on('lid-mapping.update', ({ lid, pn }) => {
             void this._handle_lid_mapping(lid, pn);
         });
@@ -626,19 +627,6 @@ export class WhatsApp {
             const raw = deserialize<IChatRaw>(await this.engine.get(`/chat/${cid}`)) ?? { id: cid };
             await this.engine.unset(`/chat/${cid}`);
             this._event.emit('chat:deleted', new this.Chat(raw), this);
-        }
-    }
-
-    /** @internal */
-    private async _handle_contacts_delete(ids: string[]): Promise<void> {
-        for (const id of ids) {
-            const raw = deserialize<IContactRaw>(await this.engine.get(`/contact/${id}`));
-            await this.engine.unset(`/contact/${id}`);
-            if (raw) {
-                const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${id}`));
-                const chat_instance = new this.Chat(cached_chat ?? { id, name: raw.name ?? raw.notify ?? id.split('@')[0] });
-                this._event.emit('contact:deleted', new this.Contact(raw, chat_instance), chat_instance, this);
-            }
         }
     }
 

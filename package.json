@@ -9,7 +9,7 @@
     "url": "https://github.com/arcaelas/whatsapp/issues"
   },
   "dependencies": {
-    "baileys": "7.0.0-rc.9",
+    "baileys": "7.0.0-rc13",
     "pino": "^10.1.0",
     "qrcode": "^1.5.4"
   },

@@ -64,7 +64,6 @@ wa.on('disconnected', (client) => console.log('offline'));
 | ------------------ | ------------------------ | ---------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`    | Un nuevo contacto es insertado, o auto-creado desde un mensaje entrante. |
 | `contact:updated`  | `[contact, chat, wa]`    | El nombre, notify, imagen, status o LID de un contacto cambia.          |
-| `contact:deleted`  | `[contact, chat, wa]`    | Baileys reporta una eliminación de contacto (`contacts.delete`).       |
 
 El argumento `chat` es el chat 1:1 del contacto (creado al vuelo desde la caché cuando se necesita),
 para que puedas responder o traer el historial sin un lookup extra.
@@ -137,7 +136,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 const events = [
     'connected', 'disconnected',
-    'contact:created', 'contact:updated', 'contact:deleted',
+    'contact:created', 'contact:updated',
     'chat:created', 'chat:deleted',
     'chat:pinned', 'chat:unpinned',
     'chat:archived', 'chat:unarchived',
