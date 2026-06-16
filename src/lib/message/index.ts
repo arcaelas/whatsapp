@@ -34,7 +34,7 @@ type ChatInstance = InstanceType<ReturnType<typeof chat>>;
 type ContactInstance = InstanceType<ReturnType<typeof contact>>;
 
 /** Tipos de mensaje internos (no expuestos como getter público). */
-export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'location' | 'poll';
+export type MessageType = 'text' | 'image' | 'video' | 'audio' | 'location' | 'poll' | 'document' | 'vcard' | 'event';
 
 export enum MessageStatus {
     ERROR = 0,
@@ -57,6 +57,32 @@ export interface SendAudioOptions extends SendOptions {
 export interface SendPollOptions extends SendOptions {
     /** true para selección múltiple; default false (single). / true for multi-select; default false (single). */
     multiple?: boolean;
+}
+export interface SendDocumentOptions extends SendOptions {
+    /** Nombre del archivo mostrado al receptor. / File name shown to the recipient. */
+    file_name: string;
+    /** MIME real del contenido; default `application/octet-stream`. / Real content MIME; defaults to `application/octet-stream`. */
+    mimetype?: string;
+    /** Texto adjunto opcional. / Optional attached caption. */
+    caption?: string;
+}
+export interface VCardInput {
+    /** Nombre mostrado del contacto. / Contact display name. */
+    name: string;
+    /** Teléfono en formato internacional. / Phone in international format. */
+    phone: string;
+}
+export interface EventInput {
+    /** Nombre del evento. / Event name. */
+    name: string;
+    /** Descripción opcional (texto del evento, expuesto como `caption`). / Optional description (event text, exposed as `caption`). */
+    caption?: string;
+    /** Fecha/hora de inicio. / Start date/time. */
+    start: Date;
+    /** Fecha/hora de fin opcional. / Optional end date/time. */
+    end?: Date;
+    /** Ubicación opcional. / Optional location. */
+    place?: { lat: number; lng: number };
 }
 export interface LocationOptions {
     lat: number;
@@ -110,6 +136,11 @@ const MESSAGE_TYPE_MAP: Record<string, MessageType> = {
     pollCreationMessage: 'poll',
     pollCreationMessageV2: 'poll',
     pollCreationMessageV3: 'poll',
+    documentMessage: 'document',
+    documentWithCaptionMessage: 'document',
+    contactMessage: 'vcard',
+    contactsArrayMessage: 'vcard',
+    eventMessage: 'event',
 };
 
 /**
@@ -122,6 +153,7 @@ export function build_message_doc(raw: WAMessage, self_id?: string, edited = fal
         msg.viewOnceMessage?.message ??
         msg.viewOnceMessageV2?.message ??
         msg.viewOnceMessageV2Extension?.message ??
+        msg.documentWithCaptionMessage?.message ??
         msg;
     const content_type = getContentType(unwrapped);
     const msg_type = MESSAGE_TYPE_MAP[content_type ?? ''] ?? 'text';
@@ -138,8 +170,10 @@ export function build_message_doc(raw: WAMessage, self_id?: string, edited = fal
             : null;
 
     let mime = 'text/plain';
-    if (msg_type === 'location' || msg_type === 'poll') {
+    if (msg_type === 'location' || msg_type === 'poll' || msg_type === 'event') {
         mime = 'application/json';
+    } else if (msg_type === 'vcard') {
+        mime = 'text/vcard';
     } else if (msg_type !== 'text' && typeof msg_content === 'object') {
         mime = (msg_content?.mimetype as string) ?? 'application/octet-stream';
     }
@@ -147,11 +181,14 @@ export function build_message_doc(raw: WAMessage, self_id?: string, edited = fal
     let caption = '';
     if (typeof msg_content === 'string') {
         caption = msg_content;
+    } else if (msg_type === 'event') {
+        caption = ((msg_content as Record<string, unknown> | undefined)?.description as string) ?? '';
     } else if (msg_content) {
         caption =
             (msg_content.caption as string) ??
             (msg_content.text as string) ??
             (msg_content.name as string) ??
+            (msg_content.displayName as string) ??
             '';
     }
 
@@ -509,6 +546,21 @@ export class Message {
     async poll(poll: PollOptions, opts: SendPollOptions = {}) {
         return this._wa.Message.poll(this.cid, poll, { ...opts, mid: this.id });
     }
+
+    /** Responde con documento. */
+    async document(buf: Buffer, opts: SendDocumentOptions) {
+        return this._wa.Message.document(this.cid, buf, { ...opts, mid: this.id });
+    }
+
+    /** Responde con tarjeta(s) de contacto. */
+    async vcard(contacts: VCardInput[], opts: SendOptions = {}) {
+        return this._wa.Message.vcard(this.cid, contacts, { ...opts, mid: this.id });
+    }
+
+    /** Responde con evento. */
+    async event(data: EventInput, opts: SendOptions = {}) {
+        return this._wa.Message.event(this.cid, data, { ...opts, mid: this.id });
+    }
 }
 
 /**
@@ -764,6 +816,120 @@ export class Poll extends Message {
 }
 
 /**
+ * Mensaje de documento. WhatsApp permite enviar cualquier archivo (PDF, imagen,
+ * audio, video, etc.) como documento; lo que lo distingue de image/video/audio es
+ * el tipo de mensaje (`documentMessage`), no el mimetype. Hereda `stream()` de la
+ * clase base; `content()` drena el stream (cache → download).
+ * Document message. WhatsApp lets you send any file (PDF, image, audio, video…)
+ * as a document; what sets it apart from image/video/audio is the message type
+ * (`documentMessage`), not the mimetype. Inherits `stream()` from the base class;
+ * `content()` drains the stream (cache → download).
+ */
+export class Document extends Message {
+    private get _doc_msg() {
+        const m = this._doc.raw.message;
+        return m?.documentMessage ?? m?.documentWithCaptionMessage?.message?.documentMessage;
+    }
+
+    /** Nombre del archivo. / File name. */
+    get file_name(): string {
+        return this._doc_msg?.fileName ?? '';
+    }
+    /** Tamaño en bytes (0 si se desconoce). / Size in bytes (0 if unknown). */
+    get size(): number {
+        return Number(this._doc_msg?.fileLength?.toString() ?? '0');
+    }
+    /** Número de páginas (PDF); 0 si no aplica. / Page count (PDF); 0 when not applicable. */
+    get pages(): number {
+        return this._doc_msg?.pageCount ?? 0;
+    }
+    /** Título del documento. / Document title. */
+    get title(): string {
+        return this._doc_msg?.title ?? '';
+    }
+
+    async content(): Promise<Buffer> {
+        return _drain(await this.stream());
+    }
+}
+
+/**
+ * Construye un vCard 3.0 mínimo con el teléfono enlazado como contacto de WhatsApp.
+ * Builds a minimal vCard 3.0 with the phone linked as a WhatsApp contact.
+ *
+ * @param name - Nombre mostrado / Display name
+ * @param phone - Teléfono en formato internacional / Phone in international format
+ * @returns String vCard (VCF) / vCard (VCF) string
+ */
+function build_vcard(name: string, phone: string): string {
+    const waid = phone.replace(/\D+/g, '');
+    return [
+        'BEGIN:VCARD',
+        'VERSION:3.0',
+        `FN:${name}`,
+        `TEL;type=CELL;waid=${waid}:${phone}`,
+        'END:VCARD',
+    ].join('\n');
+}
+
+/**
+ * Mensaje de tarjeta(s) de contacto (vCard). Unifica `contactMessage` (uno) y
+ * `contactsArrayMessage` (varios) bajo una sola lista `contacts`.
+ * Contact card message (vCard). Unifies `contactMessage` (single) and
+ * `contactsArrayMessage` (multiple) under a single `contacts` list.
+ */
+export class VCard extends Message {
+    /** Contactos de la tarjeta con nombre y teléfono. / Card contacts with name and phone. */
+    get contacts(): { name: string; phone: string }[] {
+        const m = this._doc.raw.message;
+        const raw = m?.contactsArrayMessage?.contacts ?? (m?.contactMessage ? [m.contactMessage] : []);
+        return raw.map((c) => {
+            const tel = (c.vcard ?? '').match(/TEL[^:]*:(.+)/);
+            return { name: c.displayName ?? '', phone: tel ? tel[1].trim() : '' };
+        });
+    }
+}
+
+/**
+ * Mensaje de evento de calendario (`eventMessage`): nombre, descripción, rango de
+ * fechas, estado de cancelación, link de unión y ubicación.
+ * Calendar event message (`eventMessage`): name, description, date range,
+ * cancellation state, join link and location.
+ */
+export class Event extends Message {
+    private get _event() {
+        return this._doc.raw.message?.eventMessage;
+    }
+
+    /** Nombre del evento. / Event name. */
+    get name(): string {
+        return this._event?.name ?? '';
+    }
+    /** Epoch ms de inicio. / Start epoch ms. */
+    get start(): number {
+        return Number(this._event?.startTime?.toString() ?? '0') * 1000;
+    }
+    /** Epoch ms de fin, o null. / End epoch ms, or null. */
+    get end(): number | null {
+        const end = this._event?.endTime;
+        return end == null ? null : Number(end.toString()) * 1000;
+    }
+    /** true si el evento fue cancelado. / true if the event was canceled. */
+    get canceled(): boolean {
+        return this._event?.isCanceled ?? false;
+    }
+    /** Link de unión (audio/video), si aplica. / Join link (audio/video), if any. */
+    get link(): string {
+        return this._event?.joinLink ?? '';
+    }
+    /** Ubicación del evento, o null. / Event location, or null. */
+    get place(): { lat: number; lng: number } | null {
+        const loc = this._event?.location;
+        return loc ? { lat: loc.degreesLatitude ?? 0, lng: loc.degreesLongitude ?? 0 } : null;
+    }
+}
+
+/**
  * Factoría que enlaza los statics a `wa` y expone las subclases.
  * Factory binding statics to `wa` and exposing subclasses.
  */
@@ -787,6 +953,15 @@ export function message(wa: WhatsApp) {
         }
         if (doc.type === 'poll') {
             return new Poll(opts);
+        }
+        if (doc.type === 'document') {
+            return new Document(opts);
+        }
+        if (doc.type === 'vcard') {
+            return new VCard(opts);
+        }
+        if (doc.type === 'event') {
+            return new Event(opts);
         }
         return new Message(opts);
     }
@@ -841,6 +1016,9 @@ export function message(wa: WhatsApp) {
         Audio,
         Gps,
         Poll,
+        Document,
+        VCard,
+        Event,
 
         // Helpers internos (usados por orquestador WhatsApp)
         build_message_doc,
@@ -916,6 +1094,57 @@ export function message(wa: WhatsApp) {
                 undefined,
                 opts.mid,
                 { multiple },
+            );
+        },
+
+        async document(cid: string, buf: Buffer, opts: SendDocumentOptions) {
+            return send(
+                cid,
+                {
+                    document: buf,
+                    fileName: opts.file_name,
+                    mimetype: opts.mimetype ?? 'application/octet-stream',
+                    caption: opts.caption,
+                },
+                buf,
+                opts.mid,
+            );
+        },
+
+        async vcard(cid: string, contacts: VCardInput[], opts: SendOptions = {}) {
+            const built = contacts.map((c) => ({
+                displayName: c.name,
+                vcard: build_vcard(c.name, c.phone),
+            }));
+            const binary = Buffer.from(built.map((c) => c.vcard).join('\n'), 'utf-8');
+            return send(cid, { contacts: { contacts: built } }, binary, opts.mid);
+        },
+
+        async event(cid: string, data: EventInput, opts: SendOptions = {}) {
+            const binary = Buffer.from(
+                JSON.stringify({
+                    name: data.name,
+                    caption: data.caption,
+                    start: data.start.getTime(),
+                    end: data.end?.getTime() ?? null,
+                }),
+                'utf-8',
+            );
+            return send(
+                cid,
+                {
+                    event: {
+                        name: data.name,
+                        description: data.caption,
+                        startDate: data.start,
+                        endDate: data.end,
+                        location: data.place
+                            ? { degreesLatitude: data.place.lat, degreesLongitude: data.place.lng }
+                            : undefined,
+                    },
+                },
+                binary,
+                opts.mid,
             );
         },
 

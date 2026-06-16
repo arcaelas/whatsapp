@@ -949,7 +949,12 @@ export class WhatsApp {
                         }),
                         'utf-8'
                     );
-                } else if (this._socket && ['image', 'video', 'audio'].includes(doc.type)) {
+                } else if (doc.type === 'vcard') {
+                    const cards = msg.message?.contactsArrayMessage?.contacts ?? (msg.message?.contactMessage ? [msg.message.contactMessage] : []);
+                    content_buf = Buffer.from(cards.map((c) => c.vcard ?? '').join('\n'), 'utf-8');
+                } else if (doc.type === 'event') {
+                    content_buf = Buffer.from(JSON.stringify(msg.message?.eventMessage ?? {}), 'utf-8');
+                } else if (this._socket && ['image', 'video', 'audio', 'document'].includes(doc.type)) {
                     try {
                         const buffer = await downloadMediaMessage(msg, 'buffer', {});
                         if (Buffer.isBuffer(buffer)) {
