@@ -39,3 +39,4 @@ export interface Engine {
 
 export { FileSystemEngine } from '~/lib/store/engine/lib/file_system';
 export { RedisEngine, type RedisClient } from '~/lib/store/engine/lib/redis';
+export { S3Engine } from '~/lib/store/engine/lib/s3';

@@ -6,7 +6,7 @@
 
 import { BufferJSON } from 'baileys';
 
-export { FileSystemEngine, RedisEngine, type Engine, type RedisClient } from '~/lib/store/engine';
+export { FileSystemEngine, RedisEngine, S3Engine, type Engine, type RedisClient } from '~/lib/store/engine';
 
 /**
  * Serializa un documento a string preservando Buffers con BufferJSON de baileys.
