@@ -1,8 +1,8 @@
 # Engines
 
 `@arcaelas/whatsapp` v3 separates the WhatsApp client from the persistence layer. An **engine**
-is a string-only key-value store implementing the `Engine` contract. The library ships two
-production drivers (`FileSystemEngine`, `RedisEngine`) and you can plug in your own.
+is a string-only key-value store implementing the `Engine` contract. The library ships three
+production drivers (`FileSystemEngine`, `RedisEngine`, `S3Engine`) and you can plug in your own.
 
 Serialization (Buffers, BigInts, etc.) lives in a dedicated layer (`serialize` / `deserialize`)
 on top of baileys' `BufferJSON`, so engines never need to deal with JSON.
@@ -17,6 +17,7 @@ import {
     FileSystemEngine,
     RedisEngine,
     type RedisClient,
+    S3Engine,
     serialize,
     deserialize,
 } from '@arcaelas/whatsapp';
@@ -143,6 +144,66 @@ await wa.connect((pin) => console.log('PIN:', pin));
 
 ---
 
+## `S3Engine`
+
+Persists each document as an object in an AWS S3 bucket, with an **optional in-memory cache**
+for stable, read-heavy paths. Requires the peer dependency `@aws-sdk/client-s3`; you pass an
+already-configured `S3Client`.
+
+```typescript title="Constructor"
+new S3Engine({
+    s3: S3Client,
+    bucket: string,
+    basedir: string,
+    cache?: false | { ttl: number; when(key: string): boolean },
+})
+```
+
+| Option    | Type                                              | Default | Description                                                                 |
+| --------- | ------------------------------------------------- | ------- | --------------------------------------------------------------------------- |
+| `s3`      | `S3Client`                                        | —       | A pre-configured `@aws-sdk/client-s3` client (region, credentials, etc.).   |
+| `bucket`  | `string`                                          | —       | Target bucket name.                                                         |
+| `basedir` | `string`                                          | —       | Base key prefix inside the bucket; use one per WhatsApp account.            |
+| `cache`   | `false \| { ttl, when }`                          | `false` | Local cache configuration. `false` disables it (every read hits S3).        |
+
+### Local cache
+
+When `cache` is provided, `when(key)` decides which paths are cached — return `true` for stable,
+frequently-read documents (chats, contacts, the LID→JID map) and `false` for volatile ones
+(Signal sessions, messages). Each cached entry is evicted by a `setTimeout(ttl)`; there is **no
+expiry check on read** — the timer simply removes the entry. Writes are write-through (cache +
+S3), and `unset` purges the cached subtree so deleted data is never served stale.
+
+```typescript title="Usage with cache" hl_lines="8 9 10 11 12 13 14"
+import { S3Client } from '@aws-sdk/client-s3';
+import { WhatsApp, S3Engine } from '@arcaelas/whatsapp';
+
+const wa = new WhatsApp({
+    engine: new S3Engine({
+        s3: new S3Client({ region: 'us-east-1' }),
+        bucket: 'my-wa-bucket',
+        basedir: 'wa/5491112345678',
+        cache: {
+            ttl: 180_000, // 3 minutes
+            when: (key) =>
+                key.startsWith('/chat/') ||
+                key.startsWith('/contact/') ||
+                key.startsWith('/lid/'),
+        },
+    }),
+    phone: 5491112345678,
+});
+
+await wa.connect((pin) => console.log('PIN:', pin));
+```
+
+!!! tip "When to choose S3"
+    Serverless / stateless deployments (Lambda, Fargate) where neither the filesystem nor Redis
+    is available, or when you want durable, low-cost object storage. The optional cache cuts read
+    latency for the documents that barely change.
+
+---
+
 ## Serialization helpers
 
 ```typescript
@@ -172,7 +233,7 @@ const config = deserialize<BotConfig>(await wa.engine.get('/app/config'));
 
 ## Custom engines
 
-Implementing the `Engine` interface is enough to plug any backend (PostgreSQL, S3, SQLite,
+Implementing the `Engine` interface is enough to plug any backend (PostgreSQL, SQLite,
 DynamoDB, …). Honor the four invariants and the rest of the library will behave correctly:
 
 1. `set` updates the mtime that drives `list` ordering.

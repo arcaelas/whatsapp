@@ -9,7 +9,7 @@ Una librería de TypeScript para automatización de WhatsApp construida sobre [b
 ## Características
 
 - **API basada en clases**: un único orquestador `WhatsApp` con delegados `Message`, `Chat` y `Contact`.
-- **Motores intercambiables**: `FileSystemEngine` para desarrollo local, `RedisEngine` para producción, o implementa tu propio `Engine`.
+- **Motores intercambiables**: `FileSystemEngine` para desarrollo local, `RedisEngine` y `S3Engine` para producción, o implementa tu propio `Engine`.
 - **DSL de decoradores**: sub-entrada opcional `@arcaelas/whatsapp/decorators` con `@Bot`, `@on`, `@guard`, `@command`, `@pipe`, `@every`, `@pair`.
 - **Sistema de eventos completo**: `connected`, `disconnected`, `message:*`, `chat:*`, `contact:*` — cada listener recibe `(payload, chat, wa)`.
 - **Resolución de identificadores**: normalización transparente entre números de teléfono, JID (`@s.whatsapp.net`) y LID (`@lid`).

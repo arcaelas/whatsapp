@@ -40,10 +40,13 @@ Esto incorpora las únicas dependencias en tiempo de ejecución que la librería
 
 ## 3. Dependencias peer opcionales
 
-El motor Redis depende de [`ioredis`](https://github.com/redis/ioredis) pero no te obliga a instalarlo a menos que realmente lo uses.
+El motor Redis depende de [`ioredis`](https://github.com/redis/ioredis), y el motor S3 de
+[`@aws-sdk/client-s3`](https://www.npmjs.com/package/@aws-sdk/client-s3) — ninguno se te impone
+a menos que realmente uses ese motor.
 
 ```bash
-yarn add ioredis
+yarn add ioredis              # solo si usas RedisEngine
+yarn add @aws-sdk/client-s3   # solo si usas S3Engine
 ```
 
 Si solo usas `FileSystemEngine` o tu propia implementación personalizada de `Engine`, puedes omitir este paso por completo.

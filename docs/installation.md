@@ -40,10 +40,13 @@ This pulls in the only runtime dependencies the library needs: `baileys@7.0.0-rc
 
 ## 3. Optional peers
 
-The Redis engine relies on [`ioredis`](https://github.com/redis/ioredis) but does not force you to install it unless you actually use it.
+The Redis engine relies on [`ioredis`](https://github.com/redis/ioredis), and the S3 engine on
+[`@aws-sdk/client-s3`](https://www.npmjs.com/package/@aws-sdk/client-s3) — neither is forced on
+you unless you actually use that engine.
 
 ```bash
-yarn add ioredis
+yarn add ioredis              # only if you use RedisEngine
+yarn add @aws-sdk/client-s3   # only if you use S3Engine
 ```
 
 If you only use `FileSystemEngine` or your own custom `Engine` implementation, you can skip this step entirely.
