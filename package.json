@@ -15,6 +15,7 @@
   },
   "description": "A small box of tools, which are implemented in different factions of the library.",
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1071.0",
     "@eslint/js": "^9.0.0",
     "@types/node": "^25.0.3",
     "@types/qrcode": "^1.5.6",

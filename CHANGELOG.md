@@ -4,6 +4,10 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`S3Engine`** — AWS S3 persistence driver implementing the `Engine` contract, with an optional in-memory cache. Options: `{ s3, bucket, basedir, cache }`, where `cache` is `false` (disabled) or `{ ttl, when(key) }` — `when` decides which keys are cached and each entry is cleared by a `setTimeout` (no read-time expiry check). Requires the peer `@aws-sdk/client-s3`.
+
 ### Changed (internal)
 
 - **Internal refactors with no public API or behavior changes.** Deduplicated the contact upsert logic into a private `_persist_contact` helper shared by `contacts.upsert` and the message auto-create path; extracted a `contact_name` helper for the `name → notify → phone` fallback used across `Contact` and the client; consolidated the bot decorator schema initialization into `ensure_schema` (now reused by `resolve` and `register_workflow_step`, with `once`/`command` composing over `resolve`).
