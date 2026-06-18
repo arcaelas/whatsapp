@@ -1,5 +1,5 @@
 /**
- * @file playground/bot/decorators.ts
+ * @file bot/decorators.ts
  * @description Decoradores públicos del bot.
  * Public bot decorators.
  */
@@ -9,10 +9,8 @@ import type { IWhatsApp } from '~/lib/whatsapp';
 import {
     WhatsAppBot,
     decorator,
-    HANDLERS,
     register_workflow_step,
-    type BotSchema,
-    type HandlerMeta,
+    resolve,
 } from './decorator';
 
 /**
@@ -56,22 +54,10 @@ export function once(event?: string) {
         if (context.kind !== 'method') {
             throw new Error('@once only applicable to methods');
         }
-        const metadata = context.metadata as Record<string | symbol, unknown>;
-        if (!metadata[HANDLERS]) {
-            metadata[HANDLERS] = { handlers: {}, workflows: {} };
-        }
-        const schema = metadata[HANDLERS] as BotSchema;
-        const method_name = String(context.name);
-        schema.handlers[method_name] ||= {
-            method: method_name,
-            events: [],
-            guards: [],
-            transforms: [],
-            once: false,
-        };
-        schema.handlers[method_name].once = true;
-        if (event && !schema.handlers[method_name].events.includes(event)) {
-            schema.handlers[method_name].events.push(event);
+        const [, handler] = resolve(context.metadata as Record<string | symbol, unknown>, String(context.name));
+        handler.once = true;
+        if (event && !handler.events.includes(event)) {
+            handler.events.push(event);
         }
     };
 }
@@ -273,9 +259,7 @@ export function command(pattern: string | RegExp) {
             return pattern.test(text);
         })(value, context);
 
-        const metadata = context.metadata as Record<string | symbol, unknown>;
-        const schema = metadata[HANDLERS] as BotSchema;
-        const handler = schema.handlers[String(context.name)] as HandlerMeta;
+        const [, handler] = resolve(context.metadata as Record<string | symbol, unknown>, String(context.name));
         handler.transforms.push((args) => {
             const msg = args[0] as Message;
             const chat = args[1];

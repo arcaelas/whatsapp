@@ -24,6 +24,17 @@ export interface IContactRaw {
 }
 
 /**
+ * Resuelve el nombre mostrado de un contacto con prioridad local → push → teléfono.
+ * Resolves a contact's display name with priority local → push → phone number.
+ *
+ * @param raw - Documento persistido del contacto / Persisted contact document
+ * @returns Nombre mostrado / Display name
+ */
+export function contact_name(raw: IContactRaw): string {
+  return raw.name ?? raw.notify ?? raw.id.split('@')[0];
+}
+
+/**
  * Clase base del contacto (forma pública, solo lectura).
  * Base Contact class (public shape, read-only).
  */
@@ -52,7 +63,7 @@ export class Contact {
   }
   /** Nombre: local → push → teléfono. / Name: local → push → phone. */
   get name(): string {
-    return this._raw.name ?? this._raw.notify ?? this._raw.id.split('@')[0];
+    return contact_name(this._raw);
   }
   /** Número sin formato. / Raw phone number. */
   get phone(): string {
@@ -188,8 +199,7 @@ export function contact(wa: WhatsApp) {
       if (jid && !jid.endsWith('@g.us')) {
         const cached = deserialize<IContactRaw>(await wa.engine.get(`/contact/${jid}`));
         if (cached) {
-          const fallback_name = cached.name ?? cached.notify ?? jid.split('@')[0];
-          result = new _Contact(cached, await load_chat_for(jid, fallback_name));
+          result = new _Contact(cached, await load_chat_for(jid, contact_name(cached)));
         } else if (wa._socket) {
           const needs_check = !lid && !uid.endsWith('@lid');
           const discovered = needs_check
@@ -229,8 +239,7 @@ export function contact(wa: WhatsApp) {
       for (const raw of await wa.engine.list('/contact', offset, limit)) {
         const parsed = deserialize<IContactRaw>(raw);
         if (parsed) {
-          const fallback_name = parsed.name ?? parsed.notify ?? parsed.id.split('@')[0];
-          contacts.push(new _Contact(parsed, await load_chat_for(parsed.id, fallback_name)));
+          contacts.push(new _Contact(parsed, await load_chat_for(parsed.id, contact_name(parsed))));
         }
       }
       return contacts;

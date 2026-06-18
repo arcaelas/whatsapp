@@ -4,6 +4,12 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed (internal)
+
+- **Internal refactors with no public API or behavior changes.** Deduplicated the contact upsert logic into a private `_persist_contact` helper shared by `contacts.upsert` and the message auto-create path; extracted a `contact_name` helper for the `name → notify → phone` fallback used across `Contact` and the client; consolidated the bot decorator schema initialization into `ensure_schema` (now reused by `resolve` and `register_workflow_step`, with `once`/`command` composing over `resolve`).
+- **Parallelized independent I/O in the Signal session store** — `keys.get` / `keys.set` now use `Promise.all` instead of serial `await` loops, reducing handshake latency.
+- **Declarative cleanups** — contact-update patch built with conditional spread; engine `list` filters with `.filter()` instead of imperative push loops.
+
 ---
 
 ## [4.2.0] - 2026-06-16

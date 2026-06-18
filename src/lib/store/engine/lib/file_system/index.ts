@@ -114,13 +114,7 @@ export class FileSystemEngine implements Engine {
         })
       );
 
-      const result: string[] = [];
-      for (const value of values) {
-        if (value !== null) {
-          result.push(value);
-        }
-      }
-      return result;
+      return values.filter((value): value is string => value !== null);
     } catch {
       return [];
     }
