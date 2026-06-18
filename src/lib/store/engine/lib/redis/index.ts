@@ -116,13 +116,7 @@ export class RedisEngine implements Engine {
     }
 
     const raws = await this._client.mget(members.map((m) => this._doc_key(m)));
-    const result: string[] = [];
-    for (const raw of raws) {
-      if (raw !== null) {
-        result.push(raw);
-      }
-    }
-    return result;
+    return raws.filter((raw): raw is string => raw !== null);
   }
 
   /**

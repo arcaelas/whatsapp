@@ -1,5 +1,5 @@
 /**
- * @file playground/bot/decorator.ts
+ * @file bot/decorator.ts
  * @description Infraestructura base de decoradores Stage 3 sobre WhatsApp.
  * Base infrastructure for Stage 3 decorators over WhatsApp.
  */
@@ -31,14 +31,13 @@ export interface BotSchema {
 type Metadata = Record<string | symbol, unknown>;
 
 /**
- * Recupera o inicializa el schema del bot y la entrada del método indicado.
- * Retrieves or initializes the bot schema and the entry for the given method.
+ * Recupera o inicializa el `BotSchema` almacenado en la metadata del contexto.
+ * Retrieves or initializes the `BotSchema` stored in the context metadata.
  *
  * @param metadata - Objeto metadata del contexto del decorador / Decorator context metadata object
- * @param method_name - Nombre del método / Method name
- * @returns Tupla `[schema, handler_meta]` para el método / Tuple `[schema, handler_meta]` for the method
+ * @returns Schema del bot garantizado con `handlers` y `workflows` / Bot schema guaranteed to have `handlers` and `workflows`
  */
-function resolve(metadata: Metadata, method_name: string): [BotSchema, HandlerMeta] {
+export function ensure_schema(metadata: Metadata): BotSchema {
     let schema = metadata[HANDLERS] as BotSchema | undefined;
     if (!schema) {
         schema = { handlers: {}, workflows: {} };
@@ -47,6 +46,19 @@ function resolve(metadata: Metadata, method_name: string): [BotSchema, HandlerMe
     if (!schema.workflows) {
         schema.workflows = {};
     }
+    return schema;
+}
+
+/**
+ * Recupera o inicializa el schema del bot y la entrada del método indicado.
+ * Retrieves or initializes the bot schema and the entry for the given method.
+ *
+ * @param metadata - Objeto metadata del contexto del decorador / Decorator context metadata object
+ * @param method_name - Nombre del método / Method name
+ * @returns Tupla `[schema, handler_meta]` para el método / Tuple `[schema, handler_meta]` for the method
+ */
+export function resolve(metadata: Metadata, method_name: string): [BotSchema, HandlerMeta] {
+    const schema = ensure_schema(metadata);
     schema.handlers[method_name] ||= {
         method: method_name,
         events: [],
@@ -70,14 +82,7 @@ export function register_workflow_step(
     workflow: string,
     step: WorkflowStep,
 ): void {
-    let schema = metadata[HANDLERS] as BotSchema | undefined;
-    if (!schema) {
-        schema = { handlers: {}, workflows: {} };
-        metadata[HANDLERS] = schema;
-    }
-    if (!schema.workflows) {
-        schema.workflows = {};
-    }
+    const schema = ensure_schema(metadata);
     schema.workflows[workflow] ||= [];
     schema.workflows[workflow].push(step);
 }

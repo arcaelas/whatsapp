@@ -29,7 +29,7 @@ import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
 import { chat, type IChatRaw } from '~/lib/chat';
-import { contact, type IContactRaw } from '~/lib/contact';
+import { contact, contact_name, type IContactRaw } from '~/lib/contact';
 import { message, Message, MessageStatus, type IMessage } from '~/lib/message';
 import Feed, { TTL_MS as FEED_TTL_MS, type FeedType, type IFeedRaw } from '~/lib/status';
 import { deserialize, serialize, type Engine } from '~/lib/store';
@@ -265,7 +265,7 @@ export class WhatsApp {
                         keys: {
                             get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
                                 const data: { [id: string]: SignalDataTypeMap[T] } = {};
-                                for (const id of ids) {
+                                await Promise.all(ids.map(async (id) => {
                                     const value = deserialize<SignalDataTypeMap[T]>(
                                         await this.engine.get(`/session/${type}/${id}`)
                                     );
@@ -277,20 +277,17 @@ export class WhatsApp {
                                                 ) as unknown as SignalDataTypeMap[T])
                                                 : value;
                                     }
-                                }
+                                }));
                                 return data;
                             },
                             set: async (data: Record<string, Record<string, unknown | null>>) => {
-                                for (const category in data) {
-                                    for (const id in data[category]) {
-                                        const value = data[category][id];
-                                        if (value != null) {
-                                            await this.engine.set(`/session/${category}/${id}`, serialize(value));
-                                        } else {
-                                            await this.engine.unset(`/session/${category}/${id}`);
-                                        }
-                                    }
-                                }
+                                await Promise.all(Object.entries(data).flatMap(([category, entries]) =>
+                                    Object.entries(entries).map(([id, value]) =>
+                                        value != null
+                                            ? this.engine.set(`/session/${category}/${id}`, serialize(value))
+                                            : this.engine.unset(`/session/${category}/${id}`)
+                                    )
+                                ));
                             },
                         },
                     },
@@ -464,12 +461,31 @@ export class WhatsApp {
         // });
     }
 
+    /**
+     * Persiste un contacto y su índice LID; emite `contact:created` solo si es nuevo.
+     * Persists a contact and its LID index; emits `contact:created` only when new.
+     *
+     * @param raw - Documento del contacto a persistir / Contact document to persist
+     * @internal
+     */
+    private async _persist_contact(raw: IContactRaw): Promise<void> {
+        const existing = await this.engine.get(`/contact/${raw.id}`);
+        await this.engine.set(`/contact/${raw.id}`, serialize(raw));
+        if (raw.lid) {
+            await this.engine.set(`/lid/${raw.lid}`, serialize(raw.id));
+        }
+        if (existing === null) {
+            const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${raw.id}`));
+            const chat_instance = new this.Chat(cached_chat ?? { id: raw.id, name: contact_name(raw) });
+            this._event.emit('contact:created', new this.Contact(raw, chat_instance), chat_instance, this);
+        }
+    }
+
     /** @internal */
     private async _handle_contacts_upsert(contacts: BaileysContact[]): Promise<void> {
         for (const c of contacts) {
             if (c.id) {
-                const existing = await this.engine.get(`/contact/${c.id}`);
-                const raw: IContactRaw = {
+                await this._persist_contact({
                     id: c.id,
                     lid: c.lid ?? null,
                     name: c.name ?? null,
@@ -477,18 +493,7 @@ export class WhatsApp {
                     verified_name: c.verifiedName ?? null,
                     img_url: c.imgUrl ?? null,
                     status: c.status ?? null,
-                };
-                await this.engine.set(`/contact/${c.id}`, serialize(raw));
-                if (raw.lid) {
-                    await this.engine.set(`/lid/${raw.lid}`, serialize(raw.id));
-                }
-                if (existing === null) {
-                    const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${raw.id}`));
-                    const chat_instance = new this.Chat(
-                        cached_chat ?? { id: raw.id, name: raw.name ?? raw.notify ?? raw.id.split('@')[0] }
-                    );
-                    this._event.emit('contact:created', new this.Contact(raw, chat_instance), chat_instance, this);
-                }
+                });
             }
         }
     }
@@ -499,22 +504,13 @@ export class WhatsApp {
             if (c.id) {
                 const current = deserialize<IContactRaw>(await this.engine.get(`/contact/${c.id}`));
                 if (current) {
-                    const patch: Partial<IContactRaw> = {};
-                    if (c.notify) {
-                        patch.notify = c.notify;
-                    }
-                    if (c.name) {
-                        patch.name = c.name;
-                    }
-                    if (c.imgUrl) {
-                        patch.img_url = c.imgUrl;
-                    }
-                    if (c.status) {
-                        patch.status = c.status;
-                    }
-                    if (c.lid) {
-                        patch.lid = c.lid;
-                    }
+                    const patch: Partial<IContactRaw> = {
+                        ...(c.notify && { notify: c.notify }),
+                        ...(c.name && { name: c.name }),
+                        ...(c.imgUrl && { img_url: c.imgUrl }),
+                        ...(c.status && { status: c.status }),
+                        ...(c.lid && { lid: c.lid }),
+                    };
                     if (Object.keys(patch).length > 0) {
                         const merged = { ...current, ...patch };
                         await this.engine.set(`/contact/${c.id}`, serialize(merged));
@@ -522,7 +518,7 @@ export class WhatsApp {
                             await this.engine.set(`/lid/${patch.lid}`, serialize(c.id));
                         }
                         const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${c.id}`));
-                        const chat_instance = new this.Chat(cached_chat ?? { id: c.id, name: merged.name ?? merged.notify ?? c.id.split('@')[0] });
+                        const chat_instance = new this.Chat(cached_chat ?? { id: c.id, name: contact_name(merged) });
                         this._event.emit('contact:updated', new this.Contact(merged, chat_instance), chat_instance, this);
                     }
                 }
@@ -880,30 +876,15 @@ export class WhatsApp {
                     const is_group = cid.endsWith('@g.us');
 
                     if (doc.author && !(await this.engine.get(`/contact/${doc.author}`))) {
-                        const lid_key = msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : null;
-                        const contact_raw: IContactRaw = {
+                        await this._persist_contact({
                             id: doc.author,
-                            lid: lid_key,
+                            lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : null,
                             name: null,
-                            notify: is_group ? null : push_name,
+                            notify: push_name,
                             verified_name: msg.verifiedBizName ?? null,
                             img_url: null,
                             status: null,
-                        };
-                        await this.engine.set(`/contact/${doc.author}`, serialize(contact_raw));
-                        if (lid_key) {
-                            await this.engine.set(`/lid/${lid_key}`, serialize(doc.author));
-                        }
-                        const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${doc.author}`));
-                        const author_chat = new this.Chat(
-                            cached_chat ?? { id: doc.author, name: push_name ?? doc.author.split('@')[0] },
-                        );
-                        this._event.emit(
-                            'contact:created',
-                            new this.Contact(contact_raw, author_chat),
-                            author_chat,
-                            this,
-                        );
+                        });
                     }
 
                     if (!(await this.engine.get(`/chat/${cid}`))) {
