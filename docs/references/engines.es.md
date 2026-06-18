@@ -1,8 +1,8 @@
 # Engines
 
 `@arcaelas/whatsapp` v3 separa el cliente de WhatsApp de la capa de persistencia. Un **engine**
-es un store clave-valor solo de strings que implementa el contrato `Engine`. La librería incluye dos
-drivers de producción (`FileSystemEngine`, `RedisEngine`) y puedes conectar el tuyo propio.
+es un store clave-valor solo de strings que implementa el contrato `Engine`. La librería incluye tres
+drivers de producción (`FileSystemEngine`, `RedisEngine`, `S3Engine`) y puedes conectar el tuyo propio.
 
 La serialización (Buffers, BigInts, etc.) vive en una capa dedicada (`serialize` / `deserialize`)
 por encima del `BufferJSON` de baileys, para que los motores nunca necesiten lidiar con JSON.
@@ -17,6 +17,7 @@ import {
     FileSystemEngine,
     RedisEngine,
     type RedisClient,
+    S3Engine,
     serialize,
     deserialize,
 } from '@arcaelas/whatsapp';
@@ -143,6 +144,67 @@ await wa.connect((pin) => console.log('PIN:', pin));
 
 ---
 
+## `S3Engine`
+
+Persiste cada documento como un objeto en un bucket de AWS S3, con una **caché en memoria opcional**
+para rutas estables y de alta lectura. Requiere la peer dependency `@aws-sdk/client-s3`; pasas un
+`S3Client` ya configurado.
+
+```typescript title="Constructor"
+new S3Engine({
+    s3: S3Client,
+    bucket: string,
+    basedir: string,
+    cache?: false | { ttl: number; when(key: string): boolean },
+})
+```
+
+| Opción    | Tipo                                              | Por defecto | Descripción                                                                  |
+| --------- | ------------------------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| `s3`      | `S3Client`                                        | —           | Un cliente `@aws-sdk/client-s3` ya configurado (región, credenciales, etc.). |
+| `bucket`  | `string`                                          | —           | Nombre del bucket destino.                                                   |
+| `basedir` | `string`                                          | —           | Prefijo base de claves dentro del bucket; usa uno por cuenta de WhatsApp.    |
+| `cache`   | `false \| { ttl, when }`                          | `false`     | Configuración de caché local. `false` la desactiva (cada lectura va a S3).   |
+
+### Caché local
+
+Cuando se proporciona `cache`, `when(key)` decide qué paths se cachean — devuelve `true` para
+documentos estables y de lectura frecuente (chats, contactos, el mapa LID→JID) y `false` para los
+volátiles (sesiones Signal, mensajes). Cada entrada cacheada se elimina mediante un `setTimeout(ttl)`;
+**no hay chequeo de expiración en la lectura** — el timer simplemente borra la entrada. Las escrituras
+son write-through (caché + S3), y `unset` purga el subárbol cacheado para que los datos borrados
+nunca se sirvan obsoletos.
+
+```typescript title="Uso con caché" hl_lines="8 9 10 11 12 13 14"
+import { S3Client } from '@aws-sdk/client-s3';
+import { WhatsApp, S3Engine } from '@arcaelas/whatsapp';
+
+const wa = new WhatsApp({
+    engine: new S3Engine({
+        s3: new S3Client({ region: 'us-east-1' }),
+        bucket: 'my-wa-bucket',
+        basedir: 'wa/5491112345678',
+        cache: {
+            ttl: 180_000, // 3 minutos
+            when: (key) =>
+                key.startsWith('/chat/') ||
+                key.startsWith('/contact/') ||
+                key.startsWith('/lid/'),
+        },
+    }),
+    phone: 5491112345678,
+});
+
+await wa.connect((pin) => console.log('PIN:', pin));
+```
+
+!!! tip "Cuándo elegir S3"
+    Despliegues serverless / stateless (Lambda, Fargate) donde no hay filesystem ni Redis
+    disponible, o cuando quieres almacenamiento de objetos durable y de bajo costo. La caché
+    opcional reduce la latencia de lectura para los documentos que casi no cambian.
+
+---
+
 ## Helpers de serialización
 
 ```typescript
@@ -172,7 +234,7 @@ const config = deserialize<BotConfig>(await wa.engine.get('/app/config'));
 
 ## Motores personalizados
 
-Implementar la interfaz `Engine` es suficiente para conectar cualquier backend (PostgreSQL, S3, SQLite,
+Implementar la interfaz `Engine` es suficiente para conectar cualquier backend (PostgreSQL, SQLite,
 DynamoDB, ...). Honra los cuatro invariantes y el resto de la librería se comportará correctamente:
 
 1. `set` actualiza el mtime que controla el orden de `list`.

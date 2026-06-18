@@ -9,7 +9,7 @@ A TypeScript library for WhatsApp automation built on top of [baileys v7](https:
 ## Features
 
 - **Class-based API**: a single `WhatsApp` orchestrator with `Message`, `Chat`, and `Contact` delegates.
-- **Pluggable engines**: `FileSystemEngine` for local development, `RedisEngine` for production, or implement your own `Engine`.
+- **Pluggable engines**: `FileSystemEngine` for local development, `RedisEngine` and `S3Engine` for production, or implement your own `Engine`.
 - **Decorator DSL**: optional `@arcaelas/whatsapp/decorators` sub-entry with `@Bot`, `@on`, `@guard`, `@command`, `@pipe`, `@every`, `@pair`.
 - **Full event system**: `connected`, `disconnected`, `message:*`, `chat:*`, `contact:*` — every listener receives `(payload, chat, wa)`.
 - **Identifier resolution**: transparent normalization between phone numbers, JID (`@s.whatsapp.net`), and LID (`@lid`).

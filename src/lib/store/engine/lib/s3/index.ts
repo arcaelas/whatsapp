@@ -4,8 +4,16 @@
  * AWS S3 persistence driver (optional local cache).
  */
 
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { Engine } from '~/lib/store/engine';
+
+/**
+ * Normaliza un path colapsando slashes redundantes.
+ * Normalizes a path by collapsing redundant slashes.
+ */
+function normalize_path(path: string): string {
+    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
+}
 
 /**
  * Configuración de la caché local. Cada entrada se limpia con un `setTimeout`
@@ -54,7 +62,7 @@ export class S3Engine implements Engine {
     }
 
     private _key(key: string): string {
-        return `${this._prefix}${key.replace(/@/g, '_at_')}`;
+        return `${this._prefix}${normalize_path(key).replace(/@/g, '_at_')}`;
     }
 
     /**
@@ -100,50 +108,58 @@ export class S3Engine implements Engine {
         return value;
     }
 
-    async set(key: string, value: string | null): Promise<void> {
-        const remote = value
-            ? this._client.send(new PutObjectCommand({ Bucket: this._bucket, Key: this._key(key), Body: value, ContentType: 'application/json' }))
-            : this._client.send(new DeleteObjectCommand({ Bucket: this._bucket, Key: this._key(key) })).catch(() => undefined);
+    async set(key: string, value: string): Promise<void> {
+        const remote = this._client.send(new PutObjectCommand({ Bucket: this._bucket, Key: this._key(key), Body: value, ContentType: 'application/json' }));
         if (this._cacheable(key)) {
             this._cache_set(key, value);
         }
         await remote;
     }
 
-    async list(prefix: string, offset = 0, limit = 50, suffix?: string): Promise<string[]> {
-        const full_prefix = `${this._prefix}${prefix.replace(/@/g, '_at_')}`;
-        const suffix_escaped = suffix?.replace(/@/g, '_at_');
-        const items: Array<{ key: string; mtime: number }> = [];
+    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+        const parent = `${this._prefix}${normalize_path(path).replace(/@/g, '_at_')}/`;
+        const children = new Map<string, number>();
         let token: string | undefined;
 
         do {
             const res = await this._client.send(
                 new ListObjectsV2Command({
                     Bucket: this._bucket,
-                    Prefix: full_prefix,
+                    Prefix: parent,
                     ContinuationToken: token,
                     MaxKeys: 1000,
                 })
             );
             for (const obj of res.Contents ?? []) {
                 if (!obj.Key) continue;
-                if (suffix_escaped && !obj.Key.endsWith(suffix_escaped)) continue;
-                items.push({
-                    key: obj.Key.slice(this._prefix.length).replace(/_at_/g, '@'),
-                    mtime: obj.LastModified?.getTime() ?? 0,
-                });
+                const rest = obj.Key.slice(parent.length);
+                const child_key = `${parent}${rest.split('/')[0]}`;
+                const mtime = obj.LastModified?.getTime() ?? 0;
+                children.set(child_key, Math.max(children.get(child_key) ?? 0, mtime));
             }
             token = res.NextContinuationToken;
         } while (token);
 
-        return items
-            .sort((a, b) => b.mtime - a.mtime)
+        const ordered = [...children.entries()]
+            .sort((a, b) => b[1] - a[1])
             .slice(offset, offset + limit)
-            .map((f) => f.key);
+            .map(([key]) => key);
+
+        const values = await Promise.all(
+            ordered.map(async (key) => {
+                try {
+                    const res = await this._client.send(new GetObjectCommand({ Bucket: this._bucket, Key: key }));
+                    return (await res.Body?.transformToString('utf-8')) ?? null;
+                } catch {
+                    return null;
+                }
+            })
+        );
+        return values.filter((value): value is string => value !== null);
     }
 
     async delete_prefix(prefix: string): Promise<number> {
-        const full_prefix = `${this._prefix}${prefix.replace(/@/g, '_at_')}`;
+        const full_prefix = `${this._prefix}${normalize_path(prefix).replace(/@/g, '_at_')}`;
         let deleted = 0;
         let token: string | undefined;
 
@@ -180,7 +196,7 @@ export class S3Engine implements Engine {
     }
 
     async count(path: string): Promise<number> {
-        const full_prefix = `${this._prefix}${path.replace(/@/g, '_at_')}`;
+        const full_prefix = `${this._prefix}${normalize_path(path).replace(/@/g, '_at_')}`;
         let total = 0;
         let token: string | undefined;
         do {
