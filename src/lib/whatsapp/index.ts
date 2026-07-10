@@ -780,51 +780,65 @@ export class WhatsApp {
                         if (poll_doc && message_secret) {
                             try {
                                 const poll_key = poll_doc.raw.key ?? {};
-                                // WhatsApp moderno usa LID normalizado para identidad del HMAC
-                                // tanto en votos propios (echo) como foráneos. Espejo del fix de
-                                // `Poll.select()` (ver `src/lib/message`).
-                                // Modern WhatsApp uses normalized LID identity for HMAC on both
-                                // own-vote echoes and foreign votes. Mirrors the `Poll.select()` fix.
+                                // La identidad propia del HMAC depende del addressing del chat
+                                // (LID en @lid, PN en @s.whatsapp.net), así que para las posiciones
+                                // fromMe se intenta descifrar con ambas: AES-GCM autentica, la
+                                // clave equivocada lanza y se prueba la siguiente.
+                                // Own HMAC identity depends on chat addressing (LID on @lid, PN on
+                                // @s.whatsapp.net), so fromMe positions try both candidates:
+                                // AES-GCM authenticates, a wrong key throws and the next is tried.
                                 const self_id = this._socket?.user?.id ?? '';
                                 const self_lid = (this._socket?.user as { lid?: string })?.lid ?? '';
-                                const voter_raw = msg.key.fromMe
-                                    ? (self_lid || self_id)
-                                    : msg.key.remoteJid?.endsWith('@lid')
-                                        ? msg.key.remoteJid
-                                        : msg.key.participant ||
-                                          (msg.key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                          msg.key.remoteJid ||
-                                          '';
-                                const creator_raw = poll_key.fromMe
-                                    ? (self_lid || self_id)
-                                    : poll_key.remoteJid?.endsWith('@lid')
-                                        ? poll_key.remoteJid
-                                        : poll_key.participant ||
-                                          (poll_key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                          poll_key.remoteJid ||
-                                          '';
-                                const voter_jid = jidNormalizedUser(voter_raw);
-                                const poll_creator_jid = jidNormalizedUser(creator_raw);
-                                const decrypted = decryptPollVote(
-                                    { encPayload: update.vote.encPayload, encIv: update.vote.encIv },
-                                    {
-                                        pollCreatorJid: poll_creator_jid,
-                                        pollMsgId: target_mid,
-                                        pollEncKey: message_secret,
-                                        voterJid: voter_jid,
+                                const selves = [...new Set([self_lid, self_id].filter(Boolean))];
+                                const foreign_voter = msg.key.remoteJid?.endsWith('@lid')
+                                    ? msg.key.remoteJid
+                                    : msg.key.participant ||
+                                      (msg.key as { remoteJidAlt?: string }).remoteJidAlt ||
+                                      msg.key.remoteJid ||
+                                      '';
+                                const foreign_creator = poll_key.remoteJid?.endsWith('@lid')
+                                    ? poll_key.remoteJid
+                                    : poll_key.participant ||
+                                      (poll_key as { remoteJidAlt?: string }).remoteJidAlt ||
+                                      poll_key.remoteJid ||
+                                      '';
+                                const voters = msg.key.fromMe ? selves : [foreign_voter];
+                                const creators = poll_key.fromMe ? selves : [foreign_creator];
+                                let decrypted: ReturnType<typeof decryptPollVote> | null = null;
+                                for (const voter of voters) {
+                                    for (const creator of creators) {
+                                        try {
+                                            decrypted = decryptPollVote(
+                                                { encPayload: update.vote.encPayload, encIv: update.vote.encIv },
+                                                {
+                                                    pollCreatorJid: jidNormalizedUser(creator),
+                                                    pollMsgId: target_mid,
+                                                    pollEncKey: message_secret,
+                                                    voterJid: jidNormalizedUser(voter),
+                                                }
+                                            );
+                                            break;
+                                        } catch {
+                                            /* identidad equivocada: probar la siguiente */
+                                        }
                                     }
-                                );
-                                updateMessageWithPollUpdate(poll_doc.raw, {
-                                    pollUpdateMessageKey: msg.key,
-                                    vote: decrypted,
-                                    senderTimestampMs: Number(msg.messageTimestamp) || Date.now(),
-                                });
-                                await this.engine.set(
-                                    `/chat/${resolved_cid}/message/${target_mid}`,
-                                    serialize(poll_doc)
-                                );
-                                const msg_instance = await this.Message.build_instance(poll_doc);
-                                this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                                    if (decrypted) {
+                                        break;
+                                    }
+                                }
+                                if (decrypted) {
+                                    updateMessageWithPollUpdate(poll_doc.raw, {
+                                        pollUpdateMessageKey: msg.key,
+                                        vote: decrypted,
+                                        senderTimestampMs: Number(msg.messageTimestamp) || Date.now(),
+                                    });
+                                    await this.engine.set(
+                                        `/chat/${resolved_cid}/message/${target_mid}`,
+                                        serialize(poll_doc)
+                                    );
+                                    const msg_instance = await this.Message.build_instance(poll_doc);
+                                    this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                                }
                             } catch {
                                 /* decrypt may fail */
                             }
