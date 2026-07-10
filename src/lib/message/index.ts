@@ -740,19 +740,22 @@ export class Poll extends Message {
             return false;
         }
 
-        // WhatsApp moderno usa la identidad LID para HMAC de poll votes (ver patch
-        // devmsh/whatsapp-bridge: "EncryptPollVote uses getOwnID() (Phone JID) but
-        // SendMessage uses LID identity. This causes silent decryption failure on
-        // poll votes"). Siempre que tengamos LID, lo usamos normalizado (sin device).
-        // Modern WhatsApp expects LID identity for poll vote HMAC. Use normalized
-        // LID whenever available; fall back to phone JID only if no LID is known.
+        // La identidad propia del HMAC debe coincidir con la que baileys.relayMessage
+        // usará al enviar ("ADDRESSING CONSISTENCY"): LID sólo en chats @lid, PN en
+        // chats @s.whatsapp.net. Forzar LID siempre (fix 3.1.1) producía votos
+        // indescifrables en chats PN: el receptor deriva la clave del JID del stanza.
+        // Own HMAC identity must match what baileys.relayMessage uses on send
+        // ("ADDRESSING CONSISTENCY"): LID only on @lid chats, PN on @s.whatsapp.net.
+        // Always forcing LID (3.1.1 fix) made votes undecryptable on PN chats: the
+        // receiver derives the key from the stanza's sender JID.
         const poll_key = _doc.raw.key ?? {};
         const self_id = _wa._socket.user?.id ?? '';
         const self_lid = (_wa._socket.user as { lid?: string })?.lid ?? '';
-        const voter_jid = jidNormalizedUser(self_lid || self_id);
+        const self_for_chat = _doc.cid.endsWith('@lid') && self_lid ? self_lid : self_id;
+        const voter_jid = jidNormalizedUser(self_for_chat);
         let poll_creator_raw: string;
         if (poll_key.fromMe) {
-            poll_creator_raw = self_lid || self_id;
+            poll_creator_raw = self_for_chat;
         } else if (poll_key.remoteJid?.endsWith('@lid')) {
             poll_creator_raw = poll_key.remoteJid;
         } else {
