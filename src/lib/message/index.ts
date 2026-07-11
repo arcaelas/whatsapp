@@ -719,7 +719,19 @@ export class Poll extends Message {
 
     /**
      * Vota en la encuesta. Acepta un índice o lista de índices (para `multiple`).
-     * Votes in the poll. Accepts a single index or list (for `multiple`).
+     * Cifra el voto (HMAC+AES-GCM, igual que baileys.decryptPollVote) y lo enruta al chat
+     * @lid del contacto con la identidad LID propia, replicando byte a byte un voto entrante
+     * que sí descifra. El voto ENTRANTE (contacto → este cliente) funciona; el voto propio
+     * de este cliente aplicado a una encuesta NO se refleja en el teléfono del destinatario
+     * cuando este cliente es un dispositivo vinculado (companion): estructura, identidades y
+     * addressing coinciden con un voto válido, pero WhatsApp no lo propaga. Best-effort.
+     *
+     * Votes in the poll. Encrypts the vote (HMAC+AES-GCM, same as baileys.decryptPollVote)
+     * and routes it to the contact's @lid chat with our own LID identity, mirroring a working
+     * incoming vote byte-for-byte. INCOMING votes work; a self-vote from this client does NOT
+     * show on the recipient's phone when this client is a linked (companion) device — the
+     * structure, identities and addressing match a valid vote but WhatsApp won't propagate it.
+     * Best-effort.
      */
     async select(index: number | number[]): Promise<boolean> {
         const { _wa, _doc } = this;
@@ -740,22 +752,40 @@ export class Poll extends Message {
             return false;
         }
 
-        // La identidad propia del HMAC debe coincidir con la que baileys.relayMessage
-        // usará al enviar ("ADDRESSING CONSISTENCY"): LID sólo en chats @lid, PN en
-        // chats @s.whatsapp.net. Forzar LID siempre (fix 3.1.1) producía votos
-        // indescifrables en chats PN: el receptor deriva la clave del JID del stanza.
-        // Own HMAC identity must match what baileys.relayMessage uses on send
-        // ("ADDRESSING CONSISTENCY"): LID only on @lid chats, PN on @s.whatsapp.net.
-        // Always forcing LID (3.1.1 fix) made votes undecryptable on PN chats: the
-        // receiver derives the key from the stanza's sender JID.
         const poll_key = _doc.raw.key ?? {};
         const self_id = _wa._socket.user?.id ?? '';
         const self_lid = (_wa._socket.user as { lid?: string })?.lid ?? '';
-        const self_for_chat = _doc.cid.endsWith('@lid') && self_lid ? self_lid : self_id;
-        const voter_jid = jidNormalizedUser(self_for_chat);
+
+        // El voto se enruta al chat @lid del contacto: los clientes migrados corren el chat
+        // en @lid y derivan la clave del JID visible del stanza; enviarlo por PN lo deja
+        // indescifrable en el teléfono. El @lid destino sale del propio poll (si ya es @lid),
+        // del store de contactos, o del lidMapping de baileys.
+        // The vote is routed to the contact's @lid chat: migrated clients run the chat on
+        // @lid and derive the key from the stanza's visible JID; sending via PN leaves it
+        // undecryptable on the phone. The @lid dest comes from the poll (if already @lid),
+        // the contact store, or baileys' lidMapping.
+        let dest = _doc.cid;
+        if (poll_key.remoteJid?.endsWith('@lid')) {
+            dest = poll_key.remoteJid;
+        } else if (!_doc.cid.endsWith('@lid')) {
+            const contact_raw = deserialize<{ lid?: string | null }>(await _wa.engine.get(`/contact/${_doc.cid}`));
+            const mapped = await (_wa._socket as unknown as {
+                signalRepository?: { lidMapping?: { getLIDForPN(pn: string): Promise<string | null | undefined> } };
+            }).signalRepository?.lidMapping?.getLIDForPN(_doc.cid).catch(() => null);
+            dest = contact_raw?.lid ?? mapped ?? _doc.cid;
+        }
+
+        // Identidad del HMAC atada al destino real: baileys firma con meLid cuando el envío
+        // va por @lid, así que voter y (en polls propios) creator usan el LID propio para que
+        // el receptor derive la misma clave. PN sólo si no se conoce ningún LID.
+        // HMAC identity tied to the actual destination: baileys signs with meLid for @lid
+        // sends, so voter and (on own polls) creator use our LID so the receiver derives the
+        // same key. PN only when no LID is known.
+        const self_for_send = dest.endsWith('@lid') && self_lid ? self_lid : self_id;
+        const voter_jid = jidNormalizedUser(self_for_send);
         let poll_creator_raw: string;
         if (poll_key.fromMe) {
-            poll_creator_raw = self_for_chat;
+            poll_creator_raw = self_for_send;
         } else if (poll_key.remoteJid?.endsWith('@lid')) {
             poll_creator_raw = poll_key.remoteJid;
         } else {
@@ -782,11 +812,20 @@ export class Poll extends Message {
         const enc_payload = aesEncryptGCM(payload, enc_key, enc_iv, aad);
 
         const msg_id = generateMessageID();
+        // La pollCreationMessageKey debe referenciar el poll con el mismo addressing que el
+        // stanza (dest): un voto entrante que sí funciona trae la key con remoteJid = @lid del
+        // creador, coincidiendo con el chat @lid del stanza. Enviarla con remoteJid PN mientras
+        // el stanza va por @lid deja al receptor sin poder casar el voto con el poll.
+        // The pollCreationMessageKey must reference the poll with the same addressing as the
+        // stanza (dest): a working incoming vote carries the key with the creator's @lid
+        // remoteJid, matching the @lid stanza chat. A PN remoteJid on an @lid stanza leaves the
+        // receiver unable to match the vote to the poll.
+        const creation_key = dest === _doc.cid ? _doc.raw.key : { ..._doc.raw.key, remoteJid: dest };
         await _wa._socket.relayMessage(
-            _doc.cid,
+            dest,
             {
                 pollUpdateMessage: {
-                    pollCreationMessageKey: _doc.raw.key,
+                    pollCreationMessageKey: creation_key,
                     vote: { encPayload: enc_payload, encIv: enc_iv },
                     senderTimestampMs: Date.now(),
                 },
