@@ -52,8 +52,16 @@ export type ReconnectOption = boolean | number | { max?: number; interval?: numb
 export interface IWhatsApp {
     /** Motor de almacenamiento. / Storage engine. */
     engine: Engine;
-    /** Teléfono para emparejamiento por PIN. Si falta, se usa QR. / Phone for PIN pairing; QR otherwise. */
+    /** Teléfono para emparejamiento por PIN (OTP). / Phone for PIN pairing (OTP). */
     phone?: number | string;
+    /**
+     * Fuerza el método de vinculación. Tiene precedencia sobre la heurística por `phone`:
+     * `auth = method ?? (phone ? 'otp' : 'qr')`. `otp` requiere `phone`.
+     *
+     * Forces the linking method, taking precedence over the phone heuristic:
+     * `auth = method ?? (phone ? 'otp' : 'qr')`. `otp` requires `phone`.
+     */
+    method?: 'qr' | 'otp';
     /**
      * Si al recibir `loggedOut` debe limpiar todo el engine (default: `true`).
      * Si es `false`, solo elimina `/session/creds` y preserva historial.
@@ -63,7 +71,14 @@ export interface IWhatsApp {
     autoclean?: boolean;
     /** Reconexión automática tras cierres no-loggedOut. Default: `true`. / Auto-reconnect on non-loggedOut closes. */
     reconnect?: ReconnectOption;
-    /** Sincroniza historial completo desde el móvil (default: `false`). / Sync full history from phone. */
+    /**
+     * Descarga del historial de mensajes al vincular (default: `true`). Sólo afecta los
+     * mensajes: contactos, credenciales, LID mappings y tctokens se sincronizan siempre
+     * (rc13 los exige para enviar). `false` omite únicamente el historial de mensajes.
+     *
+     * Message-history download on link (default: `true`). Messages only: contacts,
+     * credentials, LID mappings and tctokens always sync (rc13 requires them to send).
+     */
     sync?: boolean;
 }
 
@@ -125,6 +140,7 @@ interface WhatsAppEventMap {
  */
 export class WhatsApp {
     private readonly _phone?: string;
+    private readonly _method?: 'qr' | 'otp';
     /** @internal */
     readonly _event: EventEmitter<WhatsAppEventMap>;
     private readonly _autoclean: boolean;
@@ -146,8 +162,9 @@ export class WhatsApp {
         this.engine = options.engine;
         this._phone =
             options.phone !== undefined ? String(options.phone).replace(/\D+/g, '') : undefined;
+        this._method = options.method;
         this._autoclean = options.autoclean ?? true;
-        this._sync = options.sync ?? false;
+        this._sync = options.sync ?? true;
         this._reconnect = this._parse_reconnect(options.reconnect);
         this._event = new EventEmitter();
         this.Contact = contact(this);
@@ -227,6 +244,19 @@ export class WhatsApp {
                 );
                 if (reverse != null) {
                     result = `${reverse}@s.whatsapp.net`;
+                } else {
+                    // El store local puede no tener el mapping (sesión sin upsert del contacto);
+                    // baileys lo conoce vía su lidMapping. Sin esto, un chat referenciado por @lid
+                    // (p.ej. el pollCreationMessageKey de un voto entrante) no resuelve al PN donde
+                    // realmente está guardado, y el mensaje/poll no se encuentra.
+                    const pn = await (this._socket as unknown as {
+                        signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null | undefined> } };
+                    } | null)?.signalRepository?.lidMapping?.getPNForLID(uid).catch(() => null);
+                    if (pn) {
+                        // getPNForLID puede traer sufijo de dispositivo (`:0`); se normaliza para
+                        // que el JID coincida con el que usa el store (sin device).
+                        result = jidNormalizedUser(pn.includes('@') ? pn : `${pn}@s.whatsapp.net`);
+                    }
                 }
             }
         } else {
@@ -294,13 +324,16 @@ export class WhatsApp {
                     browser: Browsers.windows('Chrome'),
                     logger: pino({ level: 'silent' }),
                     syncFullHistory: this._sync,
-                    // rc13 cambió el default de `shouldSyncHistoryMessage` a
-                    // `({ syncType }) => syncType !== FULL` (independiente de `syncFullHistory`).
-                    // Replicamos el comportamiento previo (rc.9), donde el sync de historial
-                    // dependía únicamente de `sync`.
-                    // rc13 changed the `shouldSyncHistoryMessage` default; we keep the rc.9
-                    // behavior where history sync depended solely on `sync`.
-                    shouldSyncHistoryMessage: () => this._sync,
+                    // Los syncs no-FULL cargan las LID mappings y los tctokens (trusted-contact
+                    // tokens) que rc13 exige para enviar: apagarlos todos con `() => this._sync`
+                    // deja la sesión sin tctoken y el server rechaza los mensajes con
+                    // "error 463: account restricted or missing tctoken". Por eso se procesan
+                    // siempre los no-FULL; `sync` solo decide si además se trae el historial FULL.
+                    // Non-FULL syncs carry the LID mappings and tctokens rc13 requires to send;
+                    // disabling them all made the server reject messages with error 463. We always
+                    // process non-FULL; `sync` only gates whether FULL history is pulled too.
+                    shouldSyncHistoryMessage: ({ syncType }) =>
+                        this._sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
                     markOnlineOnConnect: false,
                 });
 
@@ -314,7 +347,10 @@ export class WhatsApp {
                         // Baileys refresca QR periódicamente (~20s). Emitimos nuevo pair
                         // code / QR en cada refresh para que el usuario pueda renovar si
                         // el anterior expiró.
-                        if (this._phone) {
+                        // `method` fuerza el canal; sin él, phone ⇒ OTP y su ausencia ⇒ QR.
+                        // `otp` exige phone: si se pidió sin phone, se cae a QR.
+                        const auth = this._method ?? (this._phone ? 'otp' : 'qr');
+                        if (auth === 'otp' && this._phone) {
                             await callback(await socket.requestPairingCode(this._phone));
                         } else {
                             await callback(await QRCode.toBuffer(qr, { type: 'png', margin: 2 }));
@@ -790,20 +826,13 @@ export class WhatsApp {
                                 const self_id = this._socket?.user?.id ?? '';
                                 const self_lid = (this._socket?.user as { lid?: string })?.lid ?? '';
                                 const selves = [...new Set([self_lid, self_id].filter(Boolean))];
-                                const foreign_voter = msg.key.remoteJid?.endsWith('@lid')
-                                    ? msg.key.remoteJid
-                                    : msg.key.participant ||
-                                      (msg.key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                      msg.key.remoteJid ||
-                                      '';
-                                const foreign_creator = poll_key.remoteJid?.endsWith('@lid')
-                                    ? poll_key.remoteJid
-                                    : poll_key.participant ||
-                                      (poll_key as { remoteJidAlt?: string }).remoteJidAlt ||
-                                      poll_key.remoteJid ||
-                                      '';
-                                const voters = msg.key.fromMe ? selves : [foreign_voter];
-                                const creators = poll_key.fromMe ? selves : [foreign_creator];
+                                // Candidatos foráneos: todas las formas de identidad del key (LID,
+                                // participant, alt, remoteJid); se prueban todas porque el addressing
+                                // del stanza varía (LID vs PN) según la migración del contacto.
+                                const foreign_of = (k: { remoteJid?: string | null; participant?: string | null; remoteJidAlt?: string }): string[] =>
+                                    [...new Set([k.remoteJid, k.participant, k.remoteJidAlt, k.remoteJid].filter((x): x is string => Boolean(x)))];
+                                const voters = msg.key.fromMe ? selves : foreign_of(msg.key);
+                                const creators = poll_key.fromMe ? selves : foreign_of(poll_key);
                                 let decrypted: ReturnType<typeof decryptPollVote> | null = null;
                                 for (const voter of voters) {
                                     for (const creator of creators) {
