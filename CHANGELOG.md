@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.1.3] - 2026-07-31
+
+### Fixed
+
+- **Completing a contact card emitted no event.** `#persist_contact` only announced `contact:created`, and only when the card did not exist. A card that existed blank and then got its name (the usual case after a re-sync, or when a message arrives carrying a `pushName`) changed on disk in silence, so any consumer memoizing contacts kept showing the bare phone number until it restarted. It now emits `contact:updated` whenever the merge actually changes a field.
+
 ## [6.1.2] - 2026-07-31
 
 ### Fixed
