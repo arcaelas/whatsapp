@@ -91,7 +91,7 @@ import { WhatsApp, SQLiteEngine } from "@arcaelas/whatsapp";
 const engine = new SQLiteEngine(new DatabaseSync(".sessions/bot.db"));
 const wa = new WhatsApp({
     engine,
-    phone: 584144709840, // omit to fall back to QR pairing
+    phone: 5491112345678, // omit to fall back to QR pairing
 });
 ```
 

@@ -32,14 +32,14 @@ wa.feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[
 // Text status
 await wa.feed({
     caption: 'We are live!',
-    contacts: ['584144709840', 56963091328],
+    contacts: ['5491112345678', 584121234567],
 });
 
 // Image or video status — the type is inferred from the binary signature
 await wa.feed({
     content: await readFile('./promo.jpg'),
     caption: 'New collection',
-    contacts: ['584144709840'],
+    contacts: ['5491112345678'],
 });
 ```
 

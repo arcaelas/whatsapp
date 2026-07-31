@@ -91,7 +91,7 @@ import { WhatsApp, SQLiteEngine } from "@arcaelas/whatsapp";
 const engine = new SQLiteEngine(new DatabaseSync(".sessions/bot.db"));
 const wa = new WhatsApp({
     engine,
-    phone: 584144709840, // omítelo para caer en emparejamiento por QR
+    phone: 5491112345678, // omítelo para caer en emparejamiento por QR
 });
 ```
 

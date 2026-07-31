@@ -129,7 +129,7 @@ import { InMemoryEngine } from './in-memory-engine';
 
 const wa = new WhatsApp({
     engine: new InMemoryEngine(),
-    phone: 584144709840,
+    phone: 5491112345678,
 });
 
 wa.connect((auth) => {
@@ -227,7 +227,7 @@ const wa = new WhatsApp({
         new FileSystemEngine(join(__dirname, 'session')),
         'fs',
     ),
-    phone: 584144709840,
+    phone: 5491112345678,
 });
 ```
 
@@ -235,11 +235,11 @@ Ahora cada lectura/escritura pasa por la consola:
 
 ```text
 [fs] get /session/creds HIT (1842b)
-[fs] set /chat/584144709840@s.whatsapp.net 73b score=now
-[fs] set /chat/584144709840@s.whatsapp.net/message/ABC 4211b score=1767371367857
-[fs] set_buffer /chat/584144709840@s.whatsapp.net/message/ABC/content 51204b
+[fs] set /chat/5491112345678@s.whatsapp.net 73b score=now
+[fs] set /chat/5491112345678@s.whatsapp.net/message/ABC 4211b score=1767371367857
+[fs] set_buffer /chat/5491112345678@s.whatsapp.net/message/ABC/content 51204b
 [fs] list /chat offset=0 limit=50 -> 12 items
-[fs] count /chat/584144709840@s.whatsapp.net/message -> 47
+[fs] count /chat/5491112345678@s.whatsapp.net/message -> 47
 ```
 
 !!! danger "Los métodos de binario son una señal, no solo un passthrough"

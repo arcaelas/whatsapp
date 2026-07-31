@@ -64,7 +64,7 @@ yarn add ioredis              # only if you use RedisEngine
     import { DatabaseSync } from 'node:sqlite';
     import { SQLiteEngine } from '@arcaelas/whatsapp';
 
-    const engine = new SQLiteEngine(new DatabaseSync('.sessions/584144709840.db'));
+    const engine = new SQLiteEngine(new DatabaseSync('.sessions/5491112345678.db'));
     ```
 
     On Node 20 and 21, install `better-sqlite3` and pass `new Database(file)` instead.

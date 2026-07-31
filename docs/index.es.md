@@ -27,7 +27,7 @@ import { writeFileSync } from "node:fs";
 
 const wa = new WhatsApp({
     engine: new FileSystemEngine(__dirname + "/.session"),
-    phone: 584144709840,
+    phone: 5491112345678,
 });
 
 wa.on("connected", () => console.log("sesión lista"));

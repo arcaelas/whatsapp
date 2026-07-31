@@ -225,7 +225,7 @@ Publica un estado y devuelve el [`Feed`](feed.es.md) creado, o `null` cuando no 
 ```typescript title="feed.ts"
 const post = await wa.feed({
     caption: '¡Estamos en vivo!',
-    contacts: ['584144709840', 56963091328],
+    contacts: ['5491112345678', 584121234567],
 });
 ```
 

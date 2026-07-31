@@ -176,7 +176,7 @@ interface WhatsAppEventMap {
  * Main WhatsApp client. Does not connect on instantiation.
  *
  * @example
- * const wa = new WhatsApp({ engine: new FileSystemEngine(__dirname), phone: 584144709840 });
+ * const wa = new WhatsApp({ engine: new FileSystemEngine(__dirname), phone: 5491112345678 });
  * wa.on('message:created', (msg) => console.log(msg.caption));
  * await wa.connect((code) => console.log(code));
  */

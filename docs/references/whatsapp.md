@@ -227,7 +227,7 @@ open session.
 ```typescript title="feed.ts"
 const post = await wa.feed({
     caption: 'We are live!',
-    contacts: ['584144709840', 56963091328],
+    contacts: ['5491112345678', 584121234567],
 });
 ```
 

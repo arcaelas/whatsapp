@@ -14,7 +14,7 @@ import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 const wa = new WhatsApp({
     engine: new FileSystemEngine(join(__dirname, 'session')),
-    phone: 584144709840,
+    phone: 5491112345678,
 });
 
 wa.on('connected', () => {
@@ -76,7 +76,7 @@ The engine is the persistence layer. `FileSystemEngine` writes credentials, chat
 ### 2. Phone vs QR
 
 ```typescript
-phone: 584144709840,
+phone: 5491112345678,
 ```
 
 When `phone` is set, the first connect emits a **PIN** (string) — type it in WhatsApp under *Linked devices > Link with phone number*. Omit `phone` and you receive a **PNG Buffer** containing the QR code instead.
