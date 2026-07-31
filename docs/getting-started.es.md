@@ -21,7 +21,20 @@ Crea un archivo `index.ts` en la raíz del proyecto — ahí vivirá el resto de
 
 ## 2. Elige un motor
 
-El `Engine` es la capa de persistencia para credenciales, chats, contactos y mensajes. La librería entrega dos implementaciones:
+El `Engine` es la capa de persistencia de credenciales, chats, contactos y mensajes. La librería incluye cuatro implementaciones:
+
+=== "SQLiteEngine (recomendado)"
+
+    ```typescript title="index.ts"
+    import { DatabaseSync } from "node:sqlite";   // Node 22+
+    import { SQLiteEngine } from "@arcaelas/whatsapp";
+
+    // Node 20-21: import Database from 'better-sqlite3' y usa new Database(file)
+    const engine = new SQLiteEngine(new DatabaseSync(".sessions/bot.db"));
+    ```
+
+    Un solo archivo, paginación indexada y binarios crudos. Requiere Node 22+ para `node:sqlite`, o
+    `better-sqlite3` en runtimes anteriores.
 
 === "FileSystemEngine (desarrollo local)"
 
@@ -31,107 +44,133 @@ El `Engine` es la capa de persistencia para credenciales, chats, contactos y men
     const engine = new FileSystemEngine(__dirname + "/.session");
     ```
 
-    Almacena todo como archivos bajo el directorio que proporciones. Ideal para desarrollo y despliegues de un solo proceso.
+    Guarda todo como archivos JSON legibles bajo el directorio que le indiques. Ideal mientras
+    exploras y quieres inspeccionar lo que la librería escribe.
 
-=== "RedisEngine (producción)"
+=== "RedisEngine (distribuido)"
 
     ```typescript title="index.ts"
-    import { RedisEngine } from "@arcaelas/whatsapp";
     import Redis from "ioredis";
+    import { RedisEngine } from "@arcaelas/whatsapp";
 
-    const engine = new RedisEngine(new Redis(process.env.REDIS_URL!), "bot:main");
+    const redis = new Redis(process.env.REDIS_URL!);
+    const engine = new RedisEngine(redis, "bot:main");
     ```
 
-    Respalda la sesión con Redis y asigna un espacio de nombres a las claves con el prefijo que pasas. Te permite escalar horizontalmente y sobrevivir a reinicios de contenedor.
+    Respalda la sesión en Redis y agrupa las claves con el prefijo que pases. Te permite escalar
+    horizontalmente y sobrevivir reinicios de contenedores.
+
+=== "S3Engine (serverless)"
+
+    ```typescript title="index.ts"
+    import { S3Client } from "@aws-sdk/client-s3";
+    import { S3Engine } from "@arcaelas/whatsapp";
+
+    const engine = new S3Engine({
+        s3: new S3Client({ region: "us-east-1" }),
+        bucket: "sessions",
+        basedir: "wa/bot",
+    });
+    ```
+
+    Para despliegues sin estado donde no hay ni disco ni Redis.
 
 !!! tip "Consejo"
-    También puedes implementar la interfaz `Engine` tú mismo para apuntar a SQLite, S3, DynamoDB o lo que sea. Consulta [Engines](references/engines.es.md).
+    También puedes implementar tú mismo la interfaz `Engine` para apuntar a PostgreSQL, DynamoDB o lo que necesites. Ver [Engines](references/engines.es.md).
 
 ---
 
 ## 3. Instancia el cliente
 
-`new WhatsApp(...)` no abre una conexión — solo conecta los delegados y el emisor de eventos.
+`new WhatsApp(...)` no abre una conexión — solo cablea las entidades y el emisor de eventos.
 
 ```typescript title="index.ts" hl_lines="4 5 6 7"
-import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
+import { DatabaseSync } from "node:sqlite";
+import { WhatsApp, SQLiteEngine } from "@arcaelas/whatsapp";
 
-const engine = new FileSystemEngine(__dirname + "/.session");
+const engine = new SQLiteEngine(new DatabaseSync(".sessions/bot.db"));
 const wa = new WhatsApp({
     engine,
-    phone: 584144709840, // omite para usar emparejamiento por QR
+    phone: 584144709840, // omítelo para caer en emparejamiento por QR
 });
 ```
 
-El campo `phone` decide el flujo de emparejamiento: provéelo para recibir un PIN de 8 caracteres, u omítelo para recibir un buffer PNG con el QR.
+El campo `phone` decide el flujo de emparejamiento: proporciónalo para recibir un PIN, u omítelo para
+recibir un buffer PNG con el QR. Con `phone` puesto, todavía puedes forzar el QR con `method: 'qr'`.
 
 ---
 
 ## 4. Registra listeners antes de conectar
 
-Siempre adjunta los listeners **antes** de llamar a `connect()` para que nunca pierdas los primeros eventos. Cada listener recibe el payload principal primero y la instancia `WhatsApp` al final; los eventos de mensaje y chat también reciben el `Chat` relacionado en medio.
+Engancha siempre los listeners **antes** de llamar a `connect()` para no perderte los primeros eventos. Cada listener recibe primero el payload principal y la instancia de `WhatsApp` al final; los eventos de mensaje y de contacto también reciben el `Chat` relacionado en el medio.
 
 ```typescript title="index.ts"
 wa.on("connected", () => {
-    console.log("session ready");
+    console.log("sesión lista");
 });
 
 wa.on("disconnected", () => {
-    console.log("session closed");
+    console.log("sesión cerrada");
 });
 
-wa.on("message:created", async (msg, chat, wa) => {
-    if (msg.me) return;
-    console.log(`[${chat.id}] ${msg.caption}`);
+wa.on("message:created", async (msg, chat) => {
+    if (!msg.me) {
+        console.log(`[${chat.name}] ${msg.caption}`);
+    }
 });
 ```
 
-El mapa completo de eventos (`chat:*`, `contact:*`, `message:updated`, `message:reacted`, `message:seen`, etc.) está documentado en [Referencias](references/whatsapp.es.md).
+El mapa completo de eventos (`chat:*`, `contact:*`, `message:*`, `feed:*`) está documentado en [Events](references/events.es.md).
 
 ---
 
 ## 5. Conecta y maneja el payload de emparejamiento
 
-`connect(callback)` resuelve una vez que la sesión está sincronizada. El callback se dispara cada vez que baileys te entrega un nuevo artefacto de emparejamiento: un `string` (PIN) cuando `phone` está definido, o un `Buffer` (PNG QR) en caso contrario. El callback puede dispararse más de una vez si el código anterior expira antes de que el usuario complete el emparejamiento.
+`connect(callback)` resuelve una vez que la sesión sincroniza. El callback se dispara cada vez que baileys te entrega un artefacto de emparejamiento nuevo: un `string` (PIN) cuando hay `phone`, o un `Buffer` (QR en PNG) si no. Puede dispararse más de una vez si el código anterior expira antes de completar el emparejamiento.
 
 ```typescript title="index.ts"
 import { writeFileSync } from "node:fs";
 
 await wa.connect(async (code) => {
     if (typeof code === "string") {
-        console.log("Pair code:", code);
-    } else if (Buffer.isBuffer(code)) {
+        console.log("Código de emparejamiento:", code);
+    } else {
         writeFileSync("qr.png", code);
-        console.log("QR written to qr.png — scan it with WhatsApp");
+        console.log("QR escrito en qr.png — escanéalo con WhatsApp");
     }
 });
 ```
 
 !!! success "Éxito"
-    Cuando `connect()` resuelve, el motor tiene las credenciales persistidas. Las ejecuciones subsiguientes las reutilizan automáticamente — no se requiere un segundo emparejamiento.
+    Cuando `connect()` resuelve, el motor ya tiene las credenciales persistidas. Las ejecuciones siguientes las reutilizan automáticamente — no hace falta emparejar de nuevo.
 
 ---
 
 ## 6. Responde a los mensajes entrantes
 
-El delegado `wa.Message` expone `text`, `image`, `video`, `audio`, `location` y `poll`. Pasa el id del chat (o cualquier identificador — teléfono, JID o LID) y el cuerpo:
+Responder es un método del propio mensaje — cita el original automáticamente. Para enviar sin citar,
+usa el delegado `wa.Message` con el id del chat.
 
-```typescript title="index.ts" hl_lines="3 4 5"
-wa.on("message:created", async (msg, chat, wa) => {
-    if (msg.me) return;
-    if (msg.caption?.toLowerCase() === "ping") {
-        await wa.Message.text(chat.id, "pong");
+```typescript title="index.ts" hl_lines="3 6"
+wa.on("message:created", async (msg, chat) => {
+    if (!msg.me && msg.caption.toLowerCase() === "ping") {
+        await msg.text("pong");                        // respuesta citada
+    }
+    if (!msg.me && msg.caption.toLowerCase() === "hola") {
+        await wa.Message.text(chat.id, "¡hola!");      // mensaje suelto
     }
 });
 ```
 
-Cada método también tiene una variante de instancia sobre el mensaje mismo (`msg.text("...")`) que cita el mensaje original en la respuesta.
+`wa.Message` cubre los nueve tipos enviables: `text`, `image`, `video`, `audio`, `document`,
+`location`, `poll`, `vcard` y `event` (los stickers se reciben, no se envían). Ver
+[Messages](references/message.es.md).
 
 ---
 
-## 7. Apagado limpio
+## 7. Apagado ordenado
 
-Cancela reconexiones pendientes y cierra el socket limpiamente en SIGINT:
+Cancela reconexiones pendientes y cierra el socket limpiamente ante SIGINT:
 
 ```typescript title="index.ts"
 process.on("SIGINT", async () => {
@@ -140,7 +179,7 @@ process.on("SIGINT", async () => {
 });
 ```
 
-Pasa `{ destroy: true }` para también limpiar el motor al salir — útil en pruebas o al rotar cuentas.
+Pasa `{ destroy: true }` para además vaciar el motor al salir — útil en pruebas o al rotar cuentas.
 
 ---
 
@@ -150,16 +189,17 @@ Pasa `{ destroy: true }` para también limpiar el motor al salir — útil en pr
 npx tsx index.ts
 ```
 
-La primera ejecución imprime el PIN (o escribe `qr.png`); empareja el dispositivo, espera el log `connected`, luego envía un mensaje a tu número para ver al listener dispararse.
+La primera ejecución imprime el PIN (o escribe `qr.png`); empareja el dispositivo, espera el log de `connected` y luego envía un mensaje a tu número para ver el listener dispararse.
 
 ---
 
-## Profundizando
+## Yendo más allá
 
 Algunas opciones del cliente que vale la pena conocer:
 
-- **`autoclean`** *(por defecto `true`)* — ante un `loggedOut` remoto, limpia todo el motor para que el próximo `connect()` comience con un estado limpio. Ponlo en `false` para preservar el historial de chat/mensajes y solo descartar las credenciales.
-- **`reconnect`** *(por defecto `true`)* — acepta `boolean`, un número de intentos máximos, o `{ max, interval }` (intervalo en segundos, por defecto 60). Los cierres transitorios disparados por el protocolo no consumen presupuesto de reintentos.
-- **`sync`** *(por defecto `false`)* — habilita la sincronización completa de historial de baileys; los chats, contactos y mensajes importados se persisten a través del motor.
+- **`method`** *(por defecto `'otp'`)* — solo tiene sentido junto con `phone`: cámbialo a `'qr'` para obtener el QR aunque haya un número configurado.
+- **`autoclean`** *(por defecto `true`)* — ante un `loggedOut` remoto, limpia el motor completo para que el próximo `connect()` arranque de cero. Ponlo en `false` para conservar el historial de chats/mensajes y descartar solo las credenciales.
+- **`reconnect`** *(por defecto `true`)* — acepta un booleano, un número de intentos máximos, o `{ max, interval }` (intervalo en segundos, por defecto 60). Los cierres transitorios que dispara el protocolo no consumen presupuesto de reintentos.
+- **`sync`** *(por defecto `true`)* — descarga el historial completo de mensajes al vincular. Ponlo en `false` para un primer sync más liviano; los contactos, las credenciales y los LID mappings se sincronizan igual.
 
-La lista completa de opciones, el mapa de eventos y las APIs de los delegados viven en [Referencias](references/whatsapp.es.md). Para recetas de extremo a extremo (bots, webhooks, decoradores, configuraciones multicuenta) navega el ejemplo [Bot Básico](examples/basic-bot.es.md) o la demostración del [Bot con Decoradores](examples/decorator-bot.es.md).
+La lista completa de opciones, el mapa de eventos y las APIs de las entidades viven en [Referencias](references/whatsapp.es.md). Para recetas de punta a punta, revisa el ejemplo [Bot Básico](examples/basic-bot.es.md) o la muestra del [Bot con Decoradores](examples/decorator-bot.es.md).

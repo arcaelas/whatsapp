@@ -1,6 +1,6 @@
 # Custom Engine
 
-La interfaz `Engine` es el contrato de almacenamiento detrás de `@arcaelas/whatsapp`. La librería incluye `FileSystemEngine` y `RedisEngine`, pero nada te impide escribir el tuyo propio — útil para testing, debugging o integración con un datastore existente.
+La interfaz `Engine` es el contrato de almacenamiento detrás de `@arcaelas/whatsapp`. La librería incluye `SQLiteEngine`, `FileSystemEngine`, `RedisEngine` y `S3Engine`, pero nada te impide escribir el tuyo propio — útil para testing, debugging o integración con un datastore existente.
 
 Esta guía recorre dos implementaciones personalizadas:
 
@@ -14,28 +14,33 @@ Esta guía recorre dos implementaciones personalizadas:
 ```typescript
 export interface Engine {
     get(path: string): Promise<string | null>;
-    set(path: string, value: string): Promise<void>;
+    set(path: string, value: string, score?: number): Promise<void>;
     unset(path: string): Promise<boolean>;
     list(path: string, offset?: number, limit?: number): Promise<string[]>;
     count(path: string): Promise<number>;
     clear(): Promise<void>;
+
+    // par opcional, para binarios crudos
+    get_buffer?(path: string): Promise<Buffer | null>;
+    set_buffer?(path: string, data: Buffer, score?: number): Promise<void>;
 }
 ```
 
-Seis métodos, todos basados en ruta, todos string in / string out. La librería maneja la serialización JSON por encima del motor — tu trabajo es puramente persistencia clave-valor.
+Seis métodos obligatorios, todos basados en rutas, todos string de entrada / string de salida. La librería maneja la serialización JSON por encima del motor — tu trabajo es pura persistencia clave-valor.
 
-Reglas que honrar:
+Reglas a respetar:
 
-- **`set`** debe refrescar el mtime de la clave: `list` ordena por mtime DESC.
-- **`unset`** debe hacer cascada: eliminar `/chat/123` también elimina `/chat/123/message/...`.
-- **`list`** devuelve solo los hijos **directos** de una ruta, paginados, mtime DESC.
-- **`count`** debe funcionar sin cargar los valores (usa un contador o índice).
+- **`set`** debe recordar el score de orden: el `score` explícito cuando llega, y la hora de escritura si no.
+- **`unset`** debe caer en cascada: eliminar `/chat/123` también elimina `/chat/123/message/...`.
+- **`list`** devuelve solo los hijos **directos** de una ruta, paginados, score DESC.
+- **`count`** debe funcionar sin cargar los valores.
+- **`get_buffer` / `set_buffer`** son opcionales, pero todo o nada: implementa ambos o ninguno. Cuando faltan, la librería guarda el media como un documento JSON en base64.
 
 ---
 
 ## 1. `InMemoryEngine`
 
-Un motor volátil de un solo proceso respaldado por dos `Map`s — uno para valores, otro para timestamps. Todo se pierde cuando el proceso termina.
+Un motor volátil de un solo proceso respaldado por dos `Map` — uno para documentos, otro para binarios. Todo se pierde cuando el proceso termina.
 
 ```typescript title="in-memory-engine.ts"
 import type { Engine } from '@arcaelas/whatsapp';
@@ -45,90 +50,78 @@ function normalize(path: string): string {
 }
 
 export class InMemoryEngine implements Engine {
-    private readonly _values = new Map<string, string>();
-    private readonly _mtimes = new Map<string, number>();
+    private readonly _docs = new Map<string, { value: string; score: number }>();
+    private readonly _bins = new Map<string, Buffer>();
 
     async get(path: string): Promise<string | null> {
-        return this._values.get(normalize(path)) ?? null;
+        return this._docs.get(normalize(path))?.value ?? null;
     }
 
-    async set(path: string, value: string): Promise<void> {
-        const key = normalize(path);
-        this._values.set(key, value);
-        this._mtimes.set(key, Date.now());
+    async set(path: string, value: string, score?: number): Promise<void> {
+        this._docs.set(normalize(path), { value, score: score ?? Date.now() });
     }
 
     async unset(path: string): Promise<boolean> {
         const key = normalize(path);
         const prefix = `${key}/`;
 
-        this._values.delete(key);
-        this._mtimes.delete(key);
-
-        for (const k of [...this._values.keys()]) {
-            if (k.startsWith(prefix)) {
-                this._values.delete(k);
-                this._mtimes.delete(k);
+        for (const stored of [...this._docs.keys()]) {
+            if (stored === key || stored.startsWith(prefix)) {
+                this._docs.delete(stored);
+                this._bins.delete(stored);
             }
         }
         return true;
     }
 
     async list(path: string, offset = 0, limit = 50): Promise<string[]> {
-        const key = normalize(path);
-        const prefix = key === '' ? '' : `${key}/`;
-
-        const children: { full: string; mtime: number }[] = [];
-        const seen = new Set<string>();
-
-        for (const k of this._values.keys()) {
-            if (!k.startsWith(prefix) || k === key) {
-                continue;
-            }
-            const tail = k.slice(prefix.length);
-            const slash = tail.indexOf('/');
-            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
-
-            if (seen.has(direct) || !this._values.has(direct)) {
-                continue;
-            }
-            seen.add(direct);
-            children.push({ full: direct, mtime: this._mtimes.get(direct) ?? 0 });
-        }
-
-        children.sort((a, b) => b.mtime - a.mtime);
-        return children
+        return this._children(path)
+            .sort((a, b) => b.score - a.score)
             .slice(offset, offset + limit)
-            .map((c) => this._values.get(c.full) ?? '');
+            .map((entry) => entry.value);
     }
 
     async count(path: string): Promise<number> {
-        const key = normalize(path);
-        const prefix = key === '' ? '' : `${key}/`;
-        const seen = new Set<string>();
+        return this._children(path).length;
+    }
 
-        for (const k of this._values.keys()) {
-            if (!k.startsWith(prefix) || k === key) {
-                continue;
-            }
-            const tail = k.slice(prefix.length);
-            const slash = tail.indexOf('/');
-            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
-            if (this._values.has(direct)) {
-                seen.add(direct);
-            }
+    async get_buffer(path: string): Promise<Buffer | null> {
+        return this._bins.get(normalize(path)) ?? null;
+    }
+
+    async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+        const key = normalize(path);
+        this._bins.set(key, data);
+        if (!this._docs.has(key)) {
+            this._docs.set(key, { value: '', score: score ?? Date.now() });
         }
-        return seen.size;
     }
 
     async clear(): Promise<void> {
-        this._values.clear();
-        this._mtimes.clear();
+        this._docs.clear();
+        this._bins.clear();
+    }
+
+    /** Hijos directos de una ruta, con su score de orden. */
+    private _children(path: string): { value: string; score: number }[] {
+        const key = normalize(path);
+        const prefix = key === '' ? '' : `${key}/`;
+        const out: { value: string; score: number }[] = [];
+
+        for (const [stored, entry] of this._docs) {
+            if (stored.startsWith(prefix)) {
+                const tail = stored.slice(prefix.length);
+                if (tail.length > 0 && !tail.includes('/')) {
+                    out.push(entry);
+                }
+            }
+        }
+        return out;
     }
 }
 ```
 
-Úsalo como cualquier motor incluido:
+Úsalo como cualquier motor integrado:
 
 ```typescript title="index.ts"
 import { WhatsApp } from '@arcaelas/whatsapp';
@@ -140,21 +133,21 @@ const wa = new WhatsApp({
 });
 
 wa.connect((auth) => {
-    console.log(typeof auth === 'string' ? `pin: ${auth}` : 'scan the QR');
+    console.log(typeof auth === 'string' ? `pin: ${auth}` : 'escanea el QR');
 });
 ```
 
 !!! warning "No apto para producción"
-    `InMemoryEngine` pierde cada byte cuando el proceso termina. Eso incluye tus credenciales de sesión — cada reinicio requerirá un nuevo emparejamiento QR/PIN. Usa `FileSystemEngine` para desarrollo local y `RedisEngine` para despliegues distribuidos.
+    `InMemoryEngine` pierde cada byte cuando el proceso termina. Eso incluye las credenciales de sesión — cada reinicio requerirá un emparejamiento QR/PIN fresco. Usa `SQLiteEngine` o `FileSystemEngine` para desarrollo local y `RedisEngine` para despliegues distribuidos.
 
 !!! note "Casos de uso"
-    Donde *sí* brilla: tests unitarios, scripts efímeros one-shot, explorar la API sin ensuciar el disco y pipelines de CI que mockean la persistencia.
+    Donde sí brilla: tests unitarios, scripts efímeros de una sola corrida, explorar la API sin ensuciar el disco, y pipelines de CI que simulan la persistencia.
 
 ---
 
 ## 2. `LoggingEngine` — un wrapper pass-through
 
-Envolver otro motor para observar cada llamada es una de las herramientas de debugging más útiles que puedes construir. El patrón es mecánico: implementa `Engine`, mantén un motor interno, loggea alrededor de cada llamada, luego delega.
+Envolver otro motor para observar cada llamada es una de las herramientas de debugging más útiles que puedes construir. El patrón es mecánico: implementa `Engine`, guarda un motor interno, loggea alrededor de cada llamada y delega.
 
 ```typescript title="logging-engine.ts"
 import type { Engine } from '@arcaelas/whatsapp';
@@ -176,9 +169,9 @@ export class LoggingEngine implements Engine {
         return value;
     }
 
-    async set(path: string, value: string): Promise<void> {
-        this._log('set', path, `${value.length}b`);
-        await this._inner.set(path, value);
+    async set(path: string, value: string, score?: number): Promise<void> {
+        this._log('set', path, `${value.length}b score=${score ?? 'now'}`);
+        await this._inner.set(path, value, score);
     }
 
     async unset(path: string): Promise<boolean> {
@@ -198,6 +191,23 @@ export class LoggingEngine implements Engine {
         return total;
     }
 
+    async get_buffer(path: string): Promise<Buffer | null> {
+        const data = this._inner.get_buffer
+            ? await this._inner.get_buffer(path)
+            : null;
+        this._log('get_buffer', path, data ? `${data.length}b` : 'MISS');
+        return data;
+    }
+
+    async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+        this._log('set_buffer', path, `${data.length}b`);
+        if (this._inner.set_buffer) {
+            await this._inner.set_buffer(path, data, score);
+        } else {
+            await this._inner.set(path, JSON.stringify({ data: data.toString('base64') }), score);
+        }
+    }
+
     async clear(): Promise<void> {
         this._log('clear', '*');
         await this._inner.clear();
@@ -205,7 +215,7 @@ export class LoggingEngine implements Engine {
 }
 ```
 
-Conéctalo alrededor de cualquier otro motor — el bot no nota la diferencia:
+Móntalo alrededor de cualquier otro motor — el bot no nota la diferencia:
 
 ```typescript title="index.ts"
 import { join } from 'node:path';
@@ -225,13 +235,20 @@ Ahora cada lectura/escritura pasa por la consola:
 
 ```text
 [fs] get /session/creds HIT (1842b)
-[fs] set /chat/584144709840@s.whatsapp.net 73b
+[fs] set /chat/584144709840@s.whatsapp.net 73b score=now
+[fs] set /chat/584144709840@s.whatsapp.net/message/ABC 4211b score=1767371367857
+[fs] set_buffer /chat/584144709840@s.whatsapp.net/message/ABC/content 51204b
 [fs] list /chat offset=0 limit=50 -> 12 items
 [fs] count /chat/584144709840@s.whatsapp.net/message -> 47
 ```
 
+!!! danger "Los métodos de binario son una señal, no solo un passthrough"
+    La librería decide cómo guardar el media comprobando si `set_buffer` **existe** en el motor. Un
+    wrapper que lo declare y delegue en un motor interno sin soporte de binarios (como `S3Engine`)
+    descartaría el contenido en silencio — de ahí el fallback a base64 de arriba.
+
 !!! tip "La composición es gratis"
-    El patrón wrapper compone — envuelve un `RedisEngine` para loggear tráfico Redis, envuelve un `InMemoryEngine` para un test unitario verboso, o incluso encadena wrappers (p. ej. métricas + logging). Como el contrato son solo seis métodos, los decoradores se mantienen triviales.
+    El patrón wrapper compone — envuelve un `RedisEngine` para loggear el tráfico de Redis, envuelve un `InMemoryEngine` para un test unitario verboso, o incluso encadena wrappers (p. ej. métricas + logging). Como el contrato es pequeño, los decoradores quedan triviales.
 
 ---
 

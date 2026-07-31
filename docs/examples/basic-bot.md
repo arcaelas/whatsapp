@@ -2,7 +2,7 @@
 
 A minimal end-to-end example: a single file that connects to WhatsApp, logs every incoming message, and replies `pong` whenever it receives `ping`.
 
-This is the "hello world" of `@arcaelas/whatsapp` v3. Everything you need lives in one file — engine creation, event handlers, a reply, and a clean shutdown.
+This is the "hello world" of `@arcaelas/whatsapp`. Everything you need lives in one file — engine creation, event handlers, a reply, and a clean shutdown.
 
 ---
 
@@ -81,8 +81,10 @@ phone: 584144709840,
 
 When `phone` is set, the first connect emits a **PIN** (string) — type it in WhatsApp under *Linked devices > Link with phone number*. Omit `phone` and you receive a **PNG Buffer** containing the QR code instead.
 
-!!! tip
-    During development, scan a fresh QR with the WhatsApp mobile app to confirm the PIN flow. Once paired, the engine remembers the session and skips this step on every subsequent run.
+!!! tip "Forcing the QR"
+    `method: 'qr'` keeps the number configured but delivers a QR instead of the PIN. Without `phone`
+    the option is ignored, because a PIN cannot be requested without a number. Once paired, the
+    engine remembers the session and skips this step on every subsequent run.
 
 ### 3. Lifecycle events
 

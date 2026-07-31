@@ -73,6 +73,9 @@
   },
   "types": "./build/esm/index.d.ts",
   "version": "6.0.0",
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
     "@aws-sdk/client-s3": ">=3",
     "jimp": ">=1",

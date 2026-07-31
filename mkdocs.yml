@@ -84,6 +84,7 @@ plugins:
             Chat & Group: Chat y Grupo
             Contact: Contacto
             Messages: Mensajes
+            Status Feed: Estados
             Engines: Engines
             Events: Eventos
             Decorators: Decoradores
@@ -116,6 +117,7 @@ nav:
     - Chat & Group: references/chat.md
     - Contact: references/contact.md
     - Messages: references/message.md
+    - Status Feed: references/feed.md
     - Engines: references/engines.md
     - Events: references/events.md
     - Decorators: references/decorators.md

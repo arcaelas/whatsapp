@@ -1,156 +1,124 @@
 # Engine
 
-La capa de persistencia de `@arcaelas/whatsapp` v3.
+La capa de persistencia de `@arcaelas/whatsapp`.
 
 ---
 
 ## Filosofía
 
-`Engine` es un **contrato key/value solo de strings**. No sabe nada sobre
-WhatsApp, JSON o Buffers — simplemente almacena y recupera strings opacos bajo
-rutas jerárquicas.
+`Engine` es un **contrato key/value solo de strings**. No sabe nada sobre WhatsApp, JSON o Buffers —
+simplemente almacena y recupera strings opacos bajo rutas jerárquicas, en el orden que se le indica.
 
-| Preocupación        | Vive en                                                   |
-| ------------------- | --------------------------------------------------------- |
-| Protocolo de cable  | `baileys`                                                 |
-| Formas del dominio  | `IChatRaw`, `IContactRaw`, `IMessage`                     |
-| Serialización       | `serialize` / `deserialize` (BufferJSON, en `~/lib/store`) |
-| Persistencia        | **Implementaciones de `Engine`**                          |
+| Preocupación        | Vive en                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| Protocolo de red    | `baileys`                                                  |
+| Formas del dominio  | `Contact`, `Chat`, `Message`, `Feed`                       |
+| Serialización       | `serialize` / `deserialize` (BufferJSON)                   |
+| Persistencia        | **Implementaciones de `Engine`**                           |
 
-Esta separación significa que una implementación de motor puede estar respaldada por cualquier cosa que
-pueda `get`/`set`/`unset`/`list`/`count`/`clear` strings bajo una ruta: un árbol de
-archivos, Redis, SQLite, DynamoDB, un map en memoria para pruebas, etc.
+Esta separación implica que un motor puede estar respaldado por cualquier cosa capaz de
+`get`/`set`/`unset`/`list`/`count`/`clear` strings bajo una ruta: un archivo SQLite, un árbol de
+directorios, Redis, S3, DynamoDB, un mapa en memoria para pruebas…
 
 ---
 
 ## Interfaz
 
 ```ts
-import type { Engine } from '@arcaelas/whatsapp';
-
 interface Engine {
     /** Lee un valor por ruta. Devuelve null si no existe. */
     get(path: string): Promise<string | null>;
 
-    /** Escribe un valor. DEBE refrescar el mtime usado por `list`. */
-    set(path: string, value: string): Promise<void>;
+    /**
+     * Escribe un valor. `score` gobierna el orden de `list` (epoch ms del documento);
+     * sin él se usa la hora de escritura.
+     */
+    set(path: string, value: string, score?: number): Promise<void>;
 
     /**
-     * Elimina el valor Y todo descendiente bajo `path`.
-     * DEBE ser idempotente — nunca lanzar cuando `path` no exista.
+     * Elimina el valor Y todos los descendientes bajo `path`.
+     * DEBE ser idempotente — nunca lanzar cuando `path` no existe.
      */
     unset(path: string): Promise<boolean>;
 
     /**
      * Lista los valores de los **hijos directos** de `path`,
-     * paginados y ordenados por mtime DESC.
+     * paginados y ordenados por score DESC.
      */
     list(path: string, offset?: number, limit?: number): Promise<string[]>;
 
     /** Cuenta los hijos directos de `path` sin cargar sus valores. */
     count(path: string): Promise<number>;
 
-    /** Descarta todo en el namespace de este motor. */
+    /** Elimina todo lo que hay en el namespace de este motor. */
     clear(): Promise<void>;
+
+    /** Opcional: lee un binario crudo. */
+    get_buffer?(path: string): Promise<Buffer | null>;
+
+    /** Opcional: escribe un binario crudo, sin pasar por JSON ni base64. */
+    set_buffer?(path: string, data: Buffer, score?: number): Promise<void>;
 }
 ```
 
 ### Semántica por método
 
-| Método   | Contrato                                                                                                   |
-| -------- | ---------------------------------------------------------------------------------------------------------- |
-| `get`    | Devuelve el string exacto escrito previamente por `set`, o `null` si la ruta nunca se escribió / fue eliminada. |
-| `set`    | Sobrescribe cualquier valor anterior. Refresca el mtime de la ruta para que los siguientes `list` reordenen correctamente. |
-| `unset`  | Cascada — elimina la ruta **y todas las sub-rutas**. Idempotente: devuelve `true` incluso cuando no existía nada. |
-| `list`   | Devuelve los **valores** (no las claves) de los hijos directos, ordenados por mtime DESC, recortados por `offset`/`limit`. Por defecto: `offset=0`, `limit=50`. |
-| `count`  | Devuelve el número de hijos directos. Debe ser O(1) donde el backend lo permita (`ZCARD` en Redis).        |
-| `clear`  | Limpia todo el keyspace del motor. Usado en `loggedOut` cuando `autoclean: true`.                          |
+| Método       | Contrato                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `get`        | Devuelve el string exacto escrito antes por `set`, o `null` si la ruta nunca se escribió / se eliminó.                      |
+| `set`        | Sobrescribe cualquier valor previo y registra el score de orden (el `score` explícito, o la hora de escritura si no llega). |
+| `unset`      | Cae en cascada — elimina la ruta **y todas sus subrutas**. Idempotente: devuelve `true` aunque no existiera nada.           |
+| `list`       | Devuelve los **valores** (no las claves) de los hijos directos, ordenados por score DESC, recortados por `offset`/`limit`. Por defecto: `0, 50`. |
+| `count`      | Devuelve la cantidad de hijos directos. Debería ser O(1) donde el backend lo permita (`ZCARD` en Redis, `COUNT(*)` en SQLite). |
+| `clear`      | Vacía todo el keyspace del motor. Se usa en `loggedOut` con `autoclean: true`, y en `disconnect({ destroy: true })`.        |
+| `*_buffer`   | Par opcional. Implementa **ambos o ninguno**: la librería consulta `set_buffer` para decidir cómo guardar el media.         |
 
-!!! info "Información: normalización de rutas"
-    Ambos drivers integrados colapsan `//` y recortan las `/` iniciales/finales antes
-    de usar. Un motor personalizado debería hacer lo mismo para que `/chat/x`, `chat/x` y
-    `/chat//x/` resuelvan a la misma clave.
+!!! info "Por qué existe `score`"
+    Los mensajes se escriben con su `created_at`. Cada reconexión reentrega el historial; si un
+    documento viejo reescrito tomara el reloj actual como posición, los mensajes antiguos saltarían
+    al tope de `list`. El score mantiene la línea de tiempo estable sin importar cuántas veces se
+    reescriba un documento.
 
-!!! warning "Advertencia: `list` devuelve valores, no claves"
-    A diferencia de muchas APIs key/value, `Engine.list` devuelve el **contenido del
-    documento**. Esto le permite al orquestador hacer lecturas paginadas en un solo
-    round-trip (`ZREVRANGE` + `MGET` en Redis, `readdir` + `readFile` paralelo
-    en disco).
+!!! info "Normalización de rutas"
+    Todos los drivers integrados colapsan `//` y recortan las barras de los extremos antes de usar la
+    ruta. Un motor propio debería hacer lo mismo para que `/chat/x`, `chat/x` y `/chat//x/` resuelvan
+    a la misma clave.
+
+!!! warning "`list` devuelve valores, no claves"
+    A diferencia de muchas APIs key/value, `Engine.list` devuelve el **contenido de los documentos**.
+    Eso le permite al orquestador hacer lecturas paginadas en un solo round-trip (`ZREVRANGE` +
+    `MGET` en Redis, un único `SELECT` indexado en SQLite).
 
 ---
 
 ## Implementaciones integradas
 
-### `RedisEngine`
+| Driver             | Mejor para                                          | Binarios crudos |
+| ------------------ | --------------------------------------------------- | --------------- |
+| `SQLiteEngine`     | Cualquier cosa con volumen; la opción por defecto.  | Sí (BLOB)       |
+| `FileSystemEngine` | Desarrollo local, estado inspeccionable.            | Sí (archivo)    |
+| `RedisEngine`      | Multiproceso / contenedores efímeros.               | Sí (depende del cliente) |
+| `S3Engine`         | Despliegues serverless, sin estado.                 | No (base64)     |
+
+Constructores, keyspaces y opciones están documentados en
+[References / Engines](references/engines.es.md).
 
 ```ts
-import IORedis from 'ioredis';
-import { RedisEngine, WhatsApp } from '@arcaelas/whatsapp';
+import { DatabaseSync } from 'node:sqlite';
+import { SQLiteEngine, WhatsApp } from '@arcaelas/whatsapp';
 
-const redis = new IORedis(process.env.REDIS_URL!);
-const engine = new RedisEngine(redis, 'wa:584144709840');
-
+const engine = new SQLiteEngine(new DatabaseSync('.sessions/584144709840.db'));
 const wa = new WhatsApp({ engine, phone: 584144709840 });
 ```
 
-Keyspaces:
-
-```
-<prefix>:doc:<path>           # el documento
-<prefix>:idx:<parent_path>    # sorted set: score=mtime, member=ruta hija completa
-```
-
-Puntos destacados:
-
-- `list` es un `ZREVRANGE` + un `MGET` — sin round-trip por documento.
-- `count` es `ZCARD` (O(1)).
-- `unset` cascada por `SCAN`/`DEL` sobre `doc:<path>/*` e `idx:<path>(/*)`.
-- `clear` limpia todo lo que coincida con `<prefix>:*`.
-
-La interfaz mínima del cliente (`RedisClient`) solo requiere los comandos que el
-motor realmente usa, por lo que funciona con `ioredis`, `node-redis` (con adaptadores
-delgados), o cualquier driver compatible.
-
 ---
 
-### `FileSystemEngine`
+## Implementar un motor propio
 
-```ts
-import { FileSystemEngine, WhatsApp } from '@arcaelas/whatsapp';
-import { join } from 'node:path';
+El esqueleto de abajo respeta el contrato completo, incluido el score. Alcanza para pruebas y
+fixtures, y es la forma que sigue cualquier backend real.
 
-const engine = new FileSystemEngine(join(process.cwd(), '.baileys'));
-
-const wa = new WhatsApp({ engine, phone: 584144709840 });
-```
-
-Layout en disco:
-
-```
-<base>/<path>/index.json
-```
-
-Cada documento vive bajo su propio directorio para poder coexistir con sub-recursos
-anidados (p. ej. un directorio de chat contiene tanto `index.json` como un
-directorio `message/`).
-
-Puntos destacados:
-
-- `set` hace `mkdir -p` luego `writeFile`.
-- `list` lee `mtimeMs` para el `index.json` de cada hijo y ordena DESC.
-- `unset` es `rm -rf` sobre el directorio de la ruta. Idempotente.
-- `clear` es `rm -rf` sobre todo el directorio base.
-
----
-
-## Implementando un motor personalizado
-
-A continuación hay dos plantillas listas para ajustar. Ambas respetan el contrato completo; solo `set`
-necesita refrescar el mtime por ruta para que `list` ordene correctamente.
-
-### Motor en memoria (pruebas, fixtures)
-
-```ts
+```ts title="memory-engine.ts"
 import type { Engine } from '@arcaelas/whatsapp';
 
 function normalize(path: string): string {
@@ -158,183 +126,126 @@ function normalize(path: string): string {
 }
 
 export class MemoryEngine implements Engine {
-    private readonly _docs = new Map<string, { value: string; mtime: number }>();
+    private readonly _docs = new Map<string, { value: string; score: number }>();
+    private readonly _bins = new Map<string, Buffer>();
 
     async get(path: string): Promise<string | null> {
         return this._docs.get(normalize(path))?.value ?? null;
     }
 
-    async set(path: string, value: string): Promise<void> {
-        this._docs.set(normalize(path), { value, mtime: Date.now() });
+    async set(path: string, value: string, score?: number): Promise<void> {
+        this._docs.set(normalize(path), { value, score: score ?? Date.now() });
     }
 
     async unset(path: string): Promise<boolean> {
         const root = normalize(path);
         const prefix = `${root}/`;
-        for (const key of this._docs.keys()) {
+        for (const key of [...this._docs.keys()]) {
             if (key === root || key.startsWith(prefix)) {
                 this._docs.delete(key);
+                this._bins.delete(key);
             }
         }
         return true;
     }
 
     async list(path: string, offset = 0, limit = 50): Promise<string[]> {
-        const root = normalize(path);
-        const prefix = root === '' ? '' : `${root}/`;
-        const direct: Array<{ value: string; mtime: number }> = [];
-        for (const [key, entry] of this._docs) {
-            if (!key.startsWith(prefix)) continue;
-            const rest = key.slice(prefix.length);
-            if (rest.length === 0 || rest.includes('/')) continue;
-            direct.push(entry);
-        }
-        direct.sort((a, b) => b.mtime - a.mtime);
-        return direct.slice(offset, offset + limit).map((e) => e.value);
+        return this._children(path)
+            .sort((a, b) => b.score - a.score)
+            .slice(offset, offset + limit)
+            .map((entry) => entry.value);
     }
 
     async count(path: string): Promise<number> {
-        const root = normalize(path);
-        const prefix = root === '' ? '' : `${root}/`;
-        let total = 0;
-        for (const key of this._docs.keys()) {
-            if (!key.startsWith(prefix)) continue;
-            const rest = key.slice(prefix.length);
-            if (rest.length > 0 && !rest.includes('/')) total++;
+        return this._children(path).length;
+    }
+
+    async get_buffer(path: string): Promise<Buffer | null> {
+        return this._bins.get(normalize(path)) ?? null;
+    }
+
+    async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+        const key = normalize(path);
+        this._bins.set(key, data);
+        if (!this._docs.has(key)) {
+            this._docs.set(key, { value: '', score: score ?? Date.now() });
         }
-        return total;
     }
 
     async clear(): Promise<void> {
         this._docs.clear();
-    }
-}
-```
-
-### Motor SQLite
-
-Un esquema de una sola tabla es suficiente — mantén índices `(mtime DESC)` y
-amigables con prefijos en la columna de path.
-
-```ts
-import Database from 'better-sqlite3';
-import type { Engine } from '@arcaelas/whatsapp';
-
-function normalize(path: string): string {
-    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
-}
-
-export class SqliteEngine implements Engine {
-    private readonly _db: Database.Database;
-
-    constructor(file: string) {
-        this._db = new Database(file);
-        this._db.exec(`
-            CREATE TABLE IF NOT EXISTS docs (
-                path  TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                mtime INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_docs_mtime ON docs (mtime DESC);
-            CREATE INDEX IF NOT EXISTS idx_docs_prefix ON docs (path COLLATE BINARY);
-        `);
+        this._bins.clear();
     }
 
-    async get(path: string): Promise<string | null> {
-        const row = this._db
-            .prepare('SELECT value FROM docs WHERE path = ?')
-            .get(normalize(path)) as { value: string } | undefined;
-        return row?.value ?? null;
-    }
-
-    async set(path: string, value: string): Promise<void> {
-        this._db
-            .prepare(
-                `INSERT INTO docs (path, value, mtime) VALUES (?, ?, ?)
-                 ON CONFLICT(path) DO UPDATE SET value = excluded.value, mtime = excluded.mtime`
-            )
-            .run(normalize(path), value, Date.now());
-    }
-
-    async unset(path: string): Promise<boolean> {
-        const root = normalize(path);
-        this._db
-            .prepare('DELETE FROM docs WHERE path = ? OR path LIKE ?')
-            .run(root, `${root}/%`);
-        return true;
-    }
-
-    async list(path: string, offset = 0, limit = 50): Promise<string[]> {
+    /** Hijos directos de una ruta, con su score. */
+    private _children(path: string): { value: string; score: number }[] {
         const root = normalize(path);
         const prefix = root === '' ? '' : `${root}/`;
-        const rows = this._db
-            .prepare(
-                `SELECT value, path FROM docs
-                 WHERE path LIKE ?
-                 ORDER BY mtime DESC`
-            )
-            .all(`${prefix}%`) as { value: string; path: string }[];
-        const direct = rows.filter((r) => {
-            const rest = r.path.slice(prefix.length);
-            return rest.length > 0 && !rest.includes('/');
-        });
-        return direct.slice(offset, offset + limit).map((r) => r.value);
-    }
-
-    async count(path: string): Promise<number> {
-        const root = normalize(path);
-        const prefix = root === '' ? '' : `${root}/`;
-        const rows = this._db
-            .prepare('SELECT path FROM docs WHERE path LIKE ?')
-            .all(`${prefix}%`) as { path: string }[];
-        let total = 0;
-        for (const r of rows) {
-            const rest = r.path.slice(prefix.length);
-            if (rest.length > 0 && !rest.includes('/')) total++;
+        const out: { value: string; score: number }[] = [];
+        for (const [key, entry] of this._docs) {
+            if (key.startsWith(prefix)) {
+                const rest = key.slice(prefix.length);
+                if (rest.length > 0 && !rest.includes('/')) {
+                    out.push(entry);
+                }
+            }
         }
-        return total;
-    }
-
-    async clear(): Promise<void> {
-        this._db.prepare('DELETE FROM docs').run();
+        return out;
     }
 }
 ```
 
-!!! tip "Consejo: casos límite que vale la pena probar"
-    - `unset` sobre una ruta faltante devuelve `true` (idempotente).
+Úsalo como cualquier motor integrado:
+
+```ts title="index.ts"
+import { WhatsApp } from '@arcaelas/whatsapp';
+import { MemoryEngine } from './memory-engine';
+
+const wa = new WhatsApp({ engine: new MemoryEngine(), phone: 584144709840 });
+```
+
+!!! warning "Volátil significa volátil"
+    Un motor en memoria pierde las credenciales de sesión al salir, así que cada reinicio exige un
+    emparejamiento nuevo por QR/PIN. Brilla en pruebas unitarias, scripts de una sola corrida y
+    pipelines de CI — no en producción.
+
+!!! tip "Casos límite que vale la pena probar"
+    - `unset` sobre una ruta inexistente devuelve `true` (idempotente).
     - `list` de una ruta sin hijos devuelve `[]`, nunca lanza.
-    - `set` sobre una ruta existente sobrescribe e incrementa el mtime — las posiciones antiguas en `list` deberían desaparecer y el nuevo valor aparecer en la parte superior.
-    - Normalización de rutas: `chat/x`, `/chat/x` y `/chat//x/` todos impactan el mismo registro.
+    - `set` con un `score` explícito ubica el documento por ese score, no por la hora de escritura.
+    - `set` sobre una ruta existente sobrescribe el valor y actualiza su score.
+    - Normalización de rutas: `chat/x`, `/chat/x` y `/chat//x/` dan en el mismo registro.
+    - `unset('/chat/x')` también elimina `/chat/x/message/y` y su contenido.
+
+### Envolver un motor
+
+Como el contrato es pequeño, un wrapper pasa-a-través es una forma barata de agregar logging,
+métricas o cifrado. Ver [Examples / Custom Engine](examples/custom-engine.es.md) para un
+`LoggingEngine` completo.
 
 ---
 
 ## Multicuenta: un proceso, varios motores
 
-Cada instancia `WhatsApp` posee exactamente un `Engine`. Para ejecutar varias cuentas
-concurrentemente en el mismo proceso, dale a cada una su propio motor — posiblemente de
-tipos diferentes:
+Cada instancia de `WhatsApp` posee exactamente un `Engine`. Para correr varias cuentas
+concurrentemente en el mismo proceso, dale a cada una su propio motor — incluso de tipos distintos:
 
 ```ts
 import IORedis from 'ioredis';
-import { join } from 'node:path';
-import {
-    FileSystemEngine,
-    RedisEngine,
-    WhatsApp,
-} from '@arcaelas/whatsapp';
+import { DatabaseSync } from 'node:sqlite';
+import { RedisEngine, SQLiteEngine, WhatsApp } from '@arcaelas/whatsapp';
 
 const redis = new IORedis(process.env.REDIS_URL!);
 
-// Cuenta A — respaldada por Redis (hot, amigable con múltiples instancias)
+// Cuenta A — respaldada por Redis (caliente, apta para múltiples instancias)
 const wa_a = new WhatsApp({
     engine: new RedisEngine(redis, 'wa:584144709840'),
     phone: 584144709840,
 });
 
-// Cuenta B — filesystem local (bot de un solo host, fácil de inspeccionar)
+// Cuenta B — archivo SQLite local
 const wa_b = new WhatsApp({
-    engine: new FileSystemEngine(join(process.cwd(), '.sessions/B')),
+    engine: new SQLiteEngine(new DatabaseSync('.sessions/584121234567.db')),
     phone: 584121234567,
 });
 
@@ -344,43 +255,42 @@ await Promise.all([
 ]);
 ```
 
-Dos reglas que recordar:
+Dos reglas para recordar:
 
-1. **Nunca compartas una instancia de motor entre dos clientes `WhatsApp`.** El estado
-   colisionaría bajo las mismas rutas. Con Redis, dale a cada cuenta un `prefix` único.
-   Con FileSystem, dale a cada cuenta un directorio base único.
-2. El motor **ya debe estar conectado** cuando construyes `WhatsApp` — es
-   leído por el constructor y usado inmediatamente en `connect()`.
+1. **Nunca compartas una instancia de motor entre dos clientes `WhatsApp`.** El estado colisionaría
+   bajo las mismas rutas. Con Redis, dale a cada cuenta un `prefix` único; con el sistema de
+   archivos, un directorio base único; con SQLite, un archivo único (o al menos una tabla única).
+2. El motor **ya debe estar armado** cuando construyes `WhatsApp` — lo lee el constructor y lo usa
+   inmediatamente en `connect()`.
 
 ---
 
 ## `autoclean` y `loggedOut`
 
-Cuando baileys reporta `DisconnectReason.loggedOut`, el orquestador decide
-qué hacer con el motor **antes** de emitir `disconnected`, para que los listeners
-siempre observen el estado final:
+Cuando baileys reporta `DisconnectReason.loggedOut`, el orquestador decide qué hacer con el motor
+**antes** de emitir `disconnected`, para que los listeners siempre observen el estado final:
 
-| Valor de `autoclean`       | Acción en `loggedOut`                                         |
-| -------------------------- | ------------------------------------------------------------- |
-| `true` (por defecto)       | `await engine.clear()` — todo el namespace del motor se limpia. |
-| `false`                    | `await engine.unset('/session/creds')` — solo credenciales; chats / contactos / mensajes se preservan. |
+| Valor de `autoclean` | Acción ante `loggedOut`                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `true` (por defecto) | `await engine.clear()` — se vacía todo el namespace del motor.                                        |
+| `false`              | `await engine.unset('/session/creds')` — solo credenciales; chats / contactos / mensajes se conservan. |
 
 ```ts
-// Limpiar todo cuando el usuario hace logout desde el teléfono
+// Borrar todo cuando el usuario cierra sesión desde el teléfono
 const wa1 = new WhatsApp({ engine, autoclean: true });
 
-// Mantener historial; solo forzar re-autenticación en el próximo connect
+// Conservar el historial; solo forzar reautenticación en el próximo connect
 const wa2 = new WhatsApp({ engine, autoclean: false });
 ```
 
-`disconnect({ destroy: true })` también llama a `engine.clear()`, independientemente de
-`autoclean`, por lo que una destrucción manual siempre está a una bandera de distancia:
+`disconnect({ destroy: true })` también llama a `engine.clear()`, sin importar `autoclean`, así que
+la limpieza manual está siempre a una bandera de distancia:
 
 ```ts
-await wa.disconnect({ destroy: true }); // igual que engine.clear()
+await wa.disconnect({ destroy: true }); // equivalente a engine.clear()
 ```
 
-!!! note "Nota: la limpieza ocurre antes del evento"
-    El orquestador espera a que termine la limpieza del motor antes de emitir `disconnected`.
-    Cualquier handler adjunto vía `wa.on('disconnected', ...)` garantizado verá
-    el estado post-limpieza del store.
+!!! note "La limpieza ocurre antes del evento"
+    El orquestador espera la limpieza del motor antes de emitir `disconnected`. Cualquier handler
+    enganchado con `wa.on('disconnected', …)` tiene garantizado ver el estado del almacén posterior a
+    la limpieza.
