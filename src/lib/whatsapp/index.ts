@@ -28,11 +28,47 @@ import {
 import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { chat, type IChatRaw } from '~/lib/chat';
-import { contact, contact_name, type IContactRaw } from '~/lib/contact';
-import { message, Message, MessageStatus, type IMessage } from '~/lib/message';
-import Feed, { TTL_MS as FEED_TTL_MS, type FeedType, type IFeedRaw } from '~/lib/status';
+import { chat, Chat } from '~/lib/chat';
+import { contact, Contact } from '~/lib/contact';
+import { bind, type Internals } from '~/lib/internal';
+import {
+    Audio,
+    Document,
+    Event,
+    Image,
+    Location,
+    message,
+    Message,
+    Poll,
+    Sticker,
+    Text,
+    VCard,
+    Video,
+} from '~/lib/message';
+import { Feed, TTL_MS as FEED_TTL_MS } from '~/lib/status';
 import { deserialize, serialize, type Engine } from '~/lib/store';
+
+/** Documento persistido de un status broadcast, tal como lo construye el cliente. / Persisted status broadcast document, as built by the client. */
+type FeedRaw = ConstructorParameters<typeof Feed>[1];
+
+/** Estados legibles del mensaje que el receipt puede avanzar. / Readable message states a receipt can advance to. */
+const READ = 4;
+const PLAYED = 5;
+
+/**
+ * Deduce el MIME de un binario por su firma, acotado a lo que WhatsApp acepta en un estado.
+ * Infers a binary's MIME from its signature, limited to what WhatsApp accepts in a status.
+ *
+ * @param data - Binario a inspeccionar / Binary to inspect
+ * @returns MIME reconocido, o null / Recognized MIME, or null
+ */
+function sniff_media(data: Buffer): string | null {
+    if (data.subarray(0, 3).toString('hex') === 'ffd8ff') return 'image/jpeg';
+    if (data.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') return 'image/png';
+    if (data.subarray(0, 4).toString() === 'RIFF' && data.subarray(8, 12).toString() === 'WEBP') return 'image/webp';
+    if (data.subarray(4, 8).toString() === 'ftyp') return 'video/mp4';
+    return null;
+}
 
 /**
  * Opciones del cliente WhatsApp.
@@ -52,14 +88,17 @@ export type ReconnectOption = boolean | number | { max?: number; interval?: numb
 export interface IWhatsApp {
     /** Motor de almacenamiento. / Storage engine. */
     engine: Engine;
-    /** Teléfono para emparejamiento por PIN (OTP). / Phone for PIN pairing (OTP). */
+    /**
+     * Teléfono de la cuenta. Su presencia habilita el emparejamiento por PIN; sin él la
+     * vinculación es siempre por QR.
+     * Account phone. Its presence enables PIN pairing; without it linking is always by QR.
+     */
     phone?: number | string;
     /**
-     * Fuerza el método de vinculación. Tiene precedencia sobre la heurística por `phone`:
-     * `auth = method ?? (phone ? 'otp' : 'qr')`. `otp` requiere `phone`.
-     *
-     * Forces the linking method, taking precedence over the phone heuristic:
-     * `auth = method ?? (phone ? 'otp' : 'qr')`. `otp` requires `phone`.
+     * Elige el canal de vinculación **cuando hay `phone`**: `otp` (default) o `qr`. Sin
+     * `phone` la opción se ignora, porque el PIN no puede pedirse sin número.
+     * Picks the linking channel **when `phone` is set**: `otp` (default) or `qr`. Without
+     * `phone` it is ignored, since a PIN cannot be requested without a number.
      */
     method?: 'qr' | 'otp';
     /**
@@ -87,11 +126,14 @@ export interface IWhatsApp {
  * Disconnect options.
  */
 export interface DisconnectOptions {
-    /** No emitir evento de cierre. / Suppress close emission. */
+    /** No emitir el evento `disconnected` de este cierre. / Suppress this close's `disconnected` event. */
     silent?: boolean;
     /** Vaciar el engine tras cerrar. / Clear the engine after closing. */
     destroy?: boolean;
 }
+
+/** Argumentos de un estático de envío sin el cliente ni el cid. / Send-static arguments without client and cid. */
+type Tail<P extends unknown[]> = P extends [unknown, unknown, ...infer R] ? R : never;
 
 type MessageInstance = Message;
 type ChatInstance = InstanceType<ReturnType<typeof chat>>;
@@ -139,54 +181,140 @@ interface WhatsAppEventMap {
  * await wa.connect((code) => console.log(code));
  */
 export class WhatsApp {
-    private readonly _phone?: string;
-    private readonly _method?: 'qr' | 'otp';
-    /** @internal */
-    readonly _event: EventEmitter<WhatsAppEventMap>;
-    private readonly _autoclean: boolean;
-    private readonly _reconnect: { max: number | null; interval_ms: number };
-    private readonly _sync: boolean;
-    /** @internal */
-    _socket: WASocket | null = null;
-    private _intentional_close = false;
-    private _has_connected = false;
-    private _retry_timer: ReturnType<typeof setTimeout> | null = null;
-    private _retry_count = 0;
+    /** @internal Emisor de los eventos del cliente. / Client event emitter. */
+    #event = new EventEmitter<WhatsAppEventMap>();
+    /** @internal Estado compartido con las entidades (socket, resolución de JIDs). / State shared with the entities. */
+    #internals: Internals;
+    #phone?: string;
+    #method?: 'qr' | 'otp';
+    #autoclean: boolean;
+    #reconnect: { max: number | null; interval_ms: number };
+    #sync: boolean;
+    #intentional_close = false;
+    #silent_close = false;
+    #has_connected = false;
+    #retry_timer: ReturnType<typeof setTimeout> | null = null;
+    #retry_count = 0;
+    /**
+     * @internal
+     * Cadena que serializa los handlers de eventos de baileys: dos eventos sobre el mismo
+     * documento ya no se intercalan (lost updates por read-modify-write concurrente).
+     * Chain serializing baileys event handlers: two events over the same document no longer
+     * interleave (lost updates from concurrent read-modify-write).
+     */
+    #chain: Promise<void> = Promise.resolve();
 
+    /** Motor de almacenamiento de la sesión. / Session storage engine. */
     readonly engine: Engine;
+    /** Entidad `Contact` ligada a este cliente. / `Contact` entity bound to this client. */
     readonly Contact: ReturnType<typeof contact>;
+    /** Entidad `Chat` ligada a este cliente. / `Chat` entity bound to this client. */
     readonly Chat: ReturnType<typeof chat>;
-    readonly Message: ReturnType<typeof message>;
+    /**
+     * Entidad `Message` ligada a este cliente: los mismos estáticos de `Message` sin repetir
+     * la instancia, más las subclases para `instanceof`.
+     * `Message` entity bound to this client: the same `Message` statics without repeating the
+     * instance, plus the subclasses for `instanceof`.
+     */
+    readonly Message: {
+        get: (cid: string, mid: string) => ReturnType<typeof Message.get>;
+        list: (cid: string, offset?: number, limit?: number) => ReturnType<typeof Message.list>;
+        text: (cid: string, ...rest: Tail<Parameters<typeof Message.text>>) => ReturnType<typeof Message.text>;
+        image: (cid: string, ...rest: Tail<Parameters<typeof Message.image>>) => ReturnType<typeof Message.image>;
+        video: (cid: string, ...rest: Tail<Parameters<typeof Message.video>>) => ReturnType<typeof Message.video>;
+        audio: (cid: string, ...rest: Tail<Parameters<typeof Message.audio>>) => ReturnType<typeof Message.audio>;
+        location: (cid: string, ...rest: Tail<Parameters<typeof Message.location>>) => ReturnType<typeof Message.location>;
+        poll: (cid: string, ...rest: Tail<Parameters<typeof Message.poll>>) => ReturnType<typeof Message.poll>;
+        document: (cid: string, ...rest: Tail<Parameters<typeof Message.document>>) => ReturnType<typeof Message.document>;
+        vcard: (cid: string, ...rest: Tail<Parameters<typeof Message.vcard>>) => ReturnType<typeof Message.vcard>;
+        event: (cid: string, ...rest: Tail<Parameters<typeof Message.event>>) => ReturnType<typeof Message.event>;
+        react: (cid: string, mid: string, emoji: string) => Promise<boolean>;
+        star: (cid: string, mid: string, value: boolean) => Promise<boolean>;
+        seen: (cid: string, mid: string) => Promise<boolean>;
+        edit: (cid: string, mid: string, caption: string) => Promise<boolean>;
+        forward: (cid: string, mid: string, target: string | Chat | Contact) => Promise<boolean>;
+        delete: (cid: string, mid: string, all?: boolean) => Promise<boolean>;
+        reactions: (cid: string, mid: string) => Promise<{ emoji: string; count: number }[]>;
+        Text: typeof Text;
+        Image: typeof Image;
+        Video: typeof Video;
+        Audio: typeof Audio;
+        Sticker: typeof Sticker;
+        Document: typeof Document;
+        Location: typeof Location;
+        Poll: typeof Poll;
+        VCard: typeof VCard;
+        Event: typeof Event;
+    };
 
     constructor(options: IWhatsApp) {
         this.engine = options.engine;
-        this._phone =
-            options.phone !== undefined ? String(options.phone).replace(/\D+/g, '') : undefined;
-        this._method = options.method;
-        this._autoclean = options.autoclean ?? true;
-        this._sync = options.sync ?? true;
-        this._reconnect = this._parse_reconnect(options.reconnect);
-        this._event = new EventEmitter();
+        this.#phone = options.phone !== undefined ? String(options.phone).replace(/\D+/g, '') : undefined;
+        this.#method = options.method;
+        this.#autoclean = options.autoclean ?? true;
+        this.#sync = options.sync ?? true;
+        this.#reconnect =
+            options.reconnect === false ? { max: 0, interval_ms: 60_000 }
+                : options.reconnect === undefined || options.reconnect === true ? { max: null, interval_ms: 60_000 }
+                    : typeof options.reconnect === 'number' ? { max: options.reconnect, interval_ms: 60_000 }
+                        : { max: options.reconnect.max ?? null, interval_ms: (options.reconnect.interval ?? 60) * 1_000 };
+        this.#internals = { socket: null, resolve_jid: (uid) => this.#resolve_jid(uid) };
+        bind(this, this.#internals);
         this.Contact = contact(this);
         this.Chat = chat(this);
-        this.Message = message(this);
+        this.Message = {
+            get: (cid, mid) => Message.get(this, cid, mid),
+            list: (cid, offset, limit) => Message.list(this, cid, offset, limit),
+            text: (cid, ...rest) => Message.text(this, cid, ...rest),
+            image: (cid, ...rest) => Message.image(this, cid, ...rest),
+            video: (cid, ...rest) => Message.video(this, cid, ...rest),
+            audio: (cid, ...rest) => Message.audio(this, cid, ...rest),
+            location: (cid, ...rest) => Message.location(this, cid, ...rest),
+            poll: (cid, ...rest) => Message.poll(this, cid, ...rest),
+            document: (cid, ...rest) => Message.document(this, cid, ...rest),
+            vcard: (cid, ...rest) => Message.vcard(this, cid, ...rest),
+            event: (cid, ...rest) => Message.event(this, cid, ...rest),
+            react: (cid, mid, emoji) => Message.react(this, cid, mid, emoji),
+            star: (cid, mid, value) => Message.star(this, cid, mid, value),
+            seen: (cid, mid) => Message.seen(this, cid, mid),
+            edit: (cid, mid, caption) => Message.edit(this, cid, mid, caption),
+            forward: (cid, mid, target) => Message.forward(this, cid, mid, target),
+            delete: (cid, mid, all) => Message.delete(this, cid, mid, all),
+            reactions: (cid, mid) => Message.reactions(this, cid, mid),
+            Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event,
+        };
     }
 
-    /** @internal */
-    private _parse_reconnect(option: ReconnectOption | undefined): { max: number | null; interval_ms: number } {
-        if (option === false) {
-            return { max: 0, interval_ms: 60_000 };
+    /**
+     * Contacto de la cuenta autenticada, o null mientras no hay sesión abierta.
+     * Authenticated account's contact, or null while there is no open session.
+     */
+    get contact(): InstanceType<ReturnType<typeof contact>> | null {
+        const user = this.#internals.socket?.user;
+        if (user) {
+            const jid = jidNormalizedUser(user.id);
+            return new this.Contact({ id: jid, phone_number: jid, lid: user.lid ?? null, name: user.name ?? null });
         }
-        if (option === undefined || option === true) {
-            return { max: null, interval_ms: 60_000 };
-        }
-        if (typeof option === 'number') {
-            return { max: option, interval_ms: 60_000 };
-        }
-        return {
-            max: option.max ?? null,
-            interval_ms: (option.interval ?? 60) * 1000,
-        };
+        return null;
+    }
+
+    /** @internal Encola una tarea en la cadena serial de handlers. / Queues a task on the serial handler chain. */
+    #enqueue(task: () => Promise<void>): void {
+        this.#chain = this.#chain.then(task).catch(() => { });
+    }
+
+    /**
+     * Emite un evento del cliente. Lo usan las entidades de la librería para propagar los
+     * cambios que provocan; el consumidor puede emitir los suyos para pruebas.
+     * Emits a client event. Library entities use it to propagate the changes they cause;
+     * consumers may emit their own for testing.
+     *
+     * @param event - Nombre del evento / Event name
+     * @param args - Argumentos del evento / Event arguments
+     * @returns true si había listeners / true when listeners were present
+     */
+    emit<E extends keyof WhatsAppEventMap>(event: E, ...args: WhatsAppEventMap[E]): boolean {
+        return this.#event.emit(event, ...(args as never));
     }
 
     /**
@@ -197,8 +325,8 @@ export class WhatsApp {
         event: E,
         handler: (...args: WhatsAppEventMap[E]) => void
     ): () => void {
-        this._event.on(event, handler as never);
-        return () => { this._event.off(event, handler as never); };
+        this.#event.on(event, handler as never);
+        return () => { this.#event.off(event, handler as never); };
     }
 
     /**
@@ -209,7 +337,7 @@ export class WhatsApp {
         event: E,
         handler: (...args: WhatsAppEventMap[E]) => void
     ): this {
-        this._event.off(event, handler as never);
+        this.#event.off(event, handler as never);
         return this;
     }
 
@@ -221,16 +349,18 @@ export class WhatsApp {
         event: E,
         handler: (...args: WhatsAppEventMap[E]) => void
     ): () => void {
-        this._event.once(event, handler as never);
-        return () => { this._event.off(event, handler as never); };
+        this.#event.once(event, handler as never);
+        return () => { this.#event.off(event, handler as never); };
     }
 
     /**
      * @internal
-     * Normaliza cualquier identificador (JID, LID, número, etc.) a JID canónico.
-     * Uso interno de la librería — no forma parte de la API pública.
+     * Normaliza cualquier identificador (JID, LID, número, etc.) a JID canónico. Las
+     * entidades lo alcanzan por el canal interno, no por la instancia.
+     * Normalizes any identifier (JID, LID, number…) into a canonical JID. Entities reach it
+     * through the internal channel, not through the instance.
      */
-    async _resolve_jid(uid: string): Promise<string | null> {
+    async #resolve_jid(uid: string): Promise<string | null> {
         let result: string | null = null;
         if (uid.endsWith('@g.us') || uid.endsWith('@s.whatsapp.net')) {
             result = uid;
@@ -249,7 +379,7 @@ export class WhatsApp {
                     // baileys lo conoce vía su lidMapping. Sin esto, un chat referenciado por @lid
                     // (p.ej. el pollCreationMessageKey de un voto entrante) no resuelve al PN donde
                     // realmente está guardado, y el mensaje/poll no se encuentra.
-                    const pn = await (this._socket as unknown as {
+                    const pn = await (this.#internals.socket as unknown as {
                         signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null | undefined> } };
                     } | null)?.signalRepository?.lidMapping?.getPNForLID(uid).catch(() => null);
                     if (pn) {
@@ -276,10 +406,14 @@ export class WhatsApp {
      * Resolves once the session is synced; retries on non-loggedOut disconnects.
      */
     async connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void> {
+        if (this.#internals.socket) {
+            await this.disconnect({ silent: true });
+        }
         const { version } = await fetchLatestBaileysVersion();
 
-        this._intentional_close = false;
-        this._has_connected = false;
+        this.#intentional_close = false;
+        this.#silent_close = false;
+        this.#has_connected = false;
 
         return new Promise<void>((resolve, reject) => {
             const start = async (): Promise<void> => {
@@ -288,7 +422,7 @@ export class WhatsApp {
                 const stored = await this.engine.get('/session/creds');
                 const creds: AuthenticationCreds = deserialize<AuthenticationCreds>(stored) ?? initAuthCreds();
 
-                this._socket = makeWASocket({
+                this.#internals.socket = makeWASocket({
                     version,
                     auth: {
                         creds,
@@ -323,9 +457,9 @@ export class WhatsApp {
                     },
                     browser: Browsers.windows('Chrome'),
                     logger: pino({ level: 'silent' }),
-                    syncFullHistory: this._sync,
+                    syncFullHistory: this.#sync,
                     // Los syncs no-FULL cargan las LID mappings y los tctokens (trusted-contact
-                    // tokens) que rc13 exige para enviar: apagarlos todos con `() => this._sync`
+                    // tokens) que rc13 exige para enviar: apagarlos todos con `() => this.#sync`
                     // deja la sesión sin tctoken y el server rechaza los mensajes con
                     // "error 463: account restricted or missing tctoken". Por eso se procesan
                     // siempre los no-FULL; `sync` solo decide si además se trae el historial FULL.
@@ -333,11 +467,11 @@ export class WhatsApp {
                     // disabling them all made the server reject messages with error 463. We always
                     // process non-FULL; `sync` only gates whether FULL history is pulled too.
                     shouldSyncHistoryMessage: ({ syncType }) =>
-                        this._sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
+                        this.#sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
                     markOnlineOnConnect: false,
                 });
 
-                const socket = this._socket;
+                const socket = this.#internals.socket;
                 socket.ev.on('creds.update', () => this.engine.set('/session/creds', serialize(creds)));
 
                 socket.ev.on('connection.update', async (update) => {
@@ -347,23 +481,24 @@ export class WhatsApp {
                         // Baileys refresca QR periódicamente (~20s). Emitimos nuevo pair
                         // code / QR en cada refresh para que el usuario pueda renovar si
                         // el anterior expiró.
-                        // `method` fuerza el canal; sin él, phone ⇒ OTP y su ausencia ⇒ QR.
-                        // `otp` exige phone: si se pidió sin phone, se cae a QR.
-                        const auth = this._method ?? (this._phone ? 'otp' : 'qr');
-                        if (auth === 'otp' && this._phone) {
-                            await callback(await socket.requestPairingCode(this._phone));
+                        // El PIN necesita número: sin `phone` la vinculación es siempre QR, y
+                        // con `phone` manda `method` (OTP por defecto).
+                        // A PIN requires a number: without `phone` linking is always QR, and with
+                        // `phone` the `method` option decides (OTP by default).
+                        if (this.#phone && (this.#method ?? 'otp') === 'otp') {
+                            await callback(await socket.requestPairingCode(this.#phone));
                         } else {
                             await callback(await QRCode.toBuffer(qr, { type: 'png', margin: 2 }));
                         }
                     }
 
                     if (connection === 'open') {
-                        this._has_connected = true;
-                        this._retry_count = 0;
-                        this._event.emit('connected', this);
+                        this.#has_connected = true;
+                        this.#retry_count = 0;
+                        this.emit('connected', this);
                         resolve();
                     } else if (connection === 'close') {
-                        this._socket = null;
+                        this.#internals.socket = null;
                         const status_code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
                         // `restartRequired` (515) es una reconexión exigida por el protocolo
                         // tras el sync inicial — no es un disconnect "real".
@@ -372,34 +507,36 @@ export class WhatsApp {
                         // Limpieza del engine ANTES de emitir `disconnected` para que los
                         // listeners vean el estado final (engine vaciado o creds borradas).
                         if (status_code === DisconnectReason.loggedOut) {
-                            if (this._autoclean) {
+                            if (this.#autoclean) {
                                 await this.engine.clear();
                             } else {
                                 await this.engine.unset('/session/creds');
                             }
                         }
 
-                        if (this._has_connected && !is_transient) {
-                            this._event.emit('disconnected', this);
+                        // `disconnect({ silent: true })` calla el evento de este cierre concreto.
+                        // `disconnect({ silent: true })` mutes this specific close's event.
+                        if (this.#has_connected && !is_transient && !this.#silent_close) {
+                            this.emit('disconnected', this);
                         }
 
-                        if (!this._intentional_close) {
+                        if (!this.#intentional_close) {
                             if (status_code === DisconnectReason.loggedOut) {
                                 reject(new Error('Logged out'));
                             } else {
-                                const max = this._reconnect.max;
+                                const max = this.#reconnect.max;
                                 // Transient closes (restartRequired) son parte del protocolo,
                                 // no cuentan contra el límite de reintentos por fallo.
-                                const exhausted = !is_transient && max !== null && this._retry_count >= max;
+                                const exhausted = !is_transient && max !== null && this.#retry_count >= max;
                                 if (exhausted) {
                                     reject(new Error(`Reconnect attempts exhausted (${max})`));
                                 } else {
                                     if (!is_transient) {
-                                        this._retry_count++;
+                                        this.#retry_count++;
                                     }
-                                    const delay = is_transient ? 0 : this._reconnect.interval_ms;
-                                    this._retry_timer = setTimeout(() => {
-                                        this._retry_timer = null;
+                                    const delay = is_transient ? 0 : this.#reconnect.interval_ms;
+                                    this.#retry_timer = setTimeout(() => {
+                                        this.#retry_timer = null;
                                         start().catch(reject);
                                     }, delay);
                                 }
@@ -408,7 +545,7 @@ export class WhatsApp {
                     }
                 });
 
-                this._attach_business_handlers(socket);
+                this.#attach_business_handlers(socket);
             };
 
             start().catch(reject);
@@ -416,20 +553,122 @@ export class WhatsApp {
     }
 
     /**
+     * Actualiza el perfil de la cuenta en WhatsApp: nombre público, bio y/o foto. Sólo se
+     * envía lo que llega en el parche; `photo: null` elimina la foto actual.
+     * Updates the account profile on WhatsApp: public name, bio and/or picture. Only the
+     * given fields are sent; `photo: null` removes the current picture.
+     *
+     * @param patch - Campos a actualizar / Fields to update
+     * @returns true si todo lo pedido se envió / true when everything requested was sent
+     * @throws ERR_PROFILE_PICTURE_LIB si falta `sharp` o `jimp` para procesar la foto / when `sharp` or `jimp` is missing to process the picture
+     */
+    async profile(patch: { name?: string; content?: string; photo?: string | Buffer | null }): Promise<boolean> {
+        const socket = this.#internals.socket;
+        let ok = false;
+        if (socket) {
+            const self = jidNormalizedUser(socket.user?.id ?? '');
+            if (patch.name !== undefined) {
+                await socket.updateProfileName(patch.name);
+            }
+            if (patch.content !== undefined) {
+                await socket.updateProfileStatus(patch.content);
+            }
+            if (patch.photo === null) {
+                await socket.removeProfilePicture(self);
+            } else if (patch.photo !== undefined) {
+                // baileys redimensiona la foto con `sharp` o `jimp`; ninguna es dependencia
+                // nuestra, así que su ausencia se traduce a un error accionable.
+                // baileys resizes the picture with `sharp` or `jimp`; neither is a dependency
+                // of ours, so their absence is translated into an actionable error.
+                await socket
+                    .updateProfilePicture(self, typeof patch.photo === 'string' ? { url: patch.photo } : patch.photo)
+                    .catch((error: Error) => {
+                        if (/image processing library/i.test(error.message)) {
+                            throw new Error('ERR_PROFILE_PICTURE_LIB');
+                        }
+                        throw error;
+                    });
+            }
+            ok = true;
+        }
+        return ok;
+    }
+
+    /**
+     * Publica un estado (status broadcast). Con sólo `caption` publica texto; con `content`
+     * publica imagen o video (el tipo se deduce del binario) usando `caption` como pie.
+     * `contacts` es la audiencia: WhatsApp no reparte el estado a quien no esté en la lista.
+     * Publishes a status broadcast. With only `caption` it posts text; with `content` it
+     * posts an image or video (type inferred from the binary) using `caption` as its footer.
+     * `contacts` is the audience: WhatsApp does not deliver the status to anyone outside it.
+     *
+     * @param post - Contenido, pie y audiencia / Content, caption and audience
+     * @returns Publicación creada, o null si no hay sesión / Created post, or null without a session
+     * @throws ERR_FEED_EMPTY sin `content` ni `caption` / when neither `content` nor `caption` is given
+     * @throws ERR_FEED_MEDIA si el binario no es imagen ni video / when the binary is neither image nor video
+     */
+    async feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[] }): Promise<Feed | null> {
+        const socket = this.#internals.socket;
+        let result: Feed | null = null;
+        if (socket) {
+            const audience = (await Promise.all(post.contacts.map((uid) => this.#resolve_jid(String(uid))))).filter(
+                (jid): jid is string => jid !== null
+            );
+            const mime = post.content ? sniff_media(post.content) : null;
+            if (post.content && !mime) {
+                throw new Error('ERR_FEED_MEDIA');
+            }
+            if (!post.content && !post.caption) {
+                throw new Error('ERR_FEED_EMPTY');
+            }
+            const kind = mime?.startsWith('video/') ? 'video' : mime ? 'image' : 'text';
+            const sent = await socket.sendMessage(
+                'status@broadcast',
+                (post.content
+                    ? { [kind]: post.content, caption: post.caption }
+                    : { text: post.caption }) as never,
+                { statusJidList: audience }
+            );
+            if (sent?.key?.id) {
+                const created_at = (Number(sent.messageTimestamp) || Math.floor(Date.now() / 1_000)) * 1_000;
+                const doc = {
+                    id: sent.key.id,
+                    author_jid: jidNormalizedUser(socket.user?.id ?? ''),
+                    type: kind as 'text' | 'image' | 'video',
+                    caption: post.caption ?? '',
+                    mime: mime ?? 'text/plain',
+                    created_at,
+                    expires_at: created_at + FEED_TTL_MS,
+                    viewed: true,
+                    raw: sent,
+                };
+                await this.engine.set(`/status/${doc.id}`, serialize(doc), created_at);
+                if (post.content) {
+                    await this.engine.set(`/status/${doc.id}/content`, serialize({ data: post.content.toString('base64') }));
+                }
+                result = new Feed(this, doc);
+                this.emit('feed:created', result, this);
+            }
+        }
+        return result;
+    }
+
+    /**
      * Cierra la conexión. Con `destroy: true` vacía el engine completo.
      * Closes the connection. With `destroy: true` clears the engine entirely.
      */
     async disconnect(options: DisconnectOptions = {}): Promise<void> {
-        this._intentional_close = true;
+        this.#intentional_close = true;
+        this.#silent_close = options.silent === true;
 
         // Cancela cualquier retry programado por un close anterior, para no resucitar
         // el socket después de una desconexión manual.
-        if (this._retry_timer) {
-            clearTimeout(this._retry_timer);
-            this._retry_timer = null;
+        if (this.#retry_timer) {
+            clearTimeout(this.#retry_timer);
+            this.#retry_timer = null;
         }
 
-        if (this._socket) {
+        if (this.#internals.socket) {
             try {
                 // Pasa un error Boom-like con statusCode=connectionClosed (428) para que
                 // `lastDisconnect.error.output.statusCode` quede explícito en el close
@@ -437,18 +676,16 @@ export class WhatsApp {
                 const intentional = Object.assign(new Error('intentional close'), {
                     output: { statusCode: DisconnectReason.connectionClosed },
                 });
-                await this._socket.end(intentional);
+                await this.#internals.socket.end(intentional);
             } catch {
                 /* socket may already be closed */
             }
-            this._socket = null;
+            this.#internals.socket = null;
         }
 
         if (options.destroy) {
             await this.engine.clear();
         }
-
-        void options.silent;
     }
 
     /**
@@ -457,43 +694,45 @@ export class WhatsApp {
      *
      * @internal
      */
-    private _attach_business_handlers(socket: WASocket): void {
-        socket.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
-            await this._handle_contacts_upsert(contacts);
-            await this._handle_chats_upsert(chats);
-            await this._handle_messages_upsert(messages);
+    #attach_business_handlers(socket: WASocket): void {
+        socket.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+            this.#enqueue(async () => {
+                await this.#handle_contacts_upsert(contacts);
+                await this.#handle_chats_upsert(chats);
+                await this.#handle_messages_upsert(messages);
+            });
         });
         socket.ev.on('contacts.upsert', (contacts) => {
-            void this._handle_contacts_upsert(contacts);
+            this.#enqueue(() => this.#handle_contacts_upsert(contacts));
         });
         socket.ev.on('contacts.update', (contacts) => {
-            void this._handle_contacts_update(contacts);
+            this.#enqueue(() => this.#handle_contacts_update(contacts));
         });
         socket.ev.on('lid-mapping.update', ({ lid, pn }) => {
-            void this._handle_lid_mapping(lid, pn);
+            this.#enqueue(() => this.#handle_lid_mapping(lid, pn));
         });
         socket.ev.on('chats.upsert', (chats) => {
-            void this._handle_chats_upsert(chats);
+            this.#enqueue(() => this.#handle_chats_upsert(chats));
         });
         socket.ev.on('chats.update', (chats) => {
-            void this._handle_chats_update(chats);
+            this.#enqueue(() => this.#handle_chats_update(chats));
         });
         socket.ev.on('chats.delete', (ids) => {
-            void this._handle_chats_delete(ids);
+            this.#enqueue(() => this.#handle_chats_delete(ids));
         });
         socket.ev.on('messages.upsert', ({ messages }) => {
-            void this._handle_messages_upsert(messages);
+            this.#enqueue(() => this.#handle_messages_upsert(messages));
         });
         socket.ev.on('messages.update', (updates) => {
-            void this._handle_messages_update(updates);
+            this.#enqueue(() => this.#handle_messages_update(updates));
         });
         socket.ev.on('message-receipt.update', (updates) => {
-            void this._handle_message_receipt(updates);
+            this.#enqueue(() => this.#handle_message_receipt(updates));
         });
         // Las reacciones llegan duplicadas por `messages.reaction` Y `messages.upsert`
         // (como `reactionMessage`). Se usa solo `messages.upsert` para evitar el doble disparo.
         // socket.ev.on('messages.reaction', (reactions) => {
-        //     void this._handle_messages_reaction(reactions);
+        //     void this.#handle_messages_reaction(reactions);
         // });
     }
 
@@ -504,24 +743,24 @@ export class WhatsApp {
      * @param raw - Documento del contacto a persistir / Contact document to persist
      * @internal
      */
-    private async _persist_contact(raw: IContactRaw): Promise<void> {
+    async #persist_contact(raw: Contact['_raw']): Promise<void> {
         const existing = await this.engine.get(`/contact/${raw.id}`);
         await this.engine.set(`/contact/${raw.id}`, serialize(raw));
         if (raw.lid) {
             await this.engine.set(`/lid/${raw.lid}`, serialize(raw.id));
         }
         if (existing === null) {
-            const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${raw.id}`));
-            const chat_instance = new this.Chat(cached_chat ?? { id: raw.id, name: contact_name(raw) });
-            this._event.emit('contact:created', new this.Contact(raw, chat_instance), chat_instance, this);
+            const person = new this.Contact(raw);
+            const cached_chat = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${raw.id}`));
+            this.emit('contact:created', person, new this.Chat(cached_chat ?? { id: raw.id, name: person.name }), this);
         }
     }
 
     /** @internal */
-    private async _handle_contacts_upsert(contacts: BaileysContact[]): Promise<void> {
+    async #handle_contacts_upsert(contacts: BaileysContact[]): Promise<void> {
         for (const c of contacts) {
             if (c.id) {
-                await this._persist_contact({
+                await this.#persist_contact({
                     id: c.id,
                     lid: c.lid ?? null,
                     name: c.name ?? null,
@@ -535,12 +774,12 @@ export class WhatsApp {
     }
 
     /** @internal */
-    private async _handle_contacts_update(contacts: Partial<BaileysContact>[]): Promise<void> {
+    async #handle_contacts_update(contacts: Partial<BaileysContact>[]): Promise<void> {
         for (const c of contacts) {
             if (c.id) {
-                const current = deserialize<IContactRaw>(await this.engine.get(`/contact/${c.id}`));
+                const current = deserialize<Contact['_raw']>(await this.engine.get(`/contact/${c.id}`));
                 if (current) {
-                    const patch: Partial<IContactRaw> = {
+                    const patch: Partial<Contact['_raw']> = {
                         ...(c.notify && { notify: c.notify }),
                         ...(c.name && { name: c.name }),
                         ...(c.imgUrl && { img_url: c.imgUrl }),
@@ -553,9 +792,9 @@ export class WhatsApp {
                         if (patch.lid) {
                             await this.engine.set(`/lid/${patch.lid}`, serialize(c.id));
                         }
-                        const cached_chat = deserialize<IChatRaw>(await this.engine.get(`/chat/${c.id}`));
-                        const chat_instance = new this.Chat(cached_chat ?? { id: c.id, name: contact_name(merged) });
-                        this._event.emit('contact:updated', new this.Contact(merged, chat_instance), chat_instance, this);
+                        const person = new this.Contact(merged);
+                        const cached_chat = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${c.id}`));
+                        this.emit('contact:updated', person, new this.Chat(cached_chat ?? { id: c.id, name: person.name }), this);
                     }
                 }
             }
@@ -563,45 +802,43 @@ export class WhatsApp {
     }
 
     /** @internal */
-    private async _handle_lid_mapping(lid: string, pn: string): Promise<void> {
+    async #handle_lid_mapping(lid: string, pn: string): Promise<void> {
         await this.engine.set(`/lid/${lid}`, serialize(pn));
         await this.engine.set(`/lid/${pn}`, serialize(lid));
     }
 
     /** @internal */
-    private async _handle_chats_upsert(chats: BaileysChat[]): Promise<void> {
+    async #handle_chats_upsert(chats: BaileysChat[]): Promise<void> {
         for (const ch of chats) {
             if (ch.id) {
-                const current = deserialize<IChatRaw>(await this.engine.get(`/chat/${ch.id}`));
-                const raw: IChatRaw = current ?? {
+                const current = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${ch.id}`));
+                const raw: Chat['_raw'] = current ?? {
                     id: ch.id,
                     name: ch.name ?? null,
                     archived: ch.archived ?? null,
                     pinned: ch.pinned ?? null,
                     mute_end_time: ch.muteEndTime != null ? Number(ch.muteEndTime) : null,
-                    unread_count: ch.unreadCount ?? null,
-                    read_only: ch.readOnly ?? null,
                 };
                 if (ch.name) {
                     raw.name = ch.name;
                 }
                 await this.engine.set(`/chat/${ch.id}`, serialize(raw));
                 if (current === null) {
-                    this._event.emit('chat:created', new this.Chat(raw), this);
+                    this.emit('chat:created', new this.Chat(raw), this);
                 }
             }
         }
     }
 
     /** @internal */
-    private async _handle_chats_update(chats: Partial<BaileysChat>[]): Promise<void> {
+    async #handle_chats_update(chats: Partial<BaileysChat>[]): Promise<void> {
         for (const ch of chats) {
             if (ch.id && ch.id !== 'status@broadcast') {
-                const current = deserialize<IChatRaw>(await this.engine.get(`/chat/${ch.id}`)) ?? {
+                const current = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${ch.id}`)) ?? {
                     id: ch.id,
                     name: ch.name ?? null,
                 };
-                const patch: Partial<IChatRaw> = {};
+                const patch: Partial<Chat['_raw']> = {};
                 const pinned_changed = 'pinned' in ch;
                 const archived_changed = ch.archived !== undefined;
                 const mute_changed = 'muteEndTime' in ch;
@@ -618,23 +855,19 @@ export class WhatsApp {
                 if (mute_changed) {
                     patch.mute_end_time = ch.muteEndTime != null ? Number(ch.muteEndTime) : null;
                 }
-                if (ch.unreadCount != null) {
-                    patch.unread_count = ch.unreadCount;
-                }
-
                 if (Object.keys(patch).length > 0) {
-                    const merged: IChatRaw = { ...current, ...patch };
+                    const merged: Chat['_raw'] = { ...current, ...patch };
                     await this.engine.set(`/chat/${ch.id}`, serialize(merged));
 
                     if (pinned_changed) {
-                        this._event.emit(
+                        this.emit(
                             ch.pinned != null ? 'chat:pinned' : 'chat:unpinned',
                             new this.Chat(merged),
                             this
                         );
                     }
                     if (archived_changed) {
-                        this._event.emit(
+                        this.emit(
                             ch.archived ? 'chat:archived' : 'chat:unarchived',
                             new this.Chat(merged),
                             this
@@ -642,7 +875,7 @@ export class WhatsApp {
                     }
                     if (mute_changed) {
                         const is_muted = patch.mute_end_time != null && patch.mute_end_time > Date.now();
-                        this._event.emit(
+                        this.emit(
                             is_muted ? 'chat:muted' : 'chat:unmuted',
                             new this.Chat(merged),
                             this
@@ -654,42 +887,48 @@ export class WhatsApp {
     }
 
     /** @internal */
-    private async _handle_chats_delete(ids: string[]): Promise<void> {
+    async #handle_chats_delete(ids: string[]): Promise<void> {
         for (const cid of ids) {
-            const raw = deserialize<IChatRaw>(await this.engine.get(`/chat/${cid}`)) ?? { id: cid };
+            const raw = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${cid}`)) ?? { id: cid };
             await this.engine.unset(`/chat/${cid}`);
-            this._event.emit('chat:deleted', new this.Chat(raw), this);
+            this.emit('chat:deleted', new this.Chat(raw), this);
         }
     }
 
     /** @internal */
-    private async _handle_message_receipt(updates: MessageUserReceiptUpdate[]): Promise<void> {
+    async #handle_message_receipt(updates: MessageUserReceiptUpdate[]): Promise<void> {
         for (const { key, receipt } of updates) {
             // Receipt sobre status@broadcast → marca el feed como visto y emite feed:updated.
             // Receipt on status@broadcast → marks feed viewed and emits feed:updated.
             if (key.remoteJid === 'status@broadcast' && key.id) {
-                const feed_raw = deserialize<IFeedRaw>(
+                const feed_raw = deserialize<FeedRaw>(
                     await this.engine.get(`/status/${key.id}`),
                 );
                 if (feed_raw && !feed_raw.viewed) {
                     feed_raw.viewed = true;
                     await this.engine.set(`/status/${key.id}`, serialize(feed_raw));
-                    this._event.emit('feed:updated', new Feed({ wa: this, doc: feed_raw }), this);
+                    this.emit('feed:updated', new Feed(this, feed_raw), this);
                 }
                 continue;
             }
             if (key.remoteJid && key.id && (receipt.readTimestamp != null || receipt.playedTimestamp != null)) {
-                const doc = deserialize<IMessage>(await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`));
+                const doc = deserialize<Message['_raw']>(await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`));
                 if (doc) {
-                    const msg_instance = await this.Message.build_instance(doc);
-                    this._event.emit('message:seen', msg_instance, await msg_instance.chat(), this);
+                    const next = receipt.playedTimestamp != null ? PLAYED : READ;
+                    if (doc.status < next) {
+                        doc.status = next;
+                        doc.raw.status = next as unknown as WAMessage['status'];
+                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                    }
+                    const msg_instance = message(this, doc);
+                    this.emit('message:seen', msg_instance, await msg_instance.chat(), this);
                 }
             }
         }
     }
 
     /** @internal */
-    private async _handle_messages_upsert(messages: WAMessage[]): Promise<void> {
+    async #handle_messages_upsert(messages: WAMessage[]): Promise<void> {
         for (const msg of messages) {
             if (msg.key?.remoteJid && msg.key.id) {
                 const cid = (msg.key as { remoteJidAlt?: string }).remoteJidAlt ?? msg.key.remoteJid;
@@ -701,9 +940,13 @@ export class WhatsApp {
                     // Single channel for reactions: handled here; `messages.reaction` is disabled.
                     const reaction = msg.message?.reactionMessage;
                     if (reaction?.key?.id && reaction.key.remoteJid) {
-                        const target_cid = (await this._resolve_jid(reaction.key.remoteJid)) ?? reaction.key.remoteJid;
-                        await this._handle_messages_reaction([{
-                            key: { remoteJid: target_cid, id: reaction.key.id },
+                        const target_cid = (await this.#resolve_jid(reaction.key.remoteJid)) ?? reaction.key.remoteJid;
+                        await this.#handle_messages_reaction([{
+                            key: {
+                                remoteJid: target_cid,
+                                id: reaction.key.id,
+                                participant: msg.key.fromMe ? (this.#internals.socket?.user?.id ?? null) : (msg.key.participant ?? cid),
+                            },
                             reaction: { text: reaction.text ?? '' },
                         }]);
                     }
@@ -719,17 +962,17 @@ export class WhatsApp {
                             protocol?.type === proto.Message.ProtocolMessage.Type.REVOKE &&
                             protocol.key?.id
                         ) {
-                            const feed_raw = deserialize<IFeedRaw>(
+                            const feed_raw = deserialize<FeedRaw>(
                                 await this.engine.get(`/status/${protocol.key.id}`),
                             );
                             if (feed_raw) {
                                 await this.engine.unset(`/status/${protocol.key.id}`);
-                                this._event.emit('feed:deleted', new Feed({ wa: this, doc: feed_raw }), this);
+                                this.emit('feed:deleted', new Feed(this, feed_raw), this);
                             }
                         }
                         continue;
                     }
-                    const FEED_TYPE_MAP: Record<string, FeedType> = {
+                    const FEED_TYPE_MAP: Record<string, FeedRaw['type']> = {
                         conversation: 'text',
                         extendedTextMessage: 'text',
                         imageMessage: 'image',
@@ -760,7 +1003,7 @@ export class WhatsApp {
                     }
                     const created_at =
                         (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000;
-                    const feed_raw: IFeedRaw = {
+                    const feed_raw: FeedRaw = {
                         id: mid,
                         author_jid: author,
                         type: feed_type,
@@ -774,7 +1017,7 @@ export class WhatsApp {
                     let content_buf: Buffer = Buffer.alloc(0);
                     if (feed_type === 'text') {
                         content_buf = Buffer.from(caption, 'utf-8');
-                    } else if (this._socket) {
+                    } else if (this.#internals.socket) {
                         try {
                             const buf = await downloadMediaMessage(msg, 'buffer', {});
                             if (Buffer.isBuffer(buf)) {
@@ -791,7 +1034,7 @@ export class WhatsApp {
                             serialize({ data: content_buf.toString('base64') }),
                         );
                     }
-                    this._event.emit('feed:created', new Feed({ wa: this, doc: feed_raw }), this);
+                    this.emit('feed:created', new Feed(this, feed_raw), this);
                     continue;
                 }
 
@@ -805,9 +1048,9 @@ export class WhatsApp {
                         update.vote.encIv
                     ) {
                         const resolved_cid =
-                            (await this._resolve_jid(creation_key.remoteJid)) ?? creation_key.remoteJid;
+                            (await this.#resolve_jid(creation_key.remoteJid)) ?? creation_key.remoteJid;
                         const target_mid = creation_key.id;
-                        const poll_doc = deserialize<IMessage>(
+                        const poll_doc = deserialize<Message['_raw']>(
                             await this.engine.get(`/chat/${resolved_cid}/message/${target_mid}`)
                         );
                         const secret_raw = poll_doc?.raw.message?.messageContextInfo?.messageSecret;
@@ -823,8 +1066,8 @@ export class WhatsApp {
                                 // Own HMAC identity depends on chat addressing (LID on @lid, PN on
                                 // @s.whatsapp.net), so fromMe positions try both candidates:
                                 // AES-GCM authenticates, a wrong key throws and the next is tried.
-                                const self_id = this._socket?.user?.id ?? '';
-                                const self_lid = (this._socket?.user as { lid?: string })?.lid ?? '';
+                                const self_id = this.#internals.socket?.user?.id ?? '';
+                                const self_lid = (this.#internals.socket?.user as { lid?: string })?.lid ?? '';
                                 const selves = [...new Set([self_lid, self_id].filter(Boolean))];
                                 // Candidatos foráneos: todas las formas de identidad del key (LID,
                                 // participant, alt, remoteJid); se prueban todas porque el addressing
@@ -863,10 +1106,11 @@ export class WhatsApp {
                                     });
                                     await this.engine.set(
                                         `/chat/${resolved_cid}/message/${target_mid}`,
-                                        serialize(poll_doc)
+                                        serialize(poll_doc),
+                                        poll_doc.created_at
                                     );
-                                    const msg_instance = await this.Message.build_instance(poll_doc);
-                                    this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                                    const msg_instance = message(this, poll_doc);
+                                    this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                                 }
                             } catch {
                                 /* decrypt may fail */
@@ -881,7 +1125,7 @@ export class WhatsApp {
                     if (protocol?.key?.id) {
                         const target_mid = protocol.key.id;
                         const target_cid = protocol.key.remoteJid ?? cid;
-                        const doc = deserialize<IMessage>(
+                        const doc = deserialize<Message['_raw']>(
                             await this.engine.get(`/chat/${target_cid}/message/${target_mid}`)
                         );
 
@@ -892,34 +1136,56 @@ export class WhatsApp {
                         ) {
                             doc.raw.message = protocol.editedMessage;
                             doc.edited = true;
-                            doc.caption = this.Message.build_message_doc(
-                                doc.raw,
-                                this._socket?.user?.id,
-                                true
-                            ).caption;
-                            await this.engine.set(`/chat/${target_cid}/message/${target_mid}`, serialize(doc));
-                            const msg_instance = await this.Message.build_instance(doc);
-                            this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                            doc.caption = message(this, doc.raw).caption;
+                            await this.engine.set(`/chat/${target_cid}/message/${target_mid}`, serialize(doc), doc.created_at);
+                            const msg_instance = message(this, doc);
+                            this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                         } else if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
                             await this.engine.unset(`/chat/${target_cid}/message/${target_mid}`);
                             if (doc) {
-                                const msg_instance = await this.Message.build_instance(doc);
-                                this._event.emit('message:deleted', msg_instance, await msg_instance.chat(), this);
+                                const msg_instance = message(this, doc);
+                                this.emit('message:deleted', msg_instance, await msg_instance.chat(), this);
                             }
                         }
                     }
                     continue;
                 }
 
-                const doc = this.Message.build_message_doc(msg, this._socket?.user?.id);
+                const doc = message(this, msg)._raw;
+
+                // Cada reconexión re-entrega el historial completo: reescribir documentos
+                // idénticos contamina la cronología, re-descarga la media y spamea eventos,
+                // así que un doc ya persistido sin cambios visibles se salta entero.
+                // Every reconnect re-delivers the full history: rewriting identical documents
+                // pollutes chronology, re-downloads media and spams events, so an already
+                // persisted doc without visible changes is skipped entirely.
+                const existing_doc = deserialize<Message['_raw']>(
+                    await this.engine.get(`/chat/${cid}/message/${mid}`),
+                );
+                if (existing_doc) {
+                    if (typeof existing_doc.multiple === 'boolean') {
+                        doc.multiple = existing_doc.multiple;
+                    }
+                    if (existing_doc.reactions) {
+                        doc.reactions = existing_doc.reactions;
+                    }
+                    if (
+                        existing_doc.status >= doc.status &&
+                        existing_doc.caption === doc.caption &&
+                        existing_doc.edited === doc.edited &&
+                        existing_doc.starred === doc.starred
+                    ) {
+                        continue;
+                    }
+                }
 
                 // Autocreación de contacto/chat desde pushName cuando baileys no emite upsert previo
-                if (!doc.me) {
+                if (!existing_doc && !doc.me) {
                     const push_name = msg.pushName ?? null;
                     const is_group = cid.endsWith('@g.us');
 
                     if (doc.author && !(await this.engine.get(`/contact/${doc.author}`))) {
-                        await this._persist_contact({
+                        await this.#persist_contact({
                             id: doc.author,
                             lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : null,
                             name: null,
@@ -931,29 +1197,23 @@ export class WhatsApp {
                     }
 
                     if (!(await this.engine.get(`/chat/${cid}`))) {
-                        const chat_raw: IChatRaw = {
+                        const chat_raw: Chat['_raw'] = {
                             id: cid,
                             name: is_group ? null : push_name,
                         };
                         await this.engine.set(`/chat/${cid}`, serialize(chat_raw));
-                        this._event.emit('chat:created', new this.Chat(chat_raw), this);
+                        this.emit('chat:created', new this.Chat(chat_raw), this);
                     }
                 }
 
-                // Preservar flags explícitos persistidos por el send (ej: `multiple` en polls
-                // auto-emitidos, donde el echo de WhatsApp pierde el discriminador del proto).
-                // Preserve send-time flags (e.g. `multiple` on own polls, since WhatsApp drops
-                // the proto discriminator on echo).
-                const existing_doc = deserialize<IMessage>(
-                    await this.engine.get(`/chat/${cid}/message/${mid}`),
-                );
-                if (existing_doc && typeof existing_doc.multiple === 'boolean') {
-                    doc.multiple = existing_doc.multiple;
-                }
-                await this.engine.set(`/chat/${cid}/message/${mid}`, serialize(doc));
+                await this.engine.set(`/chat/${cid}/message/${mid}`, serialize(doc), doc.created_at);
 
+                // El binario solo se materializa en la primera entrega; en re-syncs ya vive en el engine.
+                // The binary is only materialized on first delivery; on re-syncs it already lives in the engine.
                 let content_buf: Buffer = Buffer.alloc(0);
-                if (doc.type === 'text') {
+                if (existing_doc) {
+                    /* ya materializado / already materialized */
+                } else if (doc.type === 'text') {
                     content_buf = Buffer.from(doc.caption, 'utf-8');
                 } else if (doc.type === 'location') {
                     const loc = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
@@ -978,7 +1238,7 @@ export class WhatsApp {
                     content_buf = Buffer.from(cards.map((c) => c.vcard ?? '').join('\n'), 'utf-8');
                 } else if (doc.type === 'event') {
                     content_buf = Buffer.from(JSON.stringify(msg.message?.eventMessage ?? {}), 'utf-8');
-                } else if (this._socket && ['image', 'video', 'audio', 'document'].includes(doc.type)) {
+                } else if (this.#internals.socket && ['image', 'video', 'audio', 'document'].includes(doc.type)) {
                     try {
                         const buffer = await downloadMediaMessage(msg, 'buffer', {});
                         if (Buffer.isBuffer(buffer)) {
@@ -996,18 +1256,18 @@ export class WhatsApp {
                     );
                 }
 
-                const instance = await this.Message.build_instance(doc);
+                const instance = message(this, doc);
                 const chat_instance = await instance.chat();
-                this._event.emit('message:created', instance, chat_instance, this);
+                this.emit('message:created', instance, chat_instance, this);
                 if (doc.forwarded) {
-                    this._event.emit('message:forwarded', instance, chat_instance, this);
+                    this.emit('message:forwarded', instance, chat_instance, this);
                 }
             }
         }
     }
 
     /** @internal */
-    private async _handle_messages_update(updates: WAMessageUpdate[]): Promise<void> {
+    async #handle_messages_update(updates: WAMessageUpdate[]): Promise<void> {
         for (const { key, update: upd } of updates) {
             if (key.remoteJid && key.id) {
                 // Updates sobre `status@broadcast` se descartan: el feed sólo se
@@ -1017,7 +1277,7 @@ export class WhatsApp {
                 if (key.remoteJid === 'status@broadcast') {
                     continue;
                 }
-                const doc = deserialize<IMessage>(
+                const doc = deserialize<Message['_raw']>(
                     await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
                 );
                 if (doc) {
@@ -1036,29 +1296,25 @@ export class WhatsApp {
                         raw.message = edited_message;
                         doc.raw = raw;
                         doc.edited = true;
-                        doc.caption = this.Message.build_message_doc(raw, this._socket?.user?.id, true).caption;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc));
-                        const msg_instance = await this.Message.build_instance(doc);
-                        this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                        doc.caption = message(this, raw).caption;
+                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        const msg_instance = message(this, doc);
+                        this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     } else if (content_update) {
                         // Actualización de contenido (ej: live location). Mergea sobre el raw existente.
                         raw.message = { ...raw.message, ...content_update };
                         doc.raw = raw;
-                        doc.caption = this.Message.build_message_doc(
-                            raw,
-                            this._socket?.user?.id,
-                            doc.edited
-                        ).caption;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc));
-                        const msg_instance = await this.Message.build_instance(doc);
-                        this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                        doc.caption = message(this, raw).caption;
+                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        const msg_instance = message(this, doc);
+                        this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     } else if (starred_changed) {
                         doc.starred = upd_any.starred === true;
                         raw.starred = doc.starred;
                         doc.raw = raw;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc));
-                        const msg_instance = await this.Message.build_instance(doc);
-                        this._event.emit(
+                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        const msg_instance = message(this, doc);
+                        this.emit(
                             doc.starred ? 'message:starred' : 'message:unstarred',
                             msg_instance,
                             await msg_instance.chat(),
@@ -1066,11 +1322,11 @@ export class WhatsApp {
                         );
                     } else if (status !== undefined) {
                         raw.status = status;
-                        doc.status = status as unknown as MessageStatus;
+                        doc.status = status;
                         doc.raw = raw;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc));
-                        const msg_instance = await this.Message.build_instance(doc);
-                        this._event.emit('message:updated', msg_instance, await msg_instance.chat(), this);
+                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        const msg_instance = message(this, doc);
+                        this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     }
                 }
             }
@@ -1078,7 +1334,7 @@ export class WhatsApp {
     }
 
     /** @internal */
-    private async _handle_messages_reaction(
+    async #handle_messages_reaction(
         reactions: Array<{
             key: { remoteJid?: string | null; id?: string | null; participant?: string | null };
             reaction: { text?: string | null };
@@ -1089,20 +1345,27 @@ export class WhatsApp {
                 // Reacciones sobre status@broadcast → feed:updated (no message:reacted).
                 // Reactions on status@broadcast → feed:updated (not message:reacted).
                 if (key.remoteJid === 'status@broadcast') {
-                    const feed_raw = deserialize<IFeedRaw>(
+                    const feed_raw = deserialize<FeedRaw>(
                         await this.engine.get(`/status/${key.id}`),
                     );
                     if (feed_raw) {
-                        this._event.emit('feed:updated', new Feed({ wa: this, doc: feed_raw }), this);
+                        this.emit('feed:updated', new Feed(this, feed_raw), this);
                     }
                     continue;
                 }
-                const doc = deserialize<IMessage>(
+                const doc = deserialize<Message['_raw']>(
                     await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
                 );
                 if (doc) {
-                    const msg_instance = await this.Message.build_instance(doc);
-                    this._event.emit(
+                    const reactor = jidNormalizedUser(key.participant ?? key.remoteJid);
+                    const emoji = reaction.text ?? '';
+                    doc.reactions = [
+                        ...(doc.reactions ?? []).filter((r) => r.author !== reactor),
+                        ...(emoji ? [{ author: reactor, emoji, at: Date.now() }] : []),
+                    ];
+                    await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                    const msg_instance = message(this, doc);
+                    this.emit(
                         'message:reacted',
                         msg_instance,
                         await msg_instance.chat(),

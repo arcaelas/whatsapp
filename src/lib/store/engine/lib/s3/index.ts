@@ -6,14 +6,10 @@
 
 import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { Engine } from '~/lib/store/engine';
+import { IndexCache, normalize_path, SortedIndex, split_path } from '~/lib/store/engine/lib';
 
-/**
- * Normaliza un path colapsando slashes redundantes.
- * Normalizes a path by collapsing redundant slashes.
- */
-function normalize_path(path: string): string {
-    return path.replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
-}
+/** Objeto que guarda el orden de los hijos de un prefijo. / Object holding the ordering of a prefix children. */
+const ORDER_KEY = '.order';
 
 /**
  * Configuración de la caché local. Cada entrada se limpia con un `setTimeout`
@@ -44,8 +40,27 @@ interface S3EngineOptions {
      * Default: `false` (no cache).
      */
     cache?: false | CacheOptions;
+    /** Prefijos indexados simultáneamente en memoria. / Simultaneously in-memory indexed prefixes. */
+    cached?: number;
 }
 
+/**
+ * Driver de persistencia con AWS S3.
+ *
+ * Para que `list`/`count` no recorran todo el prefijo en cada página mantiene un índice
+ * ordenado por prefijo (`SortedIndex`), acotado por LRU y respaldado en el objeto `.order`:
+ * ahí viven los scores explícitos que S3 no puede representar (`LastModified` es de sólo
+ * lectura), de modo que el orden cronológico sobrevive a los re-syncs igual que en los
+ * demás drivers. Si el objeto `.order` falta, el índice se reconstruye listando el prefijo
+ * una única vez y ordenando por `LastModified`.
+ *
+ * AWS S3 persistence driver. To keep `list`/`count` from walking the whole prefix on every
+ * page it maintains a per-prefix sorted index (`SortedIndex`), LRU-bounded and backed by the
+ * `.order` object: it holds the explicit scores S3 cannot represent (`LastModified` is
+ * read-only), so chronological order survives re-syncs just like on the other drivers. When
+ * `.order` is missing the index is rebuilt listing the prefix once and ordering by
+ * `LastModified`.
+ */
 export class S3Engine implements Engine {
     private readonly _client: S3Client;
     private readonly _bucket: string;
@@ -53,12 +68,15 @@ export class S3Engine implements Engine {
     private readonly _cache_opts: CacheOptions | false;
     /** @internal Caché local de documentos, con su timer de expiración. / Local cache of documents, with its expiration timer. */
     private readonly _cache = new Map<string, { value: string | null; timer: ReturnType<typeof setTimeout> }>();
+    /** @internal Índices por prefijo, acotados por LRU. / Per-prefix indexes, LRU-bounded. */
+    private readonly _indexes: IndexCache;
 
     constructor(options: S3EngineOptions) {
         this._client = options.s3;
         this._bucket = options.bucket;
         this._prefix = options.basedir.endsWith('/') ? options.basedir : `${options.basedir}/`;
         this._cache_opts = options.cache ?? false;
+        this._indexes = new IndexCache(options.cached ?? 12);
     }
 
     private _key(key: string): string {
@@ -90,76 +108,119 @@ export class S3Engine implements Engine {
         });
     }
 
+    /**
+     * @internal
+     * Índice del prefijo: de la caché, del objeto `.order` o reconstruido listando el prefijo
+     * una sola vez y ordenando por `LastModified`.
+     * Prefix index: from the cache, from the `.order` object or rebuilt listing the prefix
+     * once and ordering by `LastModified`.
+     */
+    private async _index(path: string): Promise<SortedIndex> {
+        const key = normalize_path(path);
+        const cached = this._indexes.get(key);
+        if (cached) {
+            return cached;
+        }
+        const parent = `${this._key(key)}/`;
+        const index = new SortedIndex(async (entries) => {
+            await this._client
+                .send(
+                    new PutObjectCommand({
+                        Bucket: this._bucket,
+                        Key: `${parent}${ORDER_KEY}`,
+                        Body: entries.map(([name, score]) => `${score}\t${name}`).join('\n'),
+                        ContentType: 'text/plain',
+                    })
+                )
+                .catch(() => null);
+        });
+        const persisted = await this._client
+            .send(new GetObjectCommand({ Bucket: this._bucket, Key: `${parent}${ORDER_KEY}` }))
+            .then((res) => res.Body?.transformToString('utf-8') ?? null)
+            .catch(() => null);
+        if (persisted) {
+            index.load(
+                persisted
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((line) => {
+                        const cut = line.indexOf('\t');
+                        return [line.slice(cut + 1), Number(line.slice(0, cut))] as [string, number];
+                    })
+            );
+        } else {
+            const children = new Map<string, number>();
+            let token: string | undefined;
+            do {
+                const res = await this._client.send(
+                    new ListObjectsV2Command({ Bucket: this._bucket, Prefix: parent, ContinuationToken: token, MaxKeys: 1000 })
+                );
+                for (const object of res.Contents ?? []) {
+                    const rest = object.Key?.slice(parent.length);
+                    const name = rest?.split('/')[0];
+                    if (name && name !== ORDER_KEY) {
+                        children.set(name, Math.max(children.get(name) ?? 0, object.LastModified?.getTime() ?? 0));
+                    }
+                }
+                token = res.NextContinuationToken;
+            } while (token);
+            index.load(children);
+        }
+        this._indexes.set(key, index);
+        return index;
+    }
+
     async get(key: string): Promise<string | null> {
         if (this._cacheable(key) && this._cache.has(key)) {
             return this._cache.get(key)!.value;
         }
-        const value = await (async (): Promise<string | null> => {
-            try {
-                const res = await this._client.send(new GetObjectCommand({ Bucket: this._bucket, Key: this._key(key) }));
-                return (await res.Body?.transformToString('utf-8')) ?? null;
-            } catch {
-                return null;
-            }
-        })();
+        const value = await this._client
+            .send(new GetObjectCommand({ Bucket: this._bucket, Key: this._key(key) }))
+            .then((res) => res.Body?.transformToString('utf-8') ?? null)
+            .catch(() => null);
         if (this._cacheable(key)) {
             this._cache_set(key, value);
         }
         return value;
     }
 
-    async set(key: string, value: string): Promise<void> {
-        const remote = this._client.send(new PutObjectCommand({ Bucket: this._bucket, Key: this._key(key), Body: value, ContentType: 'application/json' }));
+    /**
+     * Escribe el valor y registra su score en el índice del prefijo, que S3 no puede
+     * derivar por sí solo (`LastModified` es de sólo lectura).
+     * Writes the value and records its score in the prefix index, which S3 cannot derive
+     * on its own (`LastModified` is read-only).
+     */
+    async set(key: string, value: string, score?: number): Promise<void> {
+        const remote = this._client.send(
+            new PutObjectCommand({ Bucket: this._bucket, Key: this._key(key), Body: value, ContentType: 'application/json' })
+        );
         if (this._cacheable(key)) {
             this._cache_set(key, value);
         }
+        const { parent, name } = split_path(key);
+        // A diferencia del filesystem, S3 no tiene dónde guardar el score fuera del índice
+        // (`LastModified` es de sólo lectura), así que el índice se carga aunque nadie haya
+        // paginado todavía; si no, el orden cronológico se perdería en la primera escritura.
+        // Unlike the filesystem, S3 has nowhere to keep the score outside the index
+        // (`LastModified` is read-only), so the index is loaded even when nobody paginated
+        // yet; otherwise chronological order would be lost on the first write.
+        (await this._index(parent)).set(name, score ?? Date.now());
         await remote;
     }
 
+    /**
+     * Lista los valores de los hijos directos, ordenados por score DESC.
+     * Lists direct children values ordered by score DESC.
+     */
     async list(path: string, offset = 0, limit = 50): Promise<string[]> {
-        const parent = `${this._prefix}${normalize_path(path).replace(/@/g, '_at_')}/`;
-        const children = new Map<string, number>();
-        let token: string | undefined;
-
-        do {
-            const res = await this._client.send(
-                new ListObjectsV2Command({
-                    Bucket: this._bucket,
-                    Prefix: parent,
-                    ContinuationToken: token,
-                    MaxKeys: 1000,
-                })
-            );
-            for (const obj of res.Contents ?? []) {
-                if (!obj.Key) continue;
-                const rest = obj.Key.slice(parent.length);
-                const child_key = `${parent}${rest.split('/')[0]}`;
-                const mtime = obj.LastModified?.getTime() ?? 0;
-                children.set(child_key, Math.max(children.get(child_key) ?? 0, mtime));
-            }
-            token = res.NextContinuationToken;
-        } while (token);
-
-        const ordered = [...children.entries()]
-            .sort((a, b) => b[1] - a[1])
-            .slice(offset, offset + limit)
-            .map(([key]) => key);
-
-        const values = await Promise.all(
-            ordered.map(async (key) => {
-                try {
-                    const res = await this._client.send(new GetObjectCommand({ Bucket: this._bucket, Key: key }));
-                    return (await res.Body?.transformToString('utf-8')) ?? null;
-                } catch {
-                    return null;
-                }
-            })
-        );
+        const parent = normalize_path(path);
+        const page = (await this._index(parent)).page(offset, limit);
+        const values = await Promise.all(page.map((name) => this.get(`${parent}/${name}`)));
         return values.filter((value): value is string => value !== null);
     }
 
     async delete_prefix(prefix: string): Promise<number> {
-        const full_prefix = `${this._prefix}${normalize_path(prefix).replace(/@/g, '_at_')}`;
+        const full_prefix = this._key(prefix);
         let deleted = 0;
         let token: string | undefined;
 
@@ -192,26 +253,18 @@ export class S3Engine implements Engine {
                 }
             }
         }
+        const { parent, name } = split_path(path);
+        (await this._index(parent)).delete(name);
+        this._indexes.drop(normalize_path(path));
         return (await this.delete_prefix(path)) > 0;
     }
 
+    /**
+     * Cuenta hijos directos desde el índice del prefijo.
+     * Counts direct children from the prefix index.
+     */
     async count(path: string): Promise<number> {
-        const full_prefix = `${this._prefix}${normalize_path(path).replace(/@/g, '_at_')}`;
-        let total = 0;
-        let token: string | undefined;
-        do {
-            const res = await this._client.send(
-                new ListObjectsV2Command({
-                    Bucket: this._bucket,
-                    Prefix: full_prefix,
-                    ContinuationToken: token,
-                    MaxKeys: 1000,
-                })
-            );
-            total += res.Contents?.length ?? 0;
-            token = res.NextContinuationToken;
-        } while (token);
-        return total;
+        return (await this._index(path)).size;
     }
 
     async clear(): Promise<void> {
@@ -219,6 +272,7 @@ export class S3Engine implements Engine {
             clearTimeout(timer);
         }
         this._cache.clear();
+        this._indexes.clear();
         await this.delete_prefix('');
     }
 }
