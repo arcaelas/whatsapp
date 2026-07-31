@@ -28,6 +28,7 @@ export class Chat {
       archived?: boolean | null;
       pinned?: number | null;
       mute_end_time?: number | null;
+      unread_count?: number | null;
     }
   ) { }
 
@@ -54,6 +55,11 @@ export class Chat {
   /** true si el chat está fijado. / true when the chat is pinned. */
   get pinned(): boolean {
     return this._raw.pinned != null;
+  }
+
+  /** Mensajes sin leer del chat. / Chat's unread messages. */
+  get count(): number {
+    return this._raw.unread_count ?? 0;
   }
 
   /** Fecha ISO UTC hasta la que el chat está silenciado, o null. / ISO UTC date until the chat stays muted, or null. */
@@ -110,17 +116,17 @@ export function chat(wa: WhatsApp) {
    * Participantes del grupo memoizados 15s, para no repetir `groupMetadata` en cada página.
    * Group participants memoized for 15s, avoiding a `groupMetadata` round-trip per page.
    */
-  const members_cache = new Map<string, Promise<{ id: string }[]>>();
-  function group_members(jid: string): Promise<{ id: string }[]> {
-    if (!members_cache.has(jid)) {
+  const groups_cache = new Map<string, Promise<{ participants: { id: string }[]; desc?: string | null }>>();
+  function group_meta(jid: string): Promise<{ participants: { id: string }[]; desc?: string | null }> {
+    if (!groups_cache.has(jid)) {
       const socket = internals(wa).socket;
-      members_cache.set(
+      groups_cache.set(
         jid,
-        socket ? socket.groupMetadata(jid).then((meta) => meta.participants).catch(() => []) : Promise.resolve([])
+        socket ? socket.groupMetadata(jid).catch(() => ({ participants: [] })) : Promise.resolve({ participants: [] })
       );
-      setTimeout(() => members_cache.delete(jid), 15_000);
+      setTimeout(() => groups_cache.delete(jid), 15_000);
     }
-    return members_cache.get(jid)!;
+    return groups_cache.get(jid)!;
   }
 
   /**
@@ -144,9 +150,24 @@ export function chat(wa: WhatsApp) {
     async members(offset = 0, limit = 50): Promise<InstanceType<typeof wa.Contact>[]> {
       const ids =
         this.type === 'group'
-          ? (await group_members(this._raw.id)).map((participant) => participant.id)
+          ? (await group_meta(this._raw.id)).participants.map((participant) => participant.id)
           : [this._raw.id, internals(wa).socket?.user?.id].filter((id): id is string => Boolean(id));
       return Promise.all(ids.slice(offset, offset + limit).map(load_contact));
+    }
+
+    /**
+     * Descripción del chat: el asunto del grupo o, en un 1:1, la bio del contacto.
+     * Es asíncrono porque ninguno de los dos vive en el documento del chat.
+     * Chat description: the group's subject or, on a 1:1, the contact's bio. It is async
+     * because neither of them lives in the chat document.
+     *
+     * @returns Descripción, o cadena vacía si no hay / Description, or an empty string when absent
+     */
+    async content(): Promise<string> {
+      if (this.type === 'group') {
+        return (await group_meta(this._raw.id)).desc ?? '';
+      }
+      return deserialize<Contact['_raw']>(await wa.engine.get(`/contact/${this._raw.id}`))?.status ?? '';
     }
 
     /**
@@ -270,6 +291,8 @@ export function chat(wa: WhatsApp) {
       const socket = internals(wa).socket;
       if (socket) {
         await socket.chatModify({ markRead: true, lastMessages: await last_messages(this._raw.id) }, this._raw.id);
+        this._raw.unread_count = 0;
+        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw));
         ok = true;
       }
       return ok;

@@ -831,6 +831,7 @@ export class WhatsApp {
                     archived: ch.archived ?? null,
                     pinned: ch.pinned ?? null,
                     mute_end_time: ch.muteEndTime != null ? Number(ch.muteEndTime) : null,
+                    unread_count: ch.unreadCount ?? null,
                 };
                 if (ch.name) {
                     raw.name = ch.name;
@@ -867,6 +868,9 @@ export class WhatsApp {
                 }
                 if (mute_changed) {
                     patch.mute_end_time = ch.muteEndTime != null ? Number(ch.muteEndTime) : null;
+                }
+                if (ch.unreadCount != null) {
+                    patch.unread_count = ch.unreadCount;
                 }
                 if (Object.keys(patch).length > 0) {
                     const merged: Chat['_raw'] = { ...current, ...patch };
