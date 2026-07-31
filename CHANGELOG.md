@@ -32,6 +32,8 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 - **`SQLiteEngine`** — SQLite persistence driver: one `(path, parent, score, value)` table with a `(parent, score DESC)` index. The most efficient built-in driver, since it delegates to the engine what the others hand-roll: `list` is an indexed `ORDER BY score DESC LIMIT/OFFSET` (no in-memory index, no order file), `count` a `COUNT(*)` and cascading `unset` a single range statement. Measured on a real 55,146-message chat against the filesystem: **220 MB → 64 MB on disk**, first `list` **115 ms → 0.6 ms**, writes 0.34 ms → 0.19 ms, and two files instead of ~110,000 inodes. Adds no dependency: the already-open database is injected (`new SQLiteEngine(db)`) and both `better-sqlite3` and the native `node:sqlite` satisfy the `SQLiteDatabase` interface.
 - **`S3Engine`** — AWS S3 persistence driver implementing the `Engine` contract, with an optional in-memory cache. Options: `{ s3, bucket, basedir, cache }`, where `cache` is `false` (disabled) or `{ ttl, when(key) }` — `when` decides which keys are cached and each entry is cleared by a `setTimeout` (no read-time expiry check). Requires the peer `@aws-sdk/client-s3`.
 
+- **`Document.name` and `Document.pages`**, `Chat.count` (unread messages) and `Chat.content()` — the group's subject or, on a 1:1, the contact's bio; async because neither lives in the chat document.
+
 ### Fixed
 
 - **`@from()` was broken by the client encapsulation** — it reached `wa._resolve_jid` through a cast that hid the type error, so the guard threw at runtime. It now goes through the internal channel.

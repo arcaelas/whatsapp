@@ -934,10 +934,21 @@ export class Sticker extends Message {
  * Document message; the actual MIME lives in the base `mime`.
  */
 export class Document extends Message {
+    /** @internal */
+    private get _media() {
+        return unwrap(this._raw.raw.message ?? {}).documentMessage;
+    }
+    /** Nombre del archivo. / File name. */
+    get name(): string {
+        return this._media?.fileName ?? '';
+    }
+    /** Número de páginas (PDF); 0 cuando no aplica. / Page count (PDF); 0 when not applicable. */
+    get pages(): number {
+        return this._media?.pageCount ?? 0;
+    }
     /** Peso en bytes. / Size in bytes. */
     get size(): number {
-        const media = unwrap(this._raw.raw.message ?? {}).documentMessage;
-        return to_number(media?.fileLength);
+        return to_number(this._media?.fileLength);
     }
     async content(): Promise<Buffer> {
         return drain(await this.stream());

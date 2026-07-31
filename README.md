@@ -159,7 +159,9 @@ chat.type      // 'contact' | 'group'
 chat.archived  // boolean
 chat.pinned    // boolean
 chat.muted     // fecha ISO UTC hasta la que está silenciado, o null
+chat.count     // mensajes sin leer
 
+await chat.content();    // descripción del grupo, o bio del contacto en un 1:1
 await chat.messages(0, 50);
 await chat.members(0, 50);
 await chat.typing(true);
@@ -244,7 +246,7 @@ if (msg instanceof Poll)  console.log(msg.options, msg.multiple, await msg.votes
 | `Video` | `width` `height` `size` `duration` `thumb()` |
 | `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) |
 | `Sticker` | `width` `height` `size` `animated` |
-| `Document` | `size` |
+| `Document` | `name` `pages` `size` |
 | `Location` | `lat` `lng` `live` `link` (Google Maps) |
 | `Poll` | `options` `multiple` `votes()` `select(i)` |
 | `VCard` | `contacts` |
