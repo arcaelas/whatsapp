@@ -2,7 +2,7 @@
 
 A bot that handles textual commands like `/help`, `/ping`, `/info` and `/echo <text>` — without decorators. Just the raw `wa.on('message:created', ...)` event and a tiny dispatch table.
 
-This pattern is ideal when you want explicit control over routing, or when decorators are not an option (e.g. you're not using TypeScript with `experimentalDecorators`).
+This pattern is ideal when you want explicit control over routing, or when decorators are not an option for your build setup.
 
 ---
 
@@ -10,11 +10,15 @@ This pattern is ideal when you want explicit control over routing, or when decor
 
 ```typescript title="index.ts"
 import { join } from 'node:path';
-import { WhatsApp, FileSystemEngine, type Message, type Chat } from '@arcaelas/whatsapp';
+import { WhatsApp, FileSystemEngine, type Message } from '@arcaelas/whatsapp';
 
 const PREFIX = '/';
 
-type CommandHandler = (args: string, msg: Message, chat: Chat) => Promise<void>;
+// The chat that travels in the events is the session-bound subclass, the one with
+// members()/messages()/content(). The exported `Chat` class only carries the getters.
+type Conversation = InstanceType<WhatsApp['Chat']>;
+
+type CommandHandler = (args: string, msg: Message, chat: Conversation) => Promise<void>;
 
 const wa = new WhatsApp({
     engine: new FileSystemEngine(join(__dirname, 'session')),
@@ -40,13 +44,15 @@ commands.set('ping', async (_args, msg) => {
 });
 
 commands.set('info', async (_args, msg, chat) => {
-    const total = await wa.Message.count(chat.id);
+    const stored = await chat.messages(0, 100);
     await msg.text(
         [
             `chat:    ${chat.name}`,
             `id:      ${chat.id}`,
             `type:    ${chat.type}`,
-            `stored:  ${total} messages`,
+            `unread:  ${chat.count}`,
+            `muted:   ${chat.muted ?? 'no'}`,
+            `stored:  ${stored.length} recent messages`,
         ].join('\n'),
     );
 });
@@ -173,7 +179,7 @@ await wa.Message.text(chat.id, 'standalone message — no quote');
 If you're writing many commands and want a more declarative style, the library ships with an optional `@command` decorator that handles parsing, dispatch and error wrapping for you.
 
 !!! tip "Check out the decorator example"
-    See [`examples/decorator-bot.md`](./decorator-bot.md) for the same bot rewritten with `@command('help')`, `@command('echo')`, etc. The dispatch logic disappears entirely — you only declare the methods.
+    See [`examples/decorator-bot.md`](./decorator-bot.md) for the same bot rewritten with `@command('/help')`, `@command('/echo')`, etc. The pattern is matched with `startsWith`, so the prefix belongs in the pattern. The dispatch logic disappears entirely — you only declare the methods.
 
 For one-off bots or when you need full control over routing, the `Map` pattern shown here stays the simplest, most explicit option.
 

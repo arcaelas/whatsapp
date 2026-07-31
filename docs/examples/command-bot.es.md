@@ -2,7 +2,7 @@
 
 Un bot que maneja comandos textuales como `/help`, `/ping`, `/info` y `/echo <text>` — sin decoradores. Solo el evento crudo `wa.on('message:created', ...)` y una pequeña tabla de despacho.
 
-Este patrón es ideal cuando quieres control explícito sobre el enrutamiento, o cuando los decoradores no son una opción (p. ej. no estás usando TypeScript con `experimentalDecorators`).
+Este patrón es ideal cuando quieres control explícito sobre el enrutamiento, o cuando los decoradores no son una opción para tu configuración de build.
 
 ---
 
@@ -10,11 +10,15 @@ Este patrón es ideal cuando quieres control explícito sobre el enrutamiento, o
 
 ```typescript title="index.ts"
 import { join } from 'node:path';
-import { WhatsApp, FileSystemEngine, type Message, type Chat } from '@arcaelas/whatsapp';
+import { WhatsApp, FileSystemEngine, type Message } from '@arcaelas/whatsapp';
 
 const PREFIX = '/';
 
-type CommandHandler = (args: string, msg: Message, chat: Chat) => Promise<void>;
+// El chat que viaja en los eventos es la subclase ligada a la sesión, la que tiene
+// members()/messages()/content(). La clase `Chat` exportada solo lleva los getters.
+type Conversation = InstanceType<WhatsApp['Chat']>;
+
+type CommandHandler = (args: string, msg: Message, chat: Conversation) => Promise<void>;
 
 const wa = new WhatsApp({
     engine: new FileSystemEngine(join(__dirname, 'session')),
@@ -40,13 +44,15 @@ commands.set('ping', async (_args, msg) => {
 });
 
 commands.set('info', async (_args, msg, chat) => {
-    const total = await wa.Message.count(chat.id);
+    const stored = await chat.messages(0, 100);
     await msg.text(
         [
             `chat:    ${chat.name}`,
             `id:      ${chat.id}`,
             `type:    ${chat.type}`,
-            `stored:  ${total} messages`,
+            `unread:  ${chat.count}`,
+            `muted:   ${chat.muted ?? 'no'}`,
+            `stored:  ${stored.length} mensajes recientes`,
         ].join('\n'),
     );
 });
@@ -173,7 +179,7 @@ await wa.Message.text(chat.id, 'standalone message — no quote');
 Si estás escribiendo muchos comandos y quieres un estilo más declarativo, la librería incluye un decorador opcional `@command` que maneja el parsing, despacho y envoltorio de errores por ti.
 
 !!! tip "Revisa el ejemplo de decoradores"
-    Ver [`examples/decorator-bot.es.md`](./decorator-bot.es.md) para el mismo bot reescrito con `@command('help')`, `@command('echo')`, etc. La lógica de despacho desaparece por completo: solo declaras los métodos.
+    Ver [`examples/decorator-bot.es.md`](./decorator-bot.es.md) para el mismo bot reescrito con `@command('/help')`, `@command('/echo')`, etc. El patrón se compara con `startsWith`, así que el prefijo va dentro del patrón. La lógica de despacho desaparece por completo: solo declaras los métodos.
 
 Para bots únicos o cuando necesitas control total sobre el enrutamiento, el patrón `Map` mostrado aquí sigue siendo la opción más simple y explícita.
 

@@ -38,14 +38,14 @@ export interface SQLiteDatabase {
  * resuelven a mano: `list` es un `ORDER BY score DESC LIMIT/OFFSET` sobre el índice (sin
  * índice en memoria ni archivo de orden), `count` un `COUNT(*)` y el `unset` en cascada una
  * sola sentencia por rango de `path`. Medido sobre un chat real de 55.146 mensajes frente al
- * filesystem: 220 MB → 111 MB en disco, primer `list` 115 ms → 0,7 ms y dos inodes en total.
+ * filesystem: 220 MB → 64 MB en disco, primer `list` 115 ms → 0,6 ms y dos archivos en total.
  *
  * SQLite persistence driver: a single `(path, parent, score, value)` table with a
  * `(parent, score DESC)` index. The most efficient built-in driver, since it delegates to the
  * engine what the others hand-roll: `list` is an indexed `ORDER BY score DESC LIMIT/OFFSET`
  * (no in-memory index, no order file), `count` a `COUNT(*)` and cascading `unset` a single
  * range statement. Measured on a real 55,146-message chat against the filesystem: 220 MB →
- * 111 MB on disk, first `list` 115 ms → 0.7 ms and two inodes in total.
+ * 64 MB on disk, first `list` 115 ms → 0.6 ms and two files in total.
  *
  * @example
  * import Database from 'better-sqlite3';

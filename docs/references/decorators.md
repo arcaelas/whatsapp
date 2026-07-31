@@ -1,8 +1,11 @@
 # Decorators
 
-Stage 3 decorator API layered on top of the WhatsApp client. Opt-in via the sub-entry `@arcaelas/whatsapp/decorators`; the core package (`@arcaelas/whatsapp`) remains unchanged.
+Stage 3 decorator API layered on top of the WhatsApp client. Opt-in via the sub-entry
+`@arcaelas/whatsapp/decorators`; the core package (`@arcaelas/whatsapp`) remains unchanged.
 
-The decorator layer wires methods declared on a class against the real event emitter at `connect()` time. It does not replace the client — it binds decorated methods to events, timers, pairing callbacks and sequential workflows.
+The decorator layer wires methods declared on a class against the real event emitter at `connect()`
+time. It does not replace the client — it binds decorated methods to events, timers, pairing
+callbacks and sequential workflows.
 
 ---
 
@@ -10,6 +13,7 @@ The decorator layer wires methods declared on a class against the real event emi
 
 ```typescript title="bot.ts"
 import {
+  WhatsAppBot,
   Bot,
   on,
   guard,
@@ -17,13 +21,19 @@ import {
   connect,
   disconnect,
   every,
+  delay,
   pair,
   from,
   pipe,
   command,
-  WhatsAppBot,
+  decorator,
+  HANDLERS,
 } from "@arcaelas/whatsapp/decorators";
 ```
+
+!!! warning "Engines live in the core entry"
+    `@arcaelas/whatsapp/decorators` exports **only** the decorator API. `FileSystemEngine`,
+    `SQLiteEngine`, `RedisEngine`, `S3Engine` and every entity come from `@arcaelas/whatsapp`.
 
 ---
 
@@ -49,6 +59,40 @@ Minimal `tsconfig.json`:
 
 ---
 
+## The bot class
+
+A decorated bot is a `WhatsAppBot`, which **is** a `WhatsApp` client: same constructor options,
+same events, same entities. It only adds the wiring of decorated methods on `connect()`.
+
+```typescript title="extend.ts"
+import { FileSystemEngine, type Message } from "@arcaelas/whatsapp";
+import { WhatsAppBot, connect, command } from "@arcaelas/whatsapp/decorators";
+
+class MyBot extends WhatsAppBot {
+  @connect()
+  on_open() {
+    console.log("connected");
+  }
+
+  @command("/ping")
+  async ping(msg: Message) {
+    await msg.text("pong");
+  }
+}
+
+const bot = new MyBot({ engine: new FileSystemEngine(".sessions/bot"), phone: 584144709840 });
+await bot.connect((auth) => console.log(auth));
+```
+
+`connect(callback?)` takes an **optional** callback here: when the class declares `@pair` methods,
+they receive the PIN/QR instead.
+
+!!! info "Handlers are wired once"
+    The wiring runs on the first `connect()` and is guarded against repetition, so a reconnect does
+    not duplicate every listener.
+
+---
+
 ## Overview
 
 | Decorator | Signature | Summary |
@@ -59,7 +103,8 @@ Minimal `tsconfig.json`:
 | `@once` | `(event?: string) => MethodDecorator` | Runs the handler one time, then unsubscribes. Accepts an optional event shortcut. |
 | `@connect` | `() => MethodDecorator` | Alias of `@on('connected')`. |
 | `@disconnect` | `() => MethodDecorator` | Alias of `@on('disconnected')`. |
-| `@every` | `(ms: number) => MethodDecorator` | Periodic timer bound to the connection lifecycle. |
+| `@every` | `(ms: number) => MethodDecorator` | Periodic timer (`setInterval`) bound to the connection lifecycle. |
+| `@delay` | `(ms: number) => MethodDecorator` | Recursive `setTimeout` loop: executions never overlap. |
 | `@pair` | `() => MethodDecorator` | Pairing (PIN/QR) callback. Multiple methods run in parallel. |
 | `@from` | `(src: string \| string[] \| (jid) => boolean) => MethodDecorator` | Filters by message author (JID, LID or phone). |
 | `@command` | `(pattern: string \| RegExp) => MethodDecorator` | Textual command over `message:created` with args parsing. |
@@ -69,7 +114,9 @@ Minimal `tsconfig.json`:
 
 ## `@Bot(options)`
 
-Class decorator that converts the target into a subclass of `WhatsAppBot`. The consumer does **not** need to extend `WhatsAppBot` manually. At construction time the partial override passed to `new Bot(override?)` is merged on top of the `default_options` supplied to the decorator.
+Class decorator that converts the target into a subclass of `WhatsAppBot`, copying the target's
+methods and metadata onto it. At construction time the partial override passed to
+`new MyBot(override?)` is merged on top of the `default_options` supplied to the decorator.
 
 **Signature**
 
@@ -77,42 +124,39 @@ Class decorator that converts the target into a subclass of `WhatsAppBot`. The c
 function Bot(default_options: IWhatsApp): ClassDecorator;
 ```
 
-**Behaviour**
+!!! warning "Extend `WhatsAppBot` anyway"
+    Stage 3 decorators **cannot change the declared type of a class**. At runtime `@Bot` returns a
+    `WhatsAppBot` subclass, but TypeScript keeps typing your class as written: without
+    `extends WhatsAppBot`, `bot.connect()` and `bot.disconnect()` do not typecheck. Combine both and
+    everything lines up:
 
-- The produced subclass inherits from `WhatsAppBot`, so `connect()` is the wiring entry point.
-- Methods and metadata of the original class are copied onto the generated subclass.
-- The constructor accepts a `Partial<IWhatsApp>` that overrides the decorator defaults.
-
-```typescript title="minimal-bot.ts"
-import Redis from "ioredis";
-import { Bot, connect, RedisEngine } from "@arcaelas/whatsapp/decorators";
+```typescript title="minimal-bot.ts" hl_lines="8"
+import { FileSystemEngine } from "@arcaelas/whatsapp";
+import { WhatsAppBot, Bot, connect } from "@arcaelas/whatsapp/decorators";
 
 @Bot({
-  engine: new RedisEngine(new Redis()),
+  engine: new FileSystemEngine(".sessions/bot"),
   phone: "5491112345678",
 })
-class MyBot {
+class MyBot extends WhatsAppBot {
   @connect()
   on_open() {
     console.log("connected");
   }
 }
 
-const bot = new MyBot();
+const bot = new MyBot({ engine: new FileSystemEngine(".sessions/bot") });
 await bot.connect();
 ```
 
-Passing an override at construction time:
-
-```typescript
-const staging = new MyBot({ phone: "5491199999999" });
-```
+Any option you pass at construction time overrides the decorator defaults for that instance.
 
 ---
 
 ## `@on(event)`
 
-Subscribes the method to a client event. The decorator is **stackable** — multiple `@on` entries on the same method register multiple subscriptions without duplication within the same method.
+Subscribes the method to a client event. The decorator is **stackable** — multiple `@on` entries on
+the same method register multiple subscriptions, and a repeated event is registered only once.
 
 ```typescript
 @on("message:created")
@@ -122,31 +166,47 @@ log_message(msg: Message, chat: Chat, wa: WhatsApp) {
 }
 ```
 
-Valid event names are documented in [References / Events](events.md). Common values include `connected`, `disconnected`, `message:created`, `message:updated`, `message:reacted`, `contact:created`, `contact:updated`, `chat:created`, `chat:updated`.
+Valid event names are documented in [References / Events](events.md): `connected`, `disconnected`,
+`message:created`, `message:updated`, `message:deleted`, `message:reacted`, `message:starred`,
+`message:unstarred`, `message:forwarded`, `message:seen`, `contact:created`, `contact:updated`,
+`chat:created`, `chat:deleted`, `chat:pinned`, `chat:unpinned`, `chat:archived`, `chat:unarchived`,
+`chat:muted`, `chat:unmuted`, `feed:created`, `feed:updated`, `feed:deleted`.
 
 !!! tip "Listener payload"
-    Handler arguments mirror the emitter payload. For message events the signature is `(msg, chat, wa)`; for contact events `(contact, chat, wa)`.
+    Handler arguments mirror the emitter payload. For message events the signature is
+    `(msg, chat, wa)`; for contact events `(contact, chat, wa)`; for chat and feed events
+    `(entity, wa)`.
 
 ---
 
 ## `@guard(pred)`
 
-Registers a predicate evaluated **before** the handler. Multiple guards accumulate and are evaluated sequentially in declaration order with **AND** semantics — any guard returning falsy short-circuits and the handler does not run.
+Registers a predicate evaluated **before** the handler. Multiple guards accumulate and are evaluated
+sequentially in declaration order with **AND** semantics — any guard returning falsy short-circuits
+and the handler does not run.
+
+The predicate receives the raw event arguments as `unknown`, so narrow them inside:
 
 ```typescript
 @on("message:created")
-@guard((msg: Message) => !msg.me)
-@guard((msg: Message) => msg.type === "text")
+@guard((msg) => !(msg as Message).me)
+@guard((msg) => (msg as Message).type === "text")
 on_inbound_text(msg: Message) {
   /* ... */
 }
 ```
 
-**Auto-registration**: if the method has no explicit `@on` but at least one `@guard` (or `@from`, which adds a guard internally), it is implicitly registered to `message:created`.
+!!! warning "Type the predicate parameter as `unknown`"
+    `@guard` is typed as `(...args: unknown[]) => boolean | Promise<boolean>`. Writing
+    `@guard((msg: Message) => !msg.me)` fails to compile under `strict`, because `unknown` is not
+    assignable to `Message`. Let the parameter be inferred and cast inside the body, as above.
+
+**Auto-registration**: if the method has no explicit `@on` but at least one `@guard` (or `@from`,
+which adds a guard internally), it is implicitly registered to `message:created`.
 
 ```typescript
 // Equivalent to @on('message:created') + @guard(...)
-@guard((msg: Message) => msg.type === "image")
+@guard((msg) => (msg as Message).type === "image")
 on_image(msg: Message) {
   /* ... */
 }
@@ -178,7 +238,8 @@ first_message(msg: Message) {
 
 ## `@connect()` / `@disconnect()`
 
-Semantic aliases of `@on('connected')` and `@on('disconnected')`. The method runs when the WhatsApp connection opens or closes respectively.
+Semantic aliases of `@on('connected')` and `@on('disconnected')`. The method runs when the WhatsApp
+connection opens or closes respectively.
 
 ```typescript
 @connect()
@@ -196,7 +257,8 @@ on_close() {
 
 ## `@every(ms)`
 
-Installs a periodic timer. The interval starts when `connected` is emitted and is cleared on `disconnected`, so the callback does not run while the client is offline.
+Installs a periodic timer (`setInterval`). The interval starts when `connected` is emitted and is
+cleared on `disconnected`, so the callback does not run while the client is offline.
 
 ```typescript
 @every(30_000)
@@ -205,14 +267,41 @@ async heartbeat() {
 }
 ```
 
-!!! warning
-    Timer callbacks receive no arguments. If you need access to the client, capture it via `this` (the method is bound to the bot instance).
+!!! warning "Executions can overlap"
+    `setInterval` does not wait for the previous run: a method that takes longer than `ms` will run
+    concurrently with itself. Use `@delay` when that matters. Timer callbacks also receive **no
+    arguments** — reach the client through `this`.
+
+---
+
+## `@delay(ms)`
+
+Same lifecycle as `@every`, but implemented as a recursive `setTimeout`: the next execution starts
+only after the previous one finished, so runs **never overlap**. The first execution happens `ms`
+after `connected`.
+
+```typescript
+@delay(5_000)
+async poll_queue() {
+  const jobs = await fetch_jobs();     // takes as long as it takes
+  for (const job of jobs) {
+    await this.Message.text(job.cid, job.text);
+  }
+}
+```
+
+| Decorator     | Scheduler              | Overlap        | Stops on         |
+| ------------- | ---------------------- | -------------- | ---------------- |
+| `@every(ms)`  | `setInterval`          | Possible       | `disconnected`   |
+| `@delay(ms)`  | recursive `setTimeout` | Never          | `disconnected`   |
 
 ---
 
 ## `@pair()`
 
-Marks the method as a pairing callback. When baileys delivers a PIN or QR, all `@pair` methods are invoked in parallel via `Promise.all`. A `connect(callback?)` argument — if passed — runs alongside them.
+Marks the method as a pairing callback. When baileys delivers a PIN or QR, all `@pair` methods are
+invoked in parallel via `Promise.all`. A `connect(callback?)` argument — if passed — runs alongside
+them.
 
 ```typescript
 @pair()
@@ -225,7 +314,7 @@ async on_pin(code: string | Buffer) {
 }
 ```
 
-Since `connect()` no longer needs an explicit callback when `@pair` is present:
+Since pairing is handled by the decorator, `connect()` no longer needs an explicit callback:
 
 ```typescript
 await bot.connect(); // pairing handled by @pair methods
@@ -241,7 +330,8 @@ Filters `message:created` by the message author. The source is one of:
 - `string[]` — any of the entries matches (OR).
 - `(jid: string) => boolean` — custom predicate over `msg.from`.
 
-Strings are normalised the first time the guard runs, using the internal resolver `wa._resolve_jid(uid)`. Results are cached in a `Set` on the handler so subsequent invocations are O(1).
+Strings are normalized the first time the guard runs, through the client's internal JID resolver,
+and cached in a `Set` on the handler so subsequent invocations are O(1).
 
 ```typescript
 @command("/ban")
@@ -256,7 +346,12 @@ personal_only(msg: Message) {
 }
 ```
 
-**Auto-registration**: like `@guard`, a method decorated only with `@from` (no `@on`) is auto-registered to `message:created`.
+**Auto-registration**: like `@guard`, a method decorated only with `@from` (no `@on`) is
+auto-registered to `message:created`.
+
+!!! info "It compares against `msg.from`"
+    `from` is the author JID as stored. A number is normalized to `<digits>@s.whatsapp.net`; if the
+    chat addresses the contact by LID, pass the LID (or a predicate) instead.
 
 ---
 
@@ -286,13 +381,20 @@ echo(msg: Message, chat: Chat, args: string[]) {
 ```
 
 !!! note "Argument shape"
-    `@command` rewrites the handler signature from `(msg, chat, wa)` to `(msg, chat, args)`. The `wa` instance remains accessible via `this`.
+    `@command` rewrites the handler signature from `(msg, chat, wa)` to `(msg, chat, args)`. The
+    client remains accessible via `this` — the bot **is** the client.
+
+!!! warning "It matches your own messages too"
+    The guard only checks the text, so an outbound message starting with the prefix triggers the
+    command. Add `@guard((msg) => !(msg as Message).me)` when that matters.
 
 ---
 
 ## `@pipe(workflow, index)`
 
-Registers the method as a step inside a named **workflow**. All steps with the same `workflow` name run sequentially on every `message:created`, ordered by `index` ascending. Steps share the same arguments (`msg`, `chat`, `wa`), so mutations on those objects propagate to later steps.
+Registers the method as a step inside a named **workflow**. All steps with the same `workflow` name
+run sequentially on every `message:created`, ordered by `index` ascending. Steps share the same
+arguments (`msg`, `chat`, `wa`), so mutations on those objects propagate to later steps.
 
 ```typescript
 @pipe("inbound", 0)
@@ -314,7 +416,8 @@ Contract:
 - Multiple workflows coexist; each runs independently on `message:created`.
 
 !!! warning "Do not mix with `@on` on the same method"
-    A method decorated with `@pipe` is registered solely as a step. Adding `@on` or `@guard` on the same method has no effect on the workflow.
+    A method decorated with `@pipe` is registered as a workflow step. Adding `@on` or `@guard` on the
+    same method creates a **second, independent** registration for it — the workflow ignores them.
 
 ---
 
@@ -322,7 +425,7 @@ Contract:
 
 Legend: ✅ compose · ⚠️ composable, read the note · ❌ not supported.
 
-| With → / Base ↓ | `@on` | `@guard` | `@once` | `@from` | `@command` | `@pipe` | `@every` | `@pair` |
+| With → / Base ↓ | `@on` | `@guard` | `@once` | `@from` | `@command` | `@pipe` | `@every` / `@delay` | `@pair` |
 |---|---|---|---|---|---|---|---|---|
 | `@on` (stackable) | ✅ | ✅ | ✅ | ✅ | ⚠️ redundant | ❌ | ⚠️ | ❌ |
 | `@guard` (stackable) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ | ❌ |
@@ -330,16 +433,16 @@ Legend: ✅ compose · ⚠️ composable, read the note · ❌ not supported.
 | `@from` (single) | ✅ | ✅ | ✅ | ❌ two `@from` | ✅ | ❌ | ❌ | ❌ |
 | `@command` (single) | ⚠️ | ✅ | ✅ | ✅ | ❌ two `@command` | ❌ | ❌ | ❌ |
 | `@pipe` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ same step index clashes | ❌ | ❌ |
-| `@every` | ⚠️ emits `__every:*` event — do not combine with real events | ⚠️ guards run without a message | ❌ | ❌ | ❌ | ❌ | ❌ duplicate ms creates two timers | ❌ |
+| `@every` / `@delay` | ⚠️ the timer channel is not a real event — do not combine with one | ⚠️ guards run without a message | ❌ | ❌ | ❌ | ❌ | ⚠️ two timers on one method fire independently | ❌ |
 | `@pair` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ multiple methods run in parallel |
 
 Key notes:
 
-- **`@command` + `@command`** on the same method is invalid — the second pattern replaces the first transform; declare two methods instead.
-- **`@from` + `@from`** on the same method: only the **last** registered set is respected in terms of source resolution; for OR matching pass an array to a single `@from`.
+- **`@command` + `@command`** on the same method is invalid — both transforms accumulate and the second overwrites the first result; declare two methods instead.
+- **`@from` + `@from`** on the same method produces two independent guards combined with AND, so a message must match *both* sets; for OR matching pass an array to a single `@from`.
 - **`@pipe` is terminal**: a method marked as a pipe step should not carry any other decorator.
-- **`@every` + `@on`** registers the method to both the timer and an event — the timer invocation receives no args, which can break handlers that expect `(msg, chat, wa)`.
-- **`@pair` is its own channel** (`__pair`); never combine with `@on`.
+- **`@every` / `@delay` + `@on`** registers the method to both the timer and an event — the timer invocation receives no args, which breaks handlers that expect `(msg, chat, wa)`.
+- **`@pair` is its own channel**; never combine it with `@on`.
 
 ---
 
@@ -347,7 +450,9 @@ Key notes:
 
 ### Listener dispatch
 
-Listeners for the same event run **concurrently** under the EventEmitter — the underlying emitter calls listeners synchronously without awaiting them, so two handlers for `message:created` start in parallel.
+Listeners for the same event run **concurrently** under the EventEmitter — the underlying emitter
+calls listeners synchronously without awaiting them, so two handlers for `message:created` start in
+parallel.
 
 Inside a single handler the flow is **sequential**:
 
@@ -357,15 +462,18 @@ Inside a single handler the flow is **sequential**:
 
 ### Timers
 
-`@every(ms)` handlers start on the `connected` event via `setInterval(run, ms)` and are cancelled on `disconnected`. A reconnect cycle therefore re-arms them from scratch.
+`@every(ms)` and `@delay(ms)` handlers start on the `connected` event and stop on `disconnected`. A
+reconnect cycle therefore re-arms them from scratch.
 
 ### Pairing
 
-`@pair` callbacks are collected at `connect()` and invoked in parallel with `Promise.all`. If the consumer passes a callback to `connect(callback)`, it runs in parallel alongside the decorator-based callbacks.
+`@pair` callbacks are collected at `connect()` and invoked in parallel with `Promise.all`. If the
+consumer passes a callback to `connect(callback)`, it runs in parallel alongside them.
 
 ### Workflows
 
-A `@pipe(workflow, _)` group is registered as a single listener on `message:created`. When the event fires, steps are sorted by `index` and awaited sequentially:
+A `@pipe(workflow, _)` group is registered as a single listener on `message:created`. When the event
+fires, steps are sorted by `index` and awaited sequentially:
 
 ```typescript
 for (const step of sorted_steps) {
@@ -379,7 +487,9 @@ Because the arguments are shared, mutations on `msg` or `chat` are observable by
 
 ## Advanced: custom decorators
 
-The infrastructure exposes a `decorator<P>()` factory to build your own parametric decorators without touching the metadata layer directly. The callback mutates the resolved `HandlerMeta` entry — push events, guards, transforms or flip `once`.
+The infrastructure exposes a `decorator<P>()` factory to build your own parametric decorators
+without touching the metadata layer directly. The callback mutates the resolved `HandlerMeta`
+entry — push events, guards, transforms or flip `once`.
 
 **Signature**
 
@@ -393,7 +503,7 @@ function decorator<P extends unknown[]>(
 ): (...params: P) => MethodDecorator;
 ```
 
-**Example — `@onlyType('image')`**
+**Example — `@only_type('image')`**
 
 ```typescript title="custom-decorators.ts"
 import { decorator } from "@arcaelas/whatsapp/decorators";
@@ -418,10 +528,14 @@ on_image(msg: Message) {
 }
 ```
 
-The factory auto-registers to `message:created` by virtue of the guard being added without an `@on` — identical behaviour to the built-in `@guard` / `@from`.
+The factory auto-registers to `message:created` by virtue of the guard being added without an
+`@on` — identical behaviour to the built-in `@guard` / `@from`.
 
 !!! info "Exposed primitives"
-    For more complex cases (timers, workflows, new event channels) the following are public: `HANDLERS` (symbol), `HandlerMeta`, `BotSchema`, `WorkflowStep`, `register_workflow_step()`. See `src/lib/bot/decorator.ts` for the full schema contract.
+    The sub-entry exports `decorator()`, the `HANDLERS` symbol and the types `HandlerMeta`,
+    `BotSchema` and `WorkflowStep`. Reading the schema of a decorated class is a matter of
+    `(MyBot as any)[Symbol.metadata]?.[HANDLERS]`. Everything else (`resolve`,
+    `register_workflow_step`, `ensure_schema`) is internal.
 
 ---
 

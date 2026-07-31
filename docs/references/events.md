@@ -22,11 +22,12 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 ## API
 
-| Method               | Returns        | Description                                                            |
-| -------------------- | -------------- | ---------------------------------------------------------------------- |
-| `wa.on(event, h)`    | `() => void`   | Registers a listener. Call the returned function to detach it.         |
-| `wa.once(event, h)`  | `() => void`   | Registers a one-shot listener. Returned function detaches it early.    |
-| `wa.off(event, h)`   | `this`         | Removes a previously registered listener.                              |
+| Method                 | Returns        | Description                                                            |
+| ---------------------- | -------------- | ------------------------------------------------------------------------ |
+| `wa.on(event, h)`      | `() => void`   | Registers a listener. Call the returned function to detach it.          |
+| `wa.once(event, h)`    | `() => void`   | Registers a one-shot listener. Returned function detaches it early.     |
+| `wa.off(event, h)`     | `this`         | Removes a previously registered listener.                               |
+| `wa.emit(event, …)`    | `boolean`      | Emits an event; `true` when listeners were present.                     |
 
 ```typescript title="Subscribe and unsubscribe"
 const off = wa.on('message:created', (msg, chat) => {
@@ -49,7 +50,8 @@ off();
 !!! info "Transient closes are silent"
     The protocol-mandated `restartRequired` (status `515`) right after the initial sync does
     **not** trigger `disconnected`. The library reconnects with zero delay and the consumer
-    sees an uninterrupted session.
+    sees an uninterrupted session. `disconnect({ silent: true })` also mutes the event for that
+    specific close.
 
 ```typescript title="Connection lifecycle"
 wa.on('connected',    (client) => console.log('online'));
@@ -63,14 +65,14 @@ wa.on('disconnected', (client) => console.log('offline'));
 | Event              | Signature                | Fires when…                                                            |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`    | A new contact is upserted, or auto-created from an inbound message.    |
-| `contact:updated`  | `[contact, chat, wa]`    | A contact's name, notify, image, status, or LID changes.               |
+| `contact:updated`  | `[contact, chat, wa]`    | A contact's name, notify, image, status or LID changes.                |
 
-The `chat` argument is the contact's 1:1 chat (created on the fly from the cache when needed),
-so you can reply or fetch history without an extra lookup.
+The `chat` argument is the contact's 1:1 chat (built from the cache when needed), so you can reply
+or fetch history without an extra lookup.
 
 ```typescript title="Greet new contacts"
-wa.on('contact:created', async (contact, chat) => {
-    await chat.text(`Welcome, ${contact.name ?? contact.notify ?? 'friend'}!`);
+wa.on('contact:created', async (contact, chat, client) => {
+    await client.Message.text(chat.id, `Welcome, ${contact.name}!`);
 });
 ```
 
@@ -92,6 +94,7 @@ wa.on('contact:created', async (contact, chat) => {
 ```typescript title="Audit chat moderation"
 wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
 wa.on('chat:unarchived', (chat) => console.log('unarchived', chat.id));
+wa.on('chat:muted',      (chat) => console.log('muted until', chat.muted));
 ```
 
 ---
@@ -101,23 +104,47 @@ wa.on('chat:unarchived', (chat) => console.log('unarchived', chat.id));
 | Event                | Signature                       | Fires when…                                                                       |
 | -------------------- | ------------------------------- | --------------------------------------------------------------------------------- |
 | `message:created`    | `[message, chat, wa]`           | A new message is upserted (inbound or outbound).                                  |
-| `message:updated`    | `[message, chat, wa]`           | A message is edited, has a status change, or its content updates (live location). |
+| `message:updated`    | `[message, chat, wa]`           | A message is edited, its status changes, its content updates (live location) or a poll vote is decrypted. |
 | `message:deleted`    | `[message, chat, wa]`           | A message is revoked (`protocolMessage.REVOKE`).                                  |
 | `message:reacted`    | `[message, chat, emoji, wa]`    | A reaction arrives. `emoji` is `''` when the reaction is removed.                 |
 | `message:starred`    | `[message, chat, wa]`           | A message is starred.                                                             |
 | `message:unstarred`  | `[message, chat, wa]`           | A message is unstarred.                                                           |
-| `message:forwarded`  | `[message, chat, wa]`           | An incoming message carries the `forwarded` flag.                                 |
+| `message:forwarded`  | `[message, chat, wa]`           | A newly stored message carries the `forwarded` flag (it is emitted right after `message:created`). |
 | `message:seen`       | `[message, chat, wa]`           | A read or play receipt is observed for the message.                               |
 
-```typescript title="React-when-mentioned bot" hl_lines="3"
+```typescript title="React-when-mentioned bot" hl_lines="2"
 wa.on('message:created', async (msg, chat) => {
-    if (msg.caption?.toLowerCase().includes('@bot')) {
-        await chat.text('here!');
+    if (!msg.me && msg.caption.toLowerCase().includes('@bot')) {
+        await msg.text('here!');
     }
 });
 
 wa.on('message:reacted', (msg, chat, emoji) => {
     console.log(`Reacted ${emoji || '∅'} on ${msg.id}`);
+});
+```
+
+!!! warning "Guard against your own messages"
+    `message:created` fires for outbound messages too. Without a `!msg.me` check a bot replies to
+    itself in a loop.
+
+---
+
+## Statuses
+
+| Event          | Signature      | Fires when…                                                     |
+| -------------- | -------------- | ----------------------------------------------------------------- |
+| `feed:created` | `[feed, wa]`   | A status arrives, or you publish one with `wa.feed()`.          |
+| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, or someone reacts to it.        |
+| `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                   |
+
+Status broadcasts never emit `message:*`, and their payload carries **no chat**. See
+[Feed](feed.md).
+
+```typescript title="Watch statuses"
+wa.on('feed:created', async (post) => {
+    console.log((await post.author()).name, post.caption);
+    await post.view();
 });
 ```
 
@@ -145,6 +172,7 @@ const events = [
     'message:reacted',
     'message:starred', 'message:unstarred',
     'message:forwarded', 'message:seen',
+    'feed:created', 'feed:updated', 'feed:deleted',
 ] as const;
 
 for (const event of events) {
@@ -174,14 +202,15 @@ setTimeout(cancel, 60_000);
 
 ---
 
-## Migrating from v2
+## Payload shape
 
-!!! warning "Signature change"
-    In v2, message and contact handlers received `[entity, wa]`. In v3, the **chat** is now
-    inserted right before `wa`:
+!!! info "Entity, context, client"
+    Every payload follows the same order: the **artifact** first, its **context** in the middle
+    (the chat, and the emoji for reactions), and the **client** last.
 
-    - `message:*`  → `[message, chat, wa]`
-    - `contact:*`  → `[contact, chat, wa]`
-    - `message:reacted` → `[message, chat, emoji, wa]`
-
-    Update your handlers' parameter lists when upgrading.
+    - `message:*`         → `[message, chat, wa]`
+    - `message:reacted`   → `[message, chat, emoji, wa]`
+    - `contact:*`         → `[contact, chat, wa]`
+    - `chat:*`            → `[chat, wa]`
+    - `feed:*`            → `[feed, wa]`
+    - `connected` / `disconnected` → `[wa]`

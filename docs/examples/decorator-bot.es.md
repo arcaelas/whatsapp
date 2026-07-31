@@ -7,11 +7,14 @@ Bot completo y ejecutable construido con la API de decoradores Stage 3 (`@arcael
 ## Requisitos previos
 
 ```bash
-yarn add @arcaelas/whatsapp ioredis
+yarn add @arcaelas/whatsapp
 ```
 
-!!! info "Motor Redis"
-    El ejemplo usa `RedisEngine` para que el estado del bot sobreviva a los reinicios. Reemplázalo por `FileSystemEngine` si prefieres un store local en archivos — la API de decoradores es agnóstica al motor.
+!!! info "El motor que prefieras"
+    El ejemplo usa `SQLiteEngine` para que el estado del bot sobreviva a los reinicios en un solo
+    archivo. Reemplázalo por `FileSystemEngine`, `RedisEngine` o `S3Engine` — la API de decoradores
+    es agnóstica al motor. Los motores siempre vienen de `@arcaelas/whatsapp`, nunca de la
+    sub-entrada `/decorators`.
 
 ---
 
@@ -19,11 +22,12 @@ yarn add @arcaelas/whatsapp ioredis
 
 ```typescript title="bot.ts"
 import { writeFile } from "node:fs/promises";
-import Redis from "ioredis";
+import { DatabaseSync } from "node:sqlite";
 import {
-  Bot,
+  WhatsAppBot,
   command,
   connect,
+  delay,
   disconnect,
   every,
   from,
@@ -32,50 +36,46 @@ import {
   pair,
   pipe,
 } from "@arcaelas/whatsapp/decorators";
-import { RedisEngine } from "@arcaelas/whatsapp";
-import type { Chat, Message, WhatsApp } from "@arcaelas/whatsapp";
+import { SQLiteEngine } from "@arcaelas/whatsapp";
+import type { Chat, Message } from "@arcaelas/whatsapp";
 
 const ADMIN_PHONE = "5491111111111";
 
-@Bot({
-  engine: new RedisEngine(new Redis()),
-  phone: "5491112345678",
-})
-class DecoratorBot {
-  // ---- Pairing (PIN / QR) ---------------------------------------------
+class DecoratorBot extends WhatsAppBot {
+  // ---- Emparejamiento (PIN / QR) --------------------------------------
 
   @pair()
   async on_pair(code: string | Buffer) {
     if (Buffer.isBuffer(code)) {
       await writeFile("qr.png", code);
-      console.log("[pair] QR saved to qr.png");
+      console.log("[pair] QR guardado en qr.png");
     } else {
-      console.log("[pair] pairing code:", code);
+      console.log("[pair] código de emparejamiento:", code);
     }
   }
 
-  // ---- Lifecycle -------------------------------------------------------
+  // ---- Ciclo de vida ---------------------------------------------------
 
   @connect()
   on_open() {
-    console.log("[lifecycle] connected");
+    console.log("[lifecycle] conectado");
   }
 
   @disconnect()
   on_close() {
-    console.log("[lifecycle] disconnected");
+    console.log("[lifecycle] desconectado");
   }
 
-  // ---- Commands --------------------------------------------------------
+  // ---- Comandos --------------------------------------------------------
 
   @command("/help")
   async help(msg: Message, chat: Chat, args: string[]) {
     await msg.text(
       [
-        "Available commands:",
-        "  /help           — show this message",
-        "  /echo <text>    — echo the provided text",
-        "  /shutdown       — admin-only",
+        "Comandos disponibles:",
+        "  /help           — muestra este mensaje",
+        "  /echo <texto>   — repite el texto indicado",
+        "  /shutdown       — solo administradores",
       ].join("\n"),
     );
   }
@@ -86,48 +86,59 @@ class DecoratorBot {
     await msg.text(text);
   }
 
-  // Comando solo-admin: @from filtra por autor ANTES de que el handler se ejecute.
+  // Comando solo para admins: @from filtra por autor ANTES de correr el handler.
   @command("/shutdown")
   @from(ADMIN_PHONE)
   async shutdown(msg: Message) {
-    await msg.text("shutting down");
+    await msg.text("apagando");
     process.exit(0);
   }
 
-  // ---- Tarea periódica ------------------------------------------------
+  // ---- Tareas periódicas -----------------------------------------------
 
   @every(30_000)
   heartbeat() {
-    console.log("[heartbeat] alive", new Date().toISOString());
+    console.log("[heartbeat] vivo", new Date().toISOString());
   }
 
-  // ---- Workflow secuencial (@pipe) -----------------------------------
+  // Nunca se solapa consigo mismo: la siguiente corrida espera a que termine esta.
+  @delay(60_000)
+  async sweep() {
+    const chats = await this.Chat.list(0, 50);
+    console.log("[sweep] siguiendo", chats.length, "chats");
+  }
+
+  // ---- Workflow secuencial (@pipe) ------------------------------------
 
   @pipe("talk", 0)
-  async talk_step_1(msg: Message, chat: Chat, wa: WhatsApp) {
+  async talk_step_1(msg: Message) {
     (msg as unknown as { received_at: number }).received_at = Date.now();
-    console.log("[talk:0] tagged", msg.id);
+    console.log("[talk:0] etiquetado", msg.id);
   }
 
   @pipe("talk", 1)
   async talk_step_2(msg: Message) {
     const tagged = msg as unknown as { received_at: number };
-    console.log("[talk:1] elapsed", Date.now() - tagged.received_at, "ms");
+    console.log("[talk:1] transcurrido", Date.now() - tagged.received_at, "ms");
   }
 
   // ---- Logger genérico de entrantes -----------------------------------
 
   @on("message:created")
-  @guard((msg: Message) => !msg.me)
+  @guard((msg) => !(msg as Message).me)
   log_inbound(msg: Message) {
     console.log("[inbound]", msg.from, msg.type, msg.id);
   }
 }
 
-// ---- Entry point -------------------------------------------------------
+// ---- Punto de entrada --------------------------------------------------
 
-const bot = new DecoratorBot();
-await bot.connect(); // pairing manejado por @pair
+const bot = new DecoratorBot({
+  engine: new SQLiteEngine(new DatabaseSync(".sessions/bot.db")),
+  phone: 5491112345678,
+});
+
+await bot.connect(); // emparejamiento manejado por @pair
 
 process.on("SIGINT", async () => {
   await bot.disconnect();
@@ -137,43 +148,100 @@ process.on("SIGINT", async () => {
 
 ---
 
-## Walkthrough
+## Recorrido
 
-### `@Bot({ engine, phone })`
+### `class DecoratorBot extends WhatsAppBot`
 
-Convierte `DecoratorBot` en una subclase de `WhatsAppBot`. La clase no necesita extender nada manualmente. El decorador siembra las opciones por defecto (motor Redis + teléfono para emparejamiento por PIN); un override en runtime puede pasarse en tiempo de construcción, p. ej. `new DecoratorBot({ phone: "5499999999999" })`.
+`WhatsAppBot` **es** el cliente `WhatsApp` más el cableado de decoradores, así que la instancia lleva
+`this.Chat`, `this.Message`, `this.on(...)` y todas las opciones del constructor. El cableado ocurre
+en el primer `connect()`, y una reconexión no duplica los listeners.
 
 ### `@pair()`
 
-El bot **no** pasa un callback a `connect()`. El emparejamiento se delega enteramente al método `on_pair`: si baileys entrega un `Buffer`, es un PNG de QR y se escribe a disco; si entrega un string, es un código PIN para tipear en la app móvil de WhatsApp. Múltiples métodos `@pair` — si están presentes — se ejecutarían concurrentemente.
+El bot **no** pasa un callback a `connect()`. El emparejamiento se delega enteramente al método
+`on_pair`: si baileys entrega un `Buffer`, es un QR en PNG y se escribe a disco; si entrega un
+string, es un código PIN para tipear en la app móvil de WhatsApp. Varios métodos `@pair` —si los
+hay— corren concurrentemente.
 
 ### `@connect()` / `@disconnect()`
 
-Alias de `@on('connected')` y `@on('disconnected')`. Útiles para cablear efectos secundarios (métricas, hooks de apagado limpio, precalentamiento de caché) al ciclo de vida de la conexión.
+Alias de `@on('connected')` y `@on('disconnected')`. Útiles para enganchar efectos secundarios
+(métricas, hooks de apagado ordenado, precalentamiento de caché) al ciclo de vida de la conexión.
 
 ### `@command('/help')`
 
-Forma string: `@command` aplica `@on('message:created')`, un guard que coincide `msg.caption.startsWith('/help')` y una transformación que reescribe la signatura del handler a `(msg, chat, args)`, donde `args` es la cola dividida por whitespace.
+Forma string: `@command` aplica `@on('message:created')`, un guard que verifica
+`msg.caption.startsWith('/help')` y un transform que reescribe la firma del handler a
+`(msg, chat, args)`, donde `args` es la cola partida por espacios.
 
 ### `@command(/^\/echo\s+(.+)$/)`
 
-Forma RegExp: el regex se testea contra `msg.caption`. `args` es `match.slice(1)`, por lo que el primer capture group es el texto ecoado. Esta es la forma idiomática de parsear formas de comando complejas sin escribir lógica manual de `split`/`trim`.
+Forma RegExp: la expresión se prueba contra `msg.caption`. `args` es `match.slice(1)`, así que el
+primer grupo de captura es el texto a repetir. Es la manera idiomática de parsear comandos complejos
+sin escribir `split`/`trim` a mano.
 
 ### `@command('/shutdown') + @from(ADMIN_PHONE)`
 
-`@from` registra un guard async que normaliza el teléfono a un JID en el primer uso (vía el resolver interno) y lo cachea. El comando solo se ejecuta cuando el autor del mensaje coincide con el admin. Pasa `string[]` para múltiples admins o un predicado `(jid) => boolean` para matching personalizado.
+`@from` registra un guard asíncrono que normaliza el teléfono a JID en el primer uso (vía el resolver
+interno del cliente) y lo cachea. El comando solo corre cuando el autor del mensaje coincide con el
+admin. Pasa `string[]` para varios administradores o un predicado `(jid) => boolean` para una
+coincidencia propia.
 
-### `@every(30_000)`
+### `@every(30_000)` y `@delay(60_000)`
 
-Instala un `setInterval` de 30 segundos que comienza en `connected` y se limpia en `disconnected`. El callback no recibe argumentos; accede a la instancia a través de `this`.
+`@every` instala un `setInterval`: las ejecuciones son independientes y pueden solaparse si el método
+tarda más que el intervalo. `@delay` encadena llamadas a `setTimeout`, así que la siguiente corrida
+solo arranca cuando la anterior resolvió. Ambos arrancan en `connected` y se detienen en
+`disconnected`, y ninguno recibe argumentos — accede al cliente a través de `this`.
 
 ### `@pipe('talk', 0)` y `@pipe('talk', 1)`
 
-Dos pasos del mismo workflow. Se ejecutan **secuencialmente** en cada `message:created`, ordenados por `index`. El paso 0 etiqueta el mensaje con `received_at`; el paso 1 lee ese campo — porque ambos pasos comparten la misma referencia de `msg`, la mutación es visible aguas abajo. Cualquier número de pasos puede pertenecer al mismo workflow, y los workflows son independientes entre sí.
+Dos pasos del mismo workflow. Corren **secuencialmente** en cada `message:created`, ordenados por
+`index`. El paso 0 etiqueta el mensaje con `received_at`; el paso 1 lee ese campo — como ambos
+comparten la misma referencia `msg`, la mutación es visible aguas abajo. Cualquier cantidad de pasos
+puede pertenecer al mismo workflow, y los workflows son independientes entre sí.
 
 ### `@on('message:created') + @guard(...)`
 
-Logger genérico de entrantes que demuestra la suscripción plana a eventos con un guard ad-hoc. `@guard` es apilable y hace corto-circuito con semántica AND; `msg.me` es `true` para mensajes autorizados por el bot, por lo que filtrarlo previene loops de auto-logging.
+Logger genérico de entrantes que demuestra la suscripción simple a un evento con un guard ad-hoc.
+`@guard` es apilable y cortocircuita con semántica AND; `msg.me` es `true` en los mensajes que
+escribió el bot, así que filtrarlos evita bucles de autologueo.
+
+!!! warning "Los guards reciben argumentos `unknown`"
+    La firma del predicado es `(...args: unknown[])`, así que `@guard((msg: Message) => !msg.me)`
+    **no** compila con `strict`. Deja que el parámetro se infiera y castea dentro del cuerpo, como en
+    `@guard((msg) => !(msg as Message).me)`.
+
+---
+
+## Variante: `@Bot` con opciones por defecto
+
+`@Bot(defaults)` convierte cualquier clase en una subclase de `WhatsAppBot` y fusiona las opciones
+que pasas en la construcción sobre sus valores por defecto:
+
+```typescript title="bot-decorated.ts"
+import { FileSystemEngine } from "@arcaelas/whatsapp";
+import { WhatsAppBot, Bot, connect } from "@arcaelas/whatsapp/decorators";
+
+@Bot({
+  engine: new FileSystemEngine(".sessions/bot"),
+  phone: 5491112345678,
+})
+class Staging extends WhatsAppBot {
+  @connect()
+  on_open() {
+    console.log("conectado");
+  }
+}
+
+const bot = new Staging({ engine: new FileSystemEngine(".sessions/staging") });
+await bot.connect();
+```
+
+!!! warning "Mantén `extends WhatsAppBot`"
+    Los decoradores Stage 3 no pueden cambiar el tipo declarado de una clase. `@Bot` produce el
+    objeto correcto en runtime, pero sin `extends WhatsAppBot` TypeScript no verá `connect()` ni
+    `disconnect()` en tu clase.
 
 ---
 
@@ -183,13 +251,13 @@ Logger genérico de entrantes que demuestra la suscripción plana a eventos con 
 yarn tsx bot.ts
 ```
 
-La primera ejecución imprime un PIN (o escribe `qr.png`). Empareja el teléfono, observa la línea `[lifecycle] connected`, y luego envía:
+La primera ejecución imprime un PIN (o escribe `qr.png`). Empareja el teléfono, observa la línea `[lifecycle] conectado` y luego envía:
 
 - `/help` — el listado de ayuda de comandos.
-- `/echo hello world` — el bot responde `hello world`.
+- `/echo hola mundo` — el bot responde `hola mundo`.
 - `/shutdown` — solo el teléfono admin puede dispararlo.
 
-Mientras corre, el log `[heartbeat]` tickea cada 30 segundos, y cada mensaje entrante fluye por el workflow `talk` y el logger genérico.
+Mientras corre, el log `[heartbeat]` late cada 30 segundos, `[sweep]` corre un minuto después de que terminó el barrido anterior, y cada mensaje entrante fluye por el workflow `talk` y por el logger genérico.
 
 ---
 

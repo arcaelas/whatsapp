@@ -2,7 +2,7 @@
 
 Un ejemplo mínimo end-to-end: un único archivo que se conecta a WhatsApp, loggea cada mensaje entrante y responde `pong` cada vez que recibe `ping`.
 
-Este es el "hola mundo" de `@arcaelas/whatsapp` v3. Todo lo que necesitas vive en un solo archivo: creación del motor, handlers de eventos, una respuesta y un apagado limpio.
+Este es el "hola mundo" de `@arcaelas/whatsapp`. Todo lo que necesitas vive en un solo archivo: creación del motor, handlers de eventos, una respuesta y un apagado limpio.
 
 ---
 
@@ -81,8 +81,10 @@ phone: 584144709840,
 
 Cuando `phone` está establecido, el primer connect emite un **PIN** (string); tipéalo en WhatsApp bajo *Dispositivos vinculados > Vincular con número de teléfono*. Omite `phone` y recibirás un **Buffer PNG** con el código QR.
 
-!!! tip "Consejo"
-    Durante el desarrollo, escanea un QR fresco con la app móvil de WhatsApp para confirmar el flujo de PIN. Una vez emparejado, el motor recuerda la sesión y se salta este paso en cada ejecución subsecuente.
+!!! tip "Forzar el QR"
+    `method: 'qr'` mantiene el número configurado pero entrega un QR en lugar del PIN. Sin `phone` la
+    opción se ignora, porque el PIN no puede pedirse sin número. Una vez emparejado, el motor
+    recuerda la sesión y se salta este paso en cada ejecución subsecuente.
 
 ### 3. Eventos de ciclo de vida
 

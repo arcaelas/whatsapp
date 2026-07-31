@@ -137,12 +137,14 @@ Cada entidad expone getters puros sobre su documento y métodos que actúan cont
 const person = await wa.Contact.get('584144709840');   // teléfono, JID o LID
 const page = await wa.Contact.list(0, 50);
 
-person.name      // agenda → nombre público → teléfono
-person.phone     // solo del JID PN, nunca del LID; null si no es determinable
-person.jid       // '584144709840@s.whatsapp.net' | null
-person.lid       // '123456789@lid' | null
-person.photo     // URL de la foto | null
-await person.chat();
+if (person) {
+    person.name      // agenda → nombre público → nombre verificado → teléfono
+    person.phone     // solo del JID PN, nunca del LID; null si no es determinable
+    person.jid       // '584144709840@s.whatsapp.net' | null
+    person.lid       // '123456789@lid' | null
+    person.photo     // URL de la foto | null
+    await person.chat();
+}
 ```
 
 `get` lee del motor y, si el contacto no está persistido, lo descubre por red y lo materializa.
@@ -153,25 +155,27 @@ await person.chat();
 const chat = await wa.Chat.get('584144709840');
 const chats = await wa.Chat.list(0, 50);
 
-chat.id        // teléfono en contactos; id crudo en grupos y LIDs
-chat.name
-chat.type      // 'contact' | 'group'
-chat.archived  // boolean
-chat.pinned    // boolean
-chat.muted     // fecha ISO UTC hasta la que está silenciado, o null
-chat.count     // mensajes sin leer
+if (chat) {
+    chat.id        // teléfono en contactos; id crudo en grupos y LIDs
+    chat.name
+    chat.type      // 'contact' | 'group'
+    chat.archived  // boolean
+    chat.pinned    // boolean
+    chat.muted     // fecha ISO UTC hasta la que está silenciado, o null
+    chat.count     // mensajes sin leer
 
-await chat.content();    // descripción del grupo, o bio del contacto en un 1:1
-await chat.messages(0, 50);
-await chat.members(0, 50);
-await chat.typing(true);
-await chat.recording(true);
-await chat.archive(true);
-await chat.pin(true);          // false si ya hay 3 fijados: WhatsApp descarta el cuarto
-await chat.mute('2026-08-01T10:00:00Z');   // o false para desactivar
-await chat.seen();             // marca el chat completo como leído
-await chat.clear();            // vacía los mensajes, conserva el chat
-await chat.delete();           // elimina el chat (sale del grupo si aplica)
+    await chat.content();    // descripción del grupo, o bio del contacto en un 1:1
+    await chat.messages(0, 50);
+    await chat.members(0, 50);
+    await chat.typing(true);
+    await chat.recording(true);
+    await chat.archive(true);
+    await chat.pin(true);          // false si ya hay 3 fijados: WhatsApp descarta el cuarto
+    await chat.mute('2026-08-01T10:00:00Z');   // o false para desactivar
+    await chat.seen();             // marca el chat completo como leído
+    await chat.clear();            // vacía los mensajes, conserva el chat
+    await chat.delete();           // elimina el chat (sale del grupo si aplica)
+}
 ```
 
 ### Message
@@ -210,7 +214,7 @@ await msg.react('❤️');   // emoji vacío la retira
 await msg.star(true);
 await msg.seen();
 await msg.edit('texto corregido');       // texto, imagen o video propios
-await msg.forward(otro_chat);
+await msg.forward('584121234567');       // CID, Chat o Contact destino
 await msg.delete();                      // solo en mi dispositivo
 await msg.delete(true);                  // para todos
 
@@ -295,15 +299,15 @@ Un motor es un almacén key/value de strings bajo rutas jerárquicas. El contrat
 
 ```ts
 interface Engine {
-    get(path): Promise<string | null>;
-    set(path, value, score?): Promise<void>;
-    unset(path): Promise<boolean>;           // borra el sub-árbol
-    list(path, offset?, limit?): Promise<string[]>;   // hijos directos, score DESC
-    count(path): Promise<number>;
+    get(path: string): Promise<string | null>;
+    set(path: string, value: string, score?: number): Promise<void>;
+    unset(path: string): Promise<boolean>;                          // borra el sub-árbol
+    list(path: string, offset?: number, limit?: number): Promise<string[]>;   // hijos directos, score DESC
+    count(path: string): Promise<number>;
     clear(): Promise<void>;
 
-    get_buffer?(path): Promise<Buffer | null>;        // opcional: binarios sin base64
-    set_buffer?(path, data, score?): Promise<void>;
+    get_buffer?(path: string): Promise<Buffer | null>;              // opcional: binarios sin base64
+    set_buffer?(path: string, data: Buffer, score?: number): Promise<void>;
 }
 ```
 
@@ -321,7 +325,7 @@ new RedisEngine(new IORedis(), 'wa:584144709840');
 new S3Engine({ s3: new S3Client({}), bucket: 'sesiones', basedir: 'wa/584144709840' });
 ```
 
-`SQLiteEngine` es el más eficiente de los integrados. Sobre un chat real de 55.146 mensajes, frente al filesystem: 220 MB → 64 MB en disco, primera página 115 ms → 0,6 ms, y dos archivos en lugar de ~110.000 inodes.
+`SQLiteEngine` es el más eficiente de los integrados. Sobre un chat real de 55.146 mensajes, frente al filesystem: 220 MB → 64 MB en disco, primer `list` 115 ms → 0,6 ms, y dos archivos en total en lugar de ~110.000 inodes.
 
 Cada cliente necesita **su propio** motor: nunca compartas una instancia entre dos cuentas.
 
@@ -330,7 +334,7 @@ Cada cliente necesita **su propio** motor: nunca compartas una instancia entre d
 ## Bots con decoradores
 
 ```ts
-import { FileSystemEngine } from '@arcaelas/whatsapp';
+import { FileSystemEngine, type Chat, type Message } from '@arcaelas/whatsapp';
 import { WhatsAppBot, connect, command, from, every } from '@arcaelas/whatsapp/decorators';
 
 class Bot extends WhatsAppBot {
@@ -340,12 +344,12 @@ class Bot extends WhatsAppBot {
     }
 
     @command('/precio')
-    async price(msg, chat, args) {
+    async price(msg: Message, chat: Chat, args: string[]) {
         await msg.text(`Consultando ${args[0] ?? 'el catálogo'}…`);
     }
 
     @from('584144709840')
-    async only_admin(msg) {
+    async only_admin(msg: Message) {
         await msg.react('👑');
     }
 
@@ -368,9 +372,12 @@ Decoradores disponibles: `@on`, `@once`, `@connect`, `@disconnect`, `@command`, 
 **Descargar el media de cada imagen recibida**
 
 ```ts
+import { writeFile } from 'node:fs/promises';
+import { Image } from '@arcaelas/whatsapp';
+
 wa.on('message:created', async (msg) => {
     if (msg instanceof Image) {
-        await fs.writeFile(`${msg.id}.jpg`, await msg.content());
+        await writeFile(`${msg.id}.jpg`, await msg.content());
     }
 });
 ```
@@ -388,7 +395,7 @@ wa.on('message:created', async (msg, chat) => {
 **Reconectar con límite y cerrar en silencio**
 
 ```ts
-const wa = new WhatsApp({ engine, phone, reconnect: { max: 5, interval: 30 } });
+const wa = new WhatsApp({ engine, phone: 584144709840, reconnect: { max: 5, interval: 30 } });
 await wa.disconnect({ silent: true });   // no emite `disconnected`
 ```
 

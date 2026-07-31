@@ -16,20 +16,26 @@ import { normalize_path, split_path } from '~/lib/store/engine/lib';
 export interface RedisClient {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<unknown>;
-  del(keys: string | string[]): Promise<unknown>;
+  // `del`, `zrem` y los de buffer se declaran variádicos porque ioredis los expone con
+  // sobrecargas de callback: una firma fija no le resulta asignable bajo `strictFunctionTypes`
+  // y obligaría al consumidor a castear su propio cliente.
+  // `del`, `zrem` and the buffer ones are declared variadic because ioredis exposes them with
+  // callback overloads: a fixed signature is not assignable to it under `strictFunctionTypes`
+  // and would force consumers to cast their own client.
+  del(...keys: unknown[]): Promise<unknown>;
   mget(keys: string[]): Promise<(string | null)[]>;
   scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
   zadd(key: string, score: number, member: string): Promise<unknown>;
-  zrem(key: string, members: string | string[]): Promise<unknown>;
+  zrem(...args: unknown[]): Promise<unknown>;
   zrevrange(key: string, start: number, stop: number): Promise<string[]>;
   zcard(key: string): Promise<number>;
-  getBuffer?(key: string): Promise<Buffer | null>;
-  setBuffer?(key: string, value: Buffer): Promise<unknown>;
+  getBuffer?(...args: unknown[]): Promise<Buffer | null>;
+  setBuffer?(...args: unknown[]): Promise<unknown>;
   pipeline?(): {
     set(key: string, value: string): unknown;
-    del(keys: string | string[]): unknown;
+    del(...keys: unknown[]): unknown;
     zadd(key: string, score: number, member: string): unknown;
-    zrem(key: string, members: string | string[]): unknown;
+    zrem(...args: unknown[]): unknown;
     exec(): Promise<unknown>;
   };
 }

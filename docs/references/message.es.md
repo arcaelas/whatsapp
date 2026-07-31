@@ -1,101 +1,99 @@
 # Message
 
-`Message` es la clase raíz para cada mensaje entrante o saliente de WhatsApp. Sigue una arquitectura de clase base única: `Message` posee la API completa de instancia (getters, persistencia, reacciones, respuestas, forwarding, eliminación, ediciones), y nueve subclases especializadas sobrescriben `content()` y añaden helpers específicos del payload:
+`Message` es la clase raíz para cada mensaje entrante o saliente de WhatsApp. Posee toda la API de
+instancia — getters, resolución de autor/chat, contenido, reacciones, respuestas, forwarding,
+edición, eliminación — y diez subclases especializadas añaden lo propio de cada payload:
 
-- `Text` — conversación y texto extendido.
-- `Image` / `Video` / `Audio` — medios con helpers `stream()` y `content()`.
-- `Gps` — ubicación estática y en vivo, con getters `lat`, `lng`, `link`, `live`.
-- `Poll` — encuestas con múltiples opciones, agregación de votos y `select()` para votar.
-- `Document` — archivos enviados como documento (PDF, imagen, audio, video, etc.), con getters `file_name`, `size`, `pages`, `title`.
-- `VCard` — tarjeta(s) de contacto; getter `contacts` con `{ name, phone }[]`.
-- `Event` — evento de calendario; getters `name`, `start`, `end`, `canceled`, `link`, `place` (descripción en `caption`).
+| Subclase | Añade |
+| -------- | ----- |
+| `Text` | `preview()` — la tarjeta del enlace embebido. |
+| `Image` | `width`, `height`, `size`, `thumb()` |
+| `Video` | `width`, `height`, `duration`, `size`, `thumb()` |
+| `Audio` | `ptt`, `duration`, `size`, `waveform` |
+| `Sticker` | `width`, `height`, `animated`, `size` |
+| `Document` | `name`, `pages`, `size` |
+| `Location` | `lat`, `lng`, `live`, `link` |
+| `Poll` | `multiple`, `options`, `votes()`, `select()` |
+| `VCard` | `contacts` |
+| `Event` | `name`, `start`, `end`, `canceled`, `link`, `place` |
 
-La factory `message(wa)` devuelve un objeto delegado montado como `wa.Message`, que expone tanto las subclases (para verificaciones `instanceof`) como los métodos estáticos de envío/CRUD.
+La factory `message(wa, raw)` evalúa el tipo y devuelve la instancia de la subclase correcta. Acepta
+tanto un documento persistido como un `WAMessage` crudo de baileys — en ese caso el documento (id,
+tipo, autor, caption, mime, fechas) se deriva ahí mismo.
 
 ---
 
 ## Importación
 
 ```typescript title="imports.ts"
-import { WhatsApp, RedisEngine } from "@arcaelas/whatsapp";
+import {
+  WhatsApp,
+  Message,
+  message,
+  Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event,
+} from "@arcaelas/whatsapp";
 ```
 
-Las subclases viven en `wa.Message`:
-
-```typescript title="subclasses.ts"
-// wa.Message.Text, wa.Message.Image, wa.Message.Video,
-// wa.Message.Audio, wa.Message.Gps, wa.Message.Poll, wa.Message.Document,
-// wa.Message.VCard, wa.Message.Event
-```
+Las subclases son **exports del módulo**. Las mismas clases se re-exponen además en el delegado del
+cliente (`wa.Message.Poll`, `wa.Message.Image`, …), así que ambas formas del chequeo `instanceof`
+son equivalentes.
 
 ---
 
-## Constructor
+## Detección de tipo en runtime
 
-Las instancias son construidas por la librería (`wa.Message.get`, `wa.Message.list`, payloads de eventos, resultados de `send*`). Si debes construir una manualmente, la forma es:
-
-```typescript title="ctor.ts"
-import type { IMessage } from "@arcaelas/whatsapp";
-
-new wa.Message.Text({ wa, doc });
-// doc: IMessage — el documento persistido desde el motor.
-```
-
-Bajo el capó, cada helper de envío llama a un `build_instance(doc)` interno que elige la subclase correcta según `doc.type` (`'text' | 'image' | 'video' | 'audio' | 'location' | 'poll' | 'document' | 'vcard' | 'event'`).
-
----
-
-## Jerarquía de clases y detección de tipo en runtime
-
-Usa `instanceof` contra las subclases expuestas en `wa.Message`:
-
-```typescript title="instanceof.ts" hl_lines="2 5 9 13 16 19"
+```typescript title="instanceof.ts" hl_lines="2 6 11 15 19 23"
 wa.on("message:created", async (msg, chat) => {
-  if (msg instanceof wa.Message.Text) {
-    console.log("text:", msg.caption);
+  if (msg instanceof Text) {
+    console.log("texto:", msg.caption);
+    console.log("tarjeta del enlace:", await msg.preview());
   }
-  if (msg instanceof wa.Message.Image) {
+  if (msg instanceof Image) {
     const bytes = await msg.content();
-    console.log("image bytes:", bytes.length, "caption:", msg.caption);
+    console.log("imagen:", msg.width, "x", msg.height, bytes.length, "bytes");
   }
-  if (msg instanceof wa.Message.Video) {
-    const stream = await msg.stream();
-    // pipe to S3, ffmpeg, etc.
+  if (msg instanceof Video) {
+    const stream = await msg.stream(); // canalizar a S3, ffmpeg, …
+    console.log("video:", msg.duration, "s");
   }
-  if (msg instanceof wa.Message.Audio) {
-    console.log("voice note?", msg.ptt);
+  if (msg instanceof Audio) {
+    console.log("¿nota de voz?", msg.ptt, "puntos de onda:", msg.waveform.length);
   }
-  if (msg instanceof wa.Message.Gps) {
-    console.log("at", msg.lat, msg.lng, "live?", msg.live);
+  if (msg instanceof Sticker) {
+    console.log("¿sticker animado?", msg.animated);
   }
-  if (msg instanceof wa.Message.Poll) {
-    console.log("question:", msg.caption, "opts:", msg.options);
+  if (msg instanceof Document) {
+    console.log("archivo:", msg.name, msg.pages, "páginas", msg.size, "bytes");
   }
-  if (msg instanceof wa.Message.Document) {
-    console.log("file:", msg.file_name, msg.size, "bytes");
+  if (msg instanceof Location) {
+    console.log("en", msg.lat, msg.lng, "¿en vivo?", msg.live, msg.link);
   }
-  if (msg instanceof wa.Message.VCard) {
-    console.log("contacts:", msg.contacts);
+  if (msg instanceof Poll) {
+    console.log("pregunta:", msg.caption, "opciones:", msg.options);
   }
-  if (msg instanceof wa.Message.Event) {
-    console.log("event:", msg.name, "@", msg.start, msg.caption);
+  if (msg instanceof VCard) {
+    console.log("contactos:", msg.contacts);
+  }
+  if (msg instanceof Event) {
+    console.log("evento:", msg.name, "@", msg.start);
   }
 });
 ```
 
-La vía rápida es `msg.type`, un getter síncrono que devuelve `MessageType`:
+La vía rápida es `msg.type`, un getter síncrono:
 
 ```typescript title="switch-type.ts"
 switch (msg.type) {
-  case "text": /* ... */ break;
-  case "image": /* ... */ break;
-  case "video": /* ... */ break;
-  case "audio": /* ... */ break;
-  case "location": /* ... */ break;
-  case "poll": /* ... */ break;
-  case "document": /* ... */ break;
-  case "vcard": /* ... */ break;
-  case "event": /* ... */ break;
+  case "text":     break;
+  case "image":    break;
+  case "video":    break;
+  case "audio":    break;
+  case "sticker":  break;
+  case "document": break;
+  case "location": break;
+  case "poll":     break;
+  case "vcard":    break;
+  case "event":    break;
 }
 ```
 
@@ -103,260 +101,203 @@ switch (msg.type) {
 
 ## Propiedades
 
-### `Message` base
-
 | Propiedad | Tipo | Descripción |
 | --------- | ---- | ----------- |
-| `id` | `string` | Id del mensaje (el `key.id` en Baileys). |
-| `cid` | `string` | JID del chat al que pertenece el mensaje. |
-| `type` | `MessageType` | `'text' \| 'image' \| 'video' \| 'audio' \| 'location' \| 'poll' \| 'document'`. |
-| `from` | `string` | JID del autor (síncrono, sin hidratación del contacto). |
-| `mid` | `string \| null` | Id del mensaje citado (referencia de reply). |
-| `me` | `boolean` | `true` cuando el mensaje fue enviado por la cuenta autenticada. |
-| `caption` | `string` | Texto / caption de medios / pregunta de encuesta. Vacío para medios puros sin caption. |
-| `starred` | `boolean` | Si el mensaje está destacado. |
-| `forwarded` | `boolean` | Si el mensaje fue reenviado. |
-| `once` | `boolean` | `true` cuando el mensaje tiene una expiración efímera establecida. |
-| `created_at` | `number` | Timestamp en milisegundos. |
-| `deleted_at` | `number \| null` | Timestamp absoluto de expiración cuando es efímero. |
-| `status` | `MessageStatus` | Estado de entrega (ver enum abajo). |
-| `edited` | `boolean` | `true` después de que `edit()` tuvo éxito. |
+| `id` | `string` | Identificador del mensaje (`key.id` en baileys). |
+| `cid` | `string` | Identificador del chat al que pertenece el mensaje. |
+| `mid` | `string \| null` | Identificador del mensaje citado, o `null`. |
+| `from` | `string` | JID del autor, para acceso síncrono (sin hidratación). |
+| `me` | `boolean` | `true` cuando el autor es la cuenta autenticada. |
+| `type` | `'text' \| 'image' \| 'video' \| 'audio' \| 'sticker' \| 'document' \| 'location' \| 'poll' \| 'vcard' \| 'event'` | Tipo del mensaje. |
+| `mime` | `string` | `text/plain` en texto, `text/json` en poll/location/vcard/event, el MIME real en media. |
+| `caption` | `string` | Texto del mensaje o pie del media (la pregunta en una encuesta, la descripción en un evento). |
+| `status` | `'error' \| 'pending' \| 'sent' \| 'delivered' \| 'read' \| 'played'` | Estado de entrega legible. |
+| `read` | `boolean` | `true` cuando el estado llegó a `read` o `played`. |
+| `starred` | `boolean` | `true` si el mensaje está destacado. |
+| `forwarded` | `boolean` | `true` si el mensaje fue reenviado. |
+| `edited` | `boolean` | `true` si el mensaje fue editado. |
+| `once` | `boolean` | `true` si es de una sola lectura (view-once). |
+| `created_at` | `string` | Fecha de creación como **string ISO UTC**. |
+| `expires_at` | `string \| null` | Vencimiento de un mensaje temporal en **ISO UTC**, o `null`. |
 
-### `MessageStatus`
+!!! warning "Las fechas son strings ISO y `status` es una palabra"
+    `created_at` / `expires_at` son `string` (`'2026-07-31T14:05:03.000Z'`), no números epoch, y
+    `status` es un string legible, no un enum numérico. Los valores numéricos crudos siguen en
+    `_raw.created_at`, `_raw.deleted_at` y `_raw.status` si necesitas hacer aritmética:
 
-```typescript title="MessageStatus.ts"
-export enum MessageStatus {
-  ERROR = 0,
-  PENDING = 1,
-  SERVER_ACK = 2,
-  DELIVERED = 3,
-  READ = 4,
-  PLAYED = 5,
-}
-```
-
-### Extras de subclases
-
-`Audio`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `ptt` | `boolean` | `true` para notas de voz push-to-talk. |
-
-`Gps`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `lat` | `number` | Latitud en grados. |
-| `lng` | `number` | Longitud en grados. |
-| `link` | `string` | URL de Google Maps en zoom 15. |
-| `live` | `boolean` | `true` para `liveLocationMessage`. |
-
-`Poll`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `multiple` | `boolean` | `true` cuando se pueden seleccionar múltiples opciones. |
-| `options` | `{ content: string; count: number }[]` | Opciones actualizadas con conteos de votos en vivo. |
-
-`Document`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `file_name` | `string` | Nombre del archivo. |
-| `size` | `number` | Tamaño en bytes (0 si se desconoce). |
-| `pages` | `number` | Número de páginas (PDF); 0 si no aplica. |
-| `title` | `string` | Título del documento. |
-
-`VCard`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `contacts` | `{ name: string; phone: string }[]` | Tarjetas de contacto (nombre + teléfono parseado del vCard). |
-
-`Event`
-
-| Propiedad | Tipo | Notas |
-| --------- | ---- | ----- |
-| `name` | `string` | Nombre del evento. |
-| `caption` | `string` | Descripción (heredado de `Message`). |
-| `start` | `number` | Epoch ms de inicio. |
-| `end` | `number \| null` | Epoch ms de fin, o `null`. |
-| `canceled` | `boolean` | `true` si el evento fue cancelado. |
-| `link` | `string` | Link de unión (audio/video), si aplica. |
-| `place` | `{ lat: number; lng: number } \| null` | Ubicación del evento, o `null`. |
-
-### `IMessage`
-
-```typescript title="IMessage.ts"
-import type { WAMessage } from "baileys";
-
-export type MessageType =
-  | "text" | "image" | "video" | "audio" | "location" | "poll" | "document" | "vcard" | "event";
-
-export interface IMessage {
-  id: string;
-  cid: string;
-  mid: string | null;
-  me: boolean;
-  type: MessageType;
-  author: string;
-  status: MessageStatus;
-  starred: boolean;
-  forwarded: boolean;
-  created_at: number;
-  deleted_at: number | null;
-  mime: string;
-  caption: string;
-  edited: boolean;
-  raw: WAMessage;
-}
-```
+    ```typescript
+    const age_ms = Date.now() - new Date(msg.created_at).getTime();
+    ```
 
 ---
 
 ## Métodos
 
-### `chat(): Promise<Chat>`
+### `author()` / `chat()`
 
-Devuelve el `Chat` al que pertenece este mensaje. Prefiere el snapshot persistido; recurre a una instancia mínima construida desde el CID.
-
-```typescript title="chat.ts"
-const chat = await msg.chat();
-await chat.typing(true);
+```typescript
+author(): Promise<Contact>
+chat(): Promise<Chat>
 ```
 
-### `author(): Promise<Contact>`
+Resuelven el remitente y la conversación desde el motor, cayendo en una instancia mínima cuando el
+documento todavía no está persistido.
 
-Resuelve el remitente como un `Contact` vía `wa.Contact.get(msg.from)`. Recurre a una instancia mínima si el contacto aún no está en el motor.
-
-```typescript title="author.ts"
+```typescript title="author-chat.ts"
 const sender = await msg.author();
-console.log(sender.name, sender.phone);
+const chat   = await msg.chat();
+
+console.log(sender.name, sender.phone, chat.name);
 ```
 
-### `content(): Promise<Buffer>`
+### `message()`
 
-Devuelve el payload del mensaje como un `Buffer`. Cada subclase sobrescribe este método:
+```typescript
+message(): Promise<Message | null>
+```
 
-| Subclase | Retorno |
-| -------- | ------- |
-| `Text` | `Buffer.from(caption, 'utf-8')` — sin round-trip al motor. |
-| `Image` / `Video` / `Audio` / `Document` | Cuerpo binario (caché del motor → fallback a `downloadMediaMessage`). |
-| `Gps` / `Poll` / `VCard` / `Event` | Bytes persistidos raw, si los hay. |
-| `Message` base | Bytes persistidos raw, o buffer vacío. |
+El mensaje **citado** cuando hay `mid`, `null` si no.
+
+```typescript title="quoted.ts"
+const quoted = await msg.message();
+
+if (quoted) {
+  console.log("respondiendo a:", quoted.caption);
+}
+```
+
+### `content()` / `stream()`
+
+```typescript
+content(): Promise<Buffer>
+stream(): Promise<Readable>
+```
+
+El contenido del mensaje. Las subclases de media leen primero la caché del motor y caen en una
+descarga de baileys; el resto devuelve lo que se persistió al recibirlo:
+
+| Tipo | Contenido |
+| ---- | --------- |
+| `text` | Texto UTF-8. |
+| `image` / `video` / `audio` / `sticker` / `document` | Binario descifrado. |
+| `location` | JSON `{ lat, lng }`. |
+| `poll` | JSON `{ content, options: [{ content }] }`. |
+| `vcard` | Las vCards crudas. |
+| `event` | JSON del mensaje de evento. |
 
 ```typescript title="content.ts"
-if (msg instanceof wa.Message.Image) {
-  const bytes = await msg.content();
-  // await uploadToS3(bytes);
-}
-```
-
-### `stream(): Promise<Readable>` *(solo Image/Video/Audio/Document)*
-
-Devuelve un `Readable` que puedes canalizar sin cargar todo el medio en memoria. Cascada a través de caché del motor → `downloadMediaMessage` → buffer vacío.
-
-```typescript title="stream.ts" hl_lines="4 5"
 import { createWriteStream } from "node:fs";
+import { writeFile } from "node:fs/promises";
 
-if (msg instanceof wa.Message.Video) {
-  const src = await msg.stream();
-  const dst = createWriteStream("./out.mp4");
-  src.pipe(dst);
+if (msg instanceof Image) {
+  await writeFile(`${msg.id}.jpg`, await msg.content());
+}
+
+if (msg instanceof Video) {
+  (await msg.stream()).pipe(createWriteStream(`${msg.id}.mp4`));
 }
 ```
 
-### `react(emoji: string)`
+`content()` devuelve un buffer vacío cuando no se guardó nada y el media ya no se puede descargar
+(contenido vencido).
 
-Reacciona al mensaje. Pasa un string vacío para eliminar la reacción.
+### `reactions()`
+
+```typescript
+reactions(): Promise<{ emoji: string; count: number }[]>
+```
+
+Las reacciones del mensaje agrupadas por emoji con su conteo.
+
+```typescript title="reactions.ts"
+for (const { emoji, count } of await msg.reactions()) {
+  console.log(emoji, count);
+}
+```
+
+### `react(emoji)`
+
+Reacciona al mensaje; un string vacío retira tu reacción.
 
 ```typescript title="react.ts"
-await msg.react("thumbs-up");
-await msg.react(""); // eliminar
+await msg.react("❤️");
+await msg.react(""); // retirar
 ```
 
-### `forward(target: ForwardTarget)`
+### `star(value)` / `seen()`
 
-`ForwardTarget = string | Chat | Contact`. Acepta un CID, un `Chat` o un `Contact` (usa `(await contact.chat()).id`). Intenta un relay nativo primero y luego recurre a reenviar el payload como un nuevo mensaje para el tipo de contenido.
+```typescript title="star-seen.ts"
+await msg.star(true);
+await msg.seen();
+```
+
+### `edit(caption)`
+
+Edita el pie de un mensaje **propio** (`me === true`) de tipo `text`, `image` o `video`. Devuelve
+`false` para cualquier otro caso.
+
+```typescript title="edit.ts"
+if (msg.me) {
+  await msg.edit("Contenido actualizado");
+}
+```
+
+### `forward(target)`
+
+```typescript
+forward(target: string | Chat | Contact): Promise<boolean>
+```
+
+Reenvía el mensaje a otro chat. Un `string` es cualquier identificador (teléfono, JID, LID, id de
+grupo); un `Chat` usa su identificador crudo; un `Contact` usa su JID (o su LID).
 
 ```typescript title="forward.ts"
-await msg.forward("5215555555555@s.whatsapp.net");
+await msg.forward("5215555555555");
 
 const chat = await wa.Chat.get("120363000000000000@g.us");
 await msg.forward(chat!);
 
-const contact = await wa.Contact.get("5215555555555");
-await msg.forward(contact!);
+const person = await wa.Contact.get("5215555555555");
+await msg.forward(person!);
 ```
 
-### `edit(text: string)`
+### `delete(all?)`
 
-Edita el texto/caption de un mensaje del que eres autor (`msg.me === true`). Reescribe el documento del motor y cambia `edited = true`.
-
-```typescript title="edit.ts"
-if (msg.me) {
-  await msg.edit("Updated content");
-}
+```typescript
+delete(all = false): Promise<boolean>
 ```
 
-### `delete(all: boolean = true)`
-
-Elimina el mensaje. `all = true` (por defecto) lo elimina para todos; `all = false` lo elimina solo del dispositivo actual.
+!!! warning "Por defecto elimina solo para ti"
+    `delete()` elimina el mensaje **solo en este dispositivo** (`deleteForMe`). Pasa `true` para
+    revocarlo para todos. En ambos casos el documento se elimina del motor.
 
 ```typescript title="delete.ts"
-await msg.delete();      // eliminar para todos
-await msg.delete(false); // eliminar solo para mí
+await msg.delete();     // solo para mí (por defecto)
+await msg.delete(true); // para todos
 ```
 
-### `star(value: boolean)`
+---
 
-Destaca o retira destacado del mensaje y persiste la nueva bandera.
+## Respuestas
 
-```typescript title="star.ts"
-await msg.star(true);
-```
+Cada helper de envío está reflejado en la instancia como respuesta: el mensaje actual se cita
+automáticamente.
 
-### `seen()`
-
-Marca este mensaje individual como leído.
-
-```typescript title="seen.ts"
-await msg.seen();
-```
-
-### `watch(handler: (msg: Message) => void): () => void`
-
-Se suscribe a eventos `message:updated` filtrados a este mensaje. Devuelve una función de desuscripción.
-
-```typescript title="watch.ts"
-const unsubscribe = msg.watch((updated) => {
-  console.log("status ->", updated.status);
-});
-
-// luego:
-unsubscribe();
-```
-
-### Helpers de respuesta
-
-Cada helper de envío está reflejado en la instancia como una respuesta (rellena automáticamente `mid` con el id del mensaje actual).
-
-| Método | Signatura |
-| ------ | --------- |
-| `msg.text(caption, opts?)` | `(string, SendOptions) => Promise<Message \| null>` |
-| `msg.image(buf, opts?)` | `(Buffer, SendMediaOptions) => Promise<Message \| null>` |
-| `msg.video(buf, opts?)` | `(Buffer, SendMediaOptions) => Promise<Message \| null>` |
-| `msg.audio(buf, opts?)` | `(Buffer, SendAudioOptions) => Promise<Message \| null>` |
-| `msg.location(loc, opts?)` | `(LocationOptions, SendOptions) => Promise<Message \| null>` |
-| `msg.poll(poll, opts?)` | `(PollOptions, SendOptions) => Promise<Message \| null>` |
-| `msg.document(buf, opts?)` | `(Buffer, SendDocumentOptions) => Promise<Message \| null>` |
-| `msg.vcard(contacts, opts?)` | `(VCardInput[], SendOptions) => Promise<Message \| null>` |
-| `msg.event(data, opts?)` | `(EventInput, SendOptions) => Promise<Message \| null>` |
+| Método | Firma |
+| ------ | ----- |
+| `msg.text(caption, extra?)` | `(string, { once? }) => Promise<Message \| null>` |
+| `msg.image(buf, extra?)` | `(Buffer, { once?, caption? }) => Promise<Message \| null>` |
+| `msg.video(buf, extra?)` | `(Buffer, { once?, caption? }) => Promise<Message \| null>` |
+| `msg.audio(buf, extra?)` | `(Buffer, { once?, ptt? }) => Promise<Message \| null>` |
+| `msg.location(loc, extra?)` | `({ lat, lng }, { once? }) => Promise<Message \| null>` |
+| `msg.poll(input, extra?)` | `({ content, options }, { once?, multiple? }) => Promise<Message \| null>` |
+| `msg.document(buf, extra)` | `(Buffer, { file_name, mimetype?, caption?, once? }) => Promise<Message \| null>` |
+| `msg.vcard(contacts, extra?)` | `({ name, phone }[], { once? }) => Promise<Message \| null>` |
+| `msg.event(data, extra?)` | `({ name, caption?, start, end?, place? }, { once? }) => Promise<Message \| null>` |
 
 ```typescript title="reply.ts"
-wa.on("message:created", async (msg, chat) => {
-  if (msg instanceof wa.Message.Text && msg.caption.toLowerCase() === "ping") {
+wa.on("message:created", async (msg) => {
+  if (!msg.me && msg.caption.toLowerCase() === "ping") {
     await msg.text("pong");
   }
 });
@@ -364,203 +305,186 @@ wa.on("message:created", async (msg, chat) => {
 
 ---
 
-## Flujo de encuestas
+## Estáticos (`Message.*` y `wa.Message.*`)
 
-Las encuestas son un caso especial. `Poll.options` expone conteos de votos en vivo, y `Poll.select(index | indices)` emite un voto desde la cuenta autenticada. Usa `multiple` para saber si se puede seleccionar más de una opción.
+Cada estático recibe el **cliente como primer argumento**. El delegado `wa.Message` expone los
+mismos métodos con el cliente ya aplicado, que es lo que usas normalmente:
 
-```typescript title="poll.ts" hl_lines="8 16 17"
-// Crear una encuesta
-const sent = await wa.Message.poll("5215555555555@s.whatsapp.net", {
-  content: "What's for lunch?",
+```typescript
+await Message.text(wa, cid, "hola");   // cliente explícito
+await wa.Message.text(cid, "hola");    // la misma llamada por el delegado
+```
+
+### Lectura
+
+| Estático | Firma |
+| -------- | ----- |
+| `Message.get` | `(wa, cid, mid) => Promise<Message \| null>` |
+| `Message.list` | `(wa, cid, offset?, limit?) => Promise<Message[]>` (por defecto `0, 50`) |
+| `Message.reactions` | `(wa, cid, mid) => Promise<{ emoji, count }[]>` |
+
+### Acción
+
+| Estático | Firma |
+| -------- | ----- |
+| `Message.react` | `(wa, cid, mid, emoji) => Promise<boolean>` |
+| `Message.star` | `(wa, cid, mid, value) => Promise<boolean>` |
+| `Message.seen` | `(wa, cid, mid) => Promise<boolean>` |
+| `Message.edit` | `(wa, cid, mid, caption) => Promise<boolean>` |
+| `Message.forward` | `(wa, cid, mid, target) => Promise<boolean>` |
+| `Message.delete` | `(wa, cid, mid, all?) => Promise<boolean>` (por defecto `false`) |
+
+### Envío
+
+```typescript title="send.ts"
+await wa.Message.text(cid, "hola", { once: true });
+await wa.Message.image(cid, buffer, { caption: "mira" });
+await wa.Message.video(cid, buffer, { caption: "demo" });
+await wa.Message.audio(cid, buffer, { ptt: true });          // ptt es true por defecto
+await wa.Message.location(cid, { lat: 8.3, lng: -62.7 });
+await wa.Message.poll(cid, {
+  content: "¿Qué pedimos?",
+  options: [{ content: "Pizza" }, { content: "Sushi" }],
+}, { multiple: true });
+await wa.Message.document(cid, buffer, { file_name: "contrato.pdf", mimetype: "application/pdf" });
+await wa.Message.vcard(cid, [{ name: "Ana", phone: "+584121234567" }]);
+await wa.Message.event(cid, { name: "Demo", start: new Date(), place: { lat: 8.3, lng: -62.7 } });
+```
+
+Cada helper de envío devuelve el `Message` creado (ya de la subclase correcta) o `null` cuando no
+hay sesión o WhatsApp rechazó el contenido.
+
+### Opciones de envío
+
+```typescript title="options.ts"
+interface SendExtra {
+  mid?: string;    // id del mensaje citado — los helpers de respuesta lo completan por ti
+  once?: boolean;  // una sola lectura (view-once)
+}
+
+// image / video: SendExtra & { caption?: string }
+// audio:         SendExtra & { ptt?: boolean }            (por defecto: true)
+// poll:          SendExtra & { multiple?: boolean }       (por defecto: false)
+// document:      SendExtra & { file_name: string; mimetype?: string; caption?: string }
+```
+
+!!! info "`file_name` es obligatorio en documentos"
+    `wa.Message.document(cid, buf, { file_name })` es el único helper de envío con una opción
+    obligatoria; `mimetype` cae por defecto en `application/octet-stream`.
+
+---
+
+## Encuestas
+
+`Poll.options` expone cada opción con su conteo de votos en vivo, `votes()` desglosa el resultado
+por votante y `select()` emite un voto desde la cuenta autenticada.
+
+```typescript title="poll.ts" hl_lines="12 19"
+const sent = await wa.Message.poll(cid, {
+  content: "¿Qué almorzamos?",
   options: [{ content: "Pizza" }, { content: "Tacos" }, { content: "Ramen" }],
 });
 
-// Reaccionar a actualizaciones de la encuesta
-wa.on("message:updated", (msg) => {
-  if (msg instanceof wa.Message.Poll) {
-    for (const opt of msg.options) {
-      console.log(opt.content, "->", opt.count);
+wa.on("message:updated", async (msg) => {
+  if (msg instanceof Poll) {
+    for (const option of msg.options) {
+      console.log(option.name, "->", option.count);  // { name, count }
+    }
+    for (const vote of await msg.votes()) {
+      console.log(vote.contact, "votó", vote.name);  // { name, contact }
     }
   }
 });
 
-// Votar (single o multi)
-if (sent instanceof wa.Message.Poll) {
-  await sent.select(0);          // votar por "Pizza"
-  await sent.select([0, 2]);     // solo funciona si `multiple === true`
+if (sent instanceof Poll) {
+  await sent.select(0);      // opción única
+  await sent.select([0, 2]); // solo tiene sentido cuando `multiple === true`
 }
 ```
 
-!!! info "Visibilidad del voto"
-    `options[].count` se agrega a partir de `pollUpdates` almacenados en el `WAMessage` subyacente. Los conteos se actualizan cuando Baileys emite `message.update` para el mensaje de encuesta; escucha `message:updated` para refrescar tu UI.
+!!! info "Los votos entrantes se descifran por ti"
+    Los votos viajan cifrados. El cliente descifra cada `pollUpdateMessage`, lo fusiona con la
+    encuesta almacenada y emite `message:updated`, así que `options` y `votes()` están siempre al
+    día.
+
+!!! warning "`select()` es best-effort"
+    Los votos emitidos se cifran y se retransmiten correctamente, pero WhatsApp **no** propaga un
+    voto emitido desde un dispositivo vinculado (companion), que es lo que esta librería es. Los
+    votos entrantes se descifran bien; tu propio voto puede no aparecer en otros dispositivos.
 
 ---
 
-## Ubicación en vivo (`Gps`)
+## Ubicación
 
-`Gps` envuelve tanto `locationMessage` (estática) como `liveLocationMessage` (en vivo). Usa `.live` para distinguirlas; los otros getters (`lat`, `lng`, `link`) son idénticos para ambas.
+`Location` cubre tanto los pines estáticos (`locationMessage`) como las ubicaciones en vivo
+(`liveLocationMessage`); `live` los distingue y `link` construye la URL de Google Maps.
 
-```typescript title="gps.ts"
+```typescript title="location.ts"
+await wa.Message.location(cid, { lat: 19.4326, lng: -99.1332 });
+
 wa.on("message:updated", (msg) => {
-  if (msg instanceof wa.Message.Gps && msg.live) {
-    console.log("live update ->", msg.lat, msg.lng, msg.link);
+  if (msg instanceof Location && msg.live) {
+    console.log("actualización en vivo ->", msg.lat, msg.lng, msg.link);
   }
 });
 ```
 
-Enviar una ubicación estática:
-
-```typescript title="send-location.ts"
-await wa.Message.location("5215555555555@s.whatsapp.net", {
-  lat: 19.4326,
-  lng: -99.1332,
-});
-```
-
-!!! warning "Ubicación en vivo"
-    La bandera `LocationOptions.live` está reservada pero aún no es consumida por la ruta de envío; el cliente solo puede enviar pins estáticos. Recibir actualizaciones en vivo está totalmente soportado a través de `message:updated`.
+!!! warning "El envío siempre es un pin estático"
+    La API de envío recibe solo `{ lat, lng }`. Emitir una ubicación *en vivo* no está soportado;
+    recibir sus actualizaciones sí, vía `message:updated`.
 
 ---
 
-## Audio (`ptt`)
+## Audio
 
-`Audio.ptt` diferencia las notas de voz (push-to-talk) de los archivos de audio regulares. Al enviar, la bandera `SendAudioOptions.ptt` controla esto (por defecto `true` — nota de voz).
+`ptt` distingue las notas de voz de los archivos de audio, y `waveform` devuelve los puntos de
+amplitud 0-100 del protocolo, listos para pintar.
 
 ```typescript title="audio.ts"
 import { readFileSync } from "node:fs";
 
-// Enviar una nota de voz (por defecto)
-await wa.Message.audio(cid, readFileSync("./note.ogg"));
+await wa.Message.audio(cid, readFileSync("./note.ogg"));                  // nota de voz (por defecto)
+await wa.Message.audio(cid, readFileSync("./song.mp3"), { ptt: false });  // archivo de audio
 
-// Enviar como un archivo de audio regular
-await wa.Message.audio(cid, readFileSync("./song.mp3"), { ptt: false });
-
-// Detectar en entrantes
-wa.on("message:created", async (msg) => {
-  if (msg instanceof wa.Message.Audio) {
-    console.log(msg.ptt ? "voice note" : "audio file");
+wa.on("message:created", (msg) => {
+  if (msg instanceof Audio) {
+    console.log(msg.ptt ? "nota de voz" : "archivo de audio", msg.duration, "s");
+    console.log(msg.waveform); // number[]
   }
 });
 ```
 
 ---
 
-## `ForwardTarget`
+## Previews de texto
 
-```typescript title="ForwardTarget.ts"
-import type { Chat, Contact } from "@arcaelas/whatsapp";
-
-export type ForwardTarget = string | Chat | Contact;
-```
-
-Entradas aceptadas:
-
-- `string` — un CID (teléfono, JID o LID); resuelto internamente.
-- `Chat` — usa `chat.id`.
-- `Contact` — usa `(await contact.chat()).id` (el JID 1:1).
-
----
-
-## Opciones de envío
-
-```typescript title="options.ts"
-export interface SendOptions {
-  mid?: string; // id del mensaje citado (reply)
-}
-
-export interface SendMediaOptions extends SendOptions {
-  caption?: string;
-}
-
-export interface SendAudioOptions extends SendOptions {
-  ptt?: boolean; // por defecto true (nota de voz)
-}
-
-export interface LocationOptions {
-  lat: number;
-  lng: number;
-  live?: boolean; // reservado, aún no usado en envío
-}
-
-export interface PollOptions {
-  content: string;                        // pregunta
-  options: Array<{ content: string }>;    // opciones
-}
-```
-
----
-
-## Estáticos (delegado vía `wa.Message`)
-
-### CRUD
-
-| Delegado | Signatura |
-| -------- | --------- |
-| `wa.Message.get` | `(cid: string, mid: string) => Promise<Message \| null>` |
-| `wa.Message.list` | `(cid: string, offset?: number, limit?: number) => Promise<Message[]>` (por defecto `0, 50`) |
-| `wa.Message.count` | `(cid: string) => Promise<number>` |
-| `wa.Message.edit` | `(cid, mid, text) => Promise<boolean>` |
-| `wa.Message.delete` | `(cid, mid, all?) => Promise<boolean>` (por defecto `true`) |
-| `wa.Message.react` | `(cid, mid, emoji) => Promise<boolean>` |
-| `wa.Message.forward` | `(cid, mid, target: ForwardTarget) => Promise<boolean>` |
-| `wa.Message.seen` | `(cid, mid) => Promise<boolean>` |
-| `wa.Message.star` | `(cid, mid, value: boolean) => Promise<boolean>` |
-| `wa.Message.watch` | `(cid, mid, handler) => () => void` |
-
-### Envío
-
-| Delegado | Signatura |
-| -------- | --------- |
-| `wa.Message.text` | `(cid, caption, opts?: SendOptions) => Promise<Message \| null>` |
-| `wa.Message.image` | `(cid, buf, opts?: SendMediaOptions) => Promise<Message \| null>` |
-| `wa.Message.video` | `(cid, buf, opts?: SendMediaOptions) => Promise<Message \| null>` |
-| `wa.Message.audio` | `(cid, buf, opts?: SendAudioOptions) => Promise<Message \| null>` |
-| `wa.Message.location` | `(cid, loc: LocationOptions, opts?: SendOptions) => Promise<Message \| null>` |
-| `wa.Message.poll` | `(cid, poll: PollOptions, opts?: SendOptions) => Promise<Message \| null>` |
-
-### Ejemplo end-to-end
-
-```typescript title="send-delegates.ts" hl_lines="13 17 22 24 26"
-import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
-import { readFileSync } from "node:fs";
-
-const wa = new WhatsApp({
-  engine: new FileSystemEngine({ path: "./.whatsapp" }),
-});
-
-await wa.connect();
-
-const cid = "5215555555555@s.whatsapp.net";
-
-// Texto básico
-const greeting = await wa.Message.text(cid, "Hello from v3!");
-
-// Reply (mid fija el mensaje citado)
-if (greeting) {
-  await wa.Message.text(cid, "And a follow-up.", { mid: greeting.id });
-}
-
-// Medios
-await wa.Message.image(cid, readFileSync("./banner.png"), { caption: "Banner" });
-await wa.Message.audio(cid, readFileSync("./note.ogg"), { ptt: true });
-
-// Ubicación
-await wa.Message.location(cid, { lat: 19.4326, lng: -99.1332 });
-
-// Encuesta
-await wa.Message.poll(cid, {
-  content: "Pick a framework",
-  options: [{ content: "Next" }, { content: "Remix" }, { content: "Astro" }],
-});
-
-// CRUD sobre mensajes existentes
-const history = await wa.Message.list(cid, 0, 20);
-for (const m of history) {
-  if (m.me && !m.edited && m instanceof wa.Message.Text) {
-    await wa.Message.edit(cid, m.id, `[edited] ${m.caption}`);
+```typescript title="preview.ts"
+if (msg instanceof Text) {
+  const card = await msg.preview();
+  if (card) {
+    console.log(card.link, card.name, card.content, card.thumb?.length);
   }
+}
+```
+
+`preview()` devuelve `null` cuando el mensaje no trae metadata de enlace.
+
+---
+
+## Eventos de calendario
+
+```typescript title="event.ts"
+if (msg instanceof Event) {
+  console.log(msg.name);     // título del evento
+  console.log(msg.caption);  // descripción
+  console.log(msg.start);    // ISO UTC
+  console.log(msg.end);      // ISO UTC | null
+  console.log(msg.canceled); // boolean
+  console.log(msg.link);     // link de unión ('' si no hay)
+  console.log(msg.place);    // { lat, lng } | null
 }
 ```
 
 !!! tip "Payloads de eventos"
-    Los oyentes para `message:*` reciben `(msg, chat, wa)`. `msg` ya es una instancia de la subclase correcta, de modo que puedes ejecutar `instanceof` contra `wa.Message.Text`, `wa.Message.Image` y afines directamente, sin discriminación manual.
+    Los listeners de `message:*` reciben `(msg, chat, wa)` y `msg` ya es instancia de la subclase
+    correcta, así que `instanceof` funciona sin discriminación manual.

@@ -1,6 +1,6 @@
 # Custom Engine
 
-The `Engine` interface is the storage contract behind `@arcaelas/whatsapp`. The library ships with `FileSystemEngine` and `RedisEngine`, but nothing stops you from writing your own — useful for testing, debugging, or integrating with an existing datastore.
+The `Engine` interface is the storage contract behind `@arcaelas/whatsapp`. The library ships with `SQLiteEngine`, `FileSystemEngine`, `RedisEngine` and `S3Engine`, but nothing stops you from writing your own — useful for testing, debugging, or integrating with an existing datastore.
 
 This guide walks through two custom implementations:
 
@@ -14,28 +14,33 @@ This guide walks through two custom implementations:
 ```typescript
 export interface Engine {
     get(path: string): Promise<string | null>;
-    set(path: string, value: string): Promise<void>;
+    set(path: string, value: string, score?: number): Promise<void>;
     unset(path: string): Promise<boolean>;
     list(path: string, offset?: number, limit?: number): Promise<string[]>;
     count(path: string): Promise<number>;
     clear(): Promise<void>;
+
+    // optional pair, for raw binaries
+    get_buffer?(path: string): Promise<Buffer | null>;
+    set_buffer?(path: string, data: Buffer, score?: number): Promise<void>;
 }
 ```
 
-Six methods, all path-based, all string in / string out. The library handles JSON serialization above the engine — your job is purely key-value persistence.
+Six required methods, all path-based, all string in / string out. The library handles JSON serialization above the engine — your job is purely key-value persistence.
 
 Rules to honor:
 
-- **`set`** must refresh the modification time of the key — `list` orders by mtime DESC.
+- **`set`** must remember the ordering score: the explicit `score` when it arrives, the write time otherwise.
 - **`unset`** must cascade: removing `/chat/123` also removes `/chat/123/message/...`.
-- **`list`** returns only the **direct** children of a path, paginated, mtime DESC.
-- **`count`** must work without loading the values (use a counter or index).
+- **`list`** returns only the **direct** children of a path, paginated, score DESC.
+- **`count`** must work without loading the values.
+- **`get_buffer` / `set_buffer`** are optional, but all-or-nothing: implement both or neither. When they are missing, the library stores media as a base64 JSON document instead.
 
 ---
 
 ## 1. `InMemoryEngine`
 
-A volatile, single-process engine backed by two `Map`s — one for values, one for timestamps. Everything is lost when the process exits.
+A volatile, single-process engine backed by two `Map`s — one for documents, one for binaries. Everything is lost when the process exits.
 
 ```typescript title="in-memory-engine.ts"
 import type { Engine } from '@arcaelas/whatsapp';
@@ -45,85 +50,73 @@ function normalize(path: string): string {
 }
 
 export class InMemoryEngine implements Engine {
-    private readonly _values = new Map<string, string>();
-    private readonly _mtimes = new Map<string, number>();
+    private readonly _docs = new Map<string, { value: string; score: number }>();
+    private readonly _bins = new Map<string, Buffer>();
 
     async get(path: string): Promise<string | null> {
-        return this._values.get(normalize(path)) ?? null;
+        return this._docs.get(normalize(path))?.value ?? null;
     }
 
-    async set(path: string, value: string): Promise<void> {
-        const key = normalize(path);
-        this._values.set(key, value);
-        this._mtimes.set(key, Date.now());
+    async set(path: string, value: string, score?: number): Promise<void> {
+        this._docs.set(normalize(path), { value, score: score ?? Date.now() });
     }
 
     async unset(path: string): Promise<boolean> {
         const key = normalize(path);
         const prefix = `${key}/`;
 
-        this._values.delete(key);
-        this._mtimes.delete(key);
-
-        for (const k of [...this._values.keys()]) {
-            if (k.startsWith(prefix)) {
-                this._values.delete(k);
-                this._mtimes.delete(k);
+        for (const stored of [...this._docs.keys()]) {
+            if (stored === key || stored.startsWith(prefix)) {
+                this._docs.delete(stored);
+                this._bins.delete(stored);
             }
         }
         return true;
     }
 
     async list(path: string, offset = 0, limit = 50): Promise<string[]> {
-        const key = normalize(path);
-        const prefix = key === '' ? '' : `${key}/`;
-
-        const children: { full: string; mtime: number }[] = [];
-        const seen = new Set<string>();
-
-        for (const k of this._values.keys()) {
-            if (!k.startsWith(prefix) || k === key) {
-                continue;
-            }
-            const tail = k.slice(prefix.length);
-            const slash = tail.indexOf('/');
-            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
-
-            if (seen.has(direct) || !this._values.has(direct)) {
-                continue;
-            }
-            seen.add(direct);
-            children.push({ full: direct, mtime: this._mtimes.get(direct) ?? 0 });
-        }
-
-        children.sort((a, b) => b.mtime - a.mtime);
-        return children
+        return this._children(path)
+            .sort((a, b) => b.score - a.score)
             .slice(offset, offset + limit)
-            .map((c) => this._values.get(c.full) ?? '');
+            .map((entry) => entry.value);
     }
 
     async count(path: string): Promise<number> {
-        const key = normalize(path);
-        const prefix = key === '' ? '' : `${key}/`;
-        const seen = new Set<string>();
+        return this._children(path).length;
+    }
 
-        for (const k of this._values.keys()) {
-            if (!k.startsWith(prefix) || k === key) {
-                continue;
-            }
-            const tail = k.slice(prefix.length);
-            const slash = tail.indexOf('/');
-            const direct = slash === -1 ? k : `${prefix}${tail.slice(0, slash)}`;
-            if (this._values.has(direct)) {
-                seen.add(direct);
-            }
+    async get_buffer(path: string): Promise<Buffer | null> {
+        return this._bins.get(normalize(path)) ?? null;
+    }
+
+    async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+        const key = normalize(path);
+        this._bins.set(key, data);
+        if (!this._docs.has(key)) {
+            this._docs.set(key, { value: '', score: score ?? Date.now() });
         }
-        return seen.size;
     }
 
     async clear(): Promise<void> {
-        this._values.clear();
-        this._mtimes.clear();
+        this._docs.clear();
+        this._bins.clear();
+    }
+
+    /** Direct children of a path, with their ordering score. */
+    private _children(path: string): { value: string; score: number }[] {
+        const key = normalize(path);
+        const prefix = key === '' ? '' : `${key}/`;
+        const out: { value: string; score: number }[] = [];
+
+        for (const [stored, entry] of this._docs) {
+            if (stored.startsWith(prefix)) {
+                const tail = stored.slice(prefix.length);
+                if (tail.length > 0 && !tail.includes('/')) {
+                    out.push(entry);
+                }
+            }
+        }
+        return out;
     }
 }
 ```
@@ -145,7 +138,7 @@ wa.connect((auth) => {
 ```
 
 !!! warning "Not for production"
-    `InMemoryEngine` loses every byte when the process exits. That includes your session credentials — every restart will require a fresh QR/PIN pairing. Use `FileSystemEngine` for local development and `RedisEngine` for distributed deployments.
+    `InMemoryEngine` loses every byte when the process exits. That includes your session credentials — every restart will require a fresh QR/PIN pairing. Use `SQLiteEngine` or `FileSystemEngine` for local development and `RedisEngine` for distributed deployments.
 
 !!! note "Use cases"
     Where it *does* shine: unit tests, ephemeral one-shot scripts, exploring the API without polluting the disk, and CI pipelines that mock out persistence.
@@ -176,9 +169,9 @@ export class LoggingEngine implements Engine {
         return value;
     }
 
-    async set(path: string, value: string): Promise<void> {
-        this._log('set', path, `${value.length}b`);
-        await this._inner.set(path, value);
+    async set(path: string, value: string, score?: number): Promise<void> {
+        this._log('set', path, `${value.length}b score=${score ?? 'now'}`);
+        await this._inner.set(path, value, score);
     }
 
     async unset(path: string): Promise<boolean> {
@@ -196,6 +189,23 @@ export class LoggingEngine implements Engine {
         const total = await this._inner.count(path);
         this._log('count', path, `-> ${total}`);
         return total;
+    }
+
+    async get_buffer(path: string): Promise<Buffer | null> {
+        const data = this._inner.get_buffer
+            ? await this._inner.get_buffer(path)
+            : null;
+        this._log('get_buffer', path, data ? `${data.length}b` : 'MISS');
+        return data;
+    }
+
+    async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+        this._log('set_buffer', path, `${data.length}b`);
+        if (this._inner.set_buffer) {
+            await this._inner.set_buffer(path, data, score);
+        } else {
+            await this._inner.set(path, JSON.stringify({ data: data.toString('base64') }), score);
+        }
     }
 
     async clear(): Promise<void> {
@@ -225,13 +235,20 @@ Now every read/write goes through the console:
 
 ```text
 [fs] get /session/creds HIT (1842b)
-[fs] set /chat/584144709840@s.whatsapp.net 73b
+[fs] set /chat/584144709840@s.whatsapp.net 73b score=now
+[fs] set /chat/584144709840@s.whatsapp.net/message/ABC 4211b score=1767371367857
+[fs] set_buffer /chat/584144709840@s.whatsapp.net/message/ABC/content 51204b
 [fs] list /chat offset=0 limit=50 -> 12 items
 [fs] count /chat/584144709840@s.whatsapp.net/message -> 47
 ```
 
+!!! danger "Binary methods are a signal, not just a passthrough"
+    The library decides how to store media by checking whether `set_buffer` **exists** on the engine.
+    A wrapper that declares it and forwards to an inner engine without binary support (like
+    `S3Engine`) would silently drop the payload — hence the base64 fallback above.
+
 !!! tip "Composition is free"
-    The wrapper pattern composes — wrap a `RedisEngine` to log Redis traffic, wrap an `InMemoryEngine` for a chatty unit test, or even chain wrappers (e.g. metrics + logging). Because the contract is just six methods, decorators stay trivial.
+    The wrapper pattern composes — wrap a `RedisEngine` to log Redis traffic, wrap an `InMemoryEngine` for a chatty unit test, or even chain wrappers (e.g. metrics + logging). Because the contract is small, decorators stay trivial.
 
 ---
 
