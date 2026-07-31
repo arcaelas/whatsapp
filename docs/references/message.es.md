@@ -113,6 +113,8 @@ switch (msg.type) {
 | `caption` | `string` | Texto del mensaje o pie del media (la pregunta en una encuesta, la descripción en un evento). |
 | `status` | `'error' \| 'pending' \| 'sent' \| 'delivered' \| 'read' \| 'played'` | Estado de entrega legible. |
 | `read` | `boolean` | `true` cuando el estado llegó a `read` o `played`. |
+| `reason` | `string \| null` | Motivo del rechazo cuando `status` es `error`: `restricted` (WhatsApp limitó la cuenta y bloquea abrir chats nuevos), `invalid-session`, o el código crudo del servidor si es otro. `null` en cualquier otro estado. |
+| `business` | `string \| null` | Nombre del negocio verificado que firma el mensaje (WhatsApp lo muestra bajo el texto), o `null`. |
 | `starred` | `boolean` | `true` si el mensaje está destacado. |
 | `forwarded` | `boolean` | `true` si el mensaje fue reenviado. |
 | `edited` | `boolean` | `true` si el mensaje fue editado. |
@@ -127,6 +129,18 @@ switch (msg.type) {
 
     ```typescript
     const age_ms = Date.now() - new Date(msg.created_at).getTime();
+    ```
+
+!!! danger "`status: 'error'` con `reason: 'restricted'` no se arregla reintentando"
+    Es el código **463** del servidor: WhatsApp limitó esa cuenta y le bloquea **abrir chats
+    nuevos**, aunque los chats ya establecidos siguen funcionando. Reenviar el mismo mensaje
+    vuelve a fallar; el mismo texto desde otra cuenta llega sin problema.
+
+    ```typescript
+    const sent = await Message.text(wa, cid, "hola");
+    if (sent?.status === 'error' && sent.reason === 'restricted') {
+        // esta línea solo puede continuar conversaciones que ya existen
+    }
     ```
 
 ---

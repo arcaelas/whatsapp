@@ -34,6 +34,17 @@ import type { WhatsApp } from '~/lib/whatsapp';
 /** Estados legibles indexados por el status numérico de baileys. / Readable states indexed by the baileys numeric status. */
 const STATUS = ['error', 'pending', 'sent', 'delivered', 'read', 'played'] as const;
 
+/**
+ * Motivos legibles de los códigos con los que el servidor rechaza un mensaje. `restricted`
+ * es la cuenta limitada por WhatsApp: puede seguir chats existentes pero no abrir nuevos.
+ * Readable reasons for the codes the server rejects a message with. `restricted` is an
+ * account limited by WhatsApp: it can continue existing chats but not open new ones.
+ */
+const REASON = {
+    463: 'restricted',
+    479: 'invalid-session',
+} as const;
+
 const MESSAGE_TYPE_MAP = {
     conversation: 'text',
     extendedTextMessage: 'text',
@@ -108,11 +119,15 @@ async function send(
         const quoted = extra.mid
             ? (deserialize<Message['_raw']>(await wa.engine.get(`/chat/${jid}/message/${extra.mid}`))?.raw ?? undefined)
             : undefined;
-        const raw = await socket.sendMessage(jid, {
-            ...content,
-            ...(extra.once && { viewOnce: true }),
-            ...(quoted && { quoted }),
-        } as never);
+        // La cita viaja en las opciones del socket, no en el contenido: dentro del contenido
+        // baileys la ignora y el mensaje sale sin `contextInfo`.
+        // The quote travels in the socket options, not in the content: inside the content
+        // baileys ignores it and the message goes out without `contextInfo`.
+        const raw = await socket.sendMessage(
+            jid,
+            { ...content, ...(extra.once && { viewOnce: true }) } as never,
+            { ...(quoted && { quoted }) }
+        );
         const sent_id = raw?.key?.id;
         if (raw && sent_id) {
             const instance = message(wa, raw);
@@ -280,6 +295,16 @@ export class Message {
     /** true si el mensaje fue visto. / true when the message was seen. */
     get read(): boolean {
         return this._raw.status >= 4;
+    }
+    /** Motivo del rechazo cuando `status` es `error` (`restricted`, `invalid-session`, o el código crudo); null en cualquier otro caso. / Rejection reason when `status` is `error` (`restricted`, `invalid-session`, or the raw code); null otherwise. */
+    get reason(): string | null {
+        const code = this._raw.raw.messageStubParameters?.[0];
+        if (this._raw.status === 0 && code) return REASON[code] ?? code;
+        return null;
+    }
+    /** Nombre del negocio verificado que firma el mensaje, o null. / Verified business name signing the message, or null. */
+    get business(): string | null {
+        return this._raw.raw.verifiedBizName ?? null;
     }
     /** true si está destacado. / true when starred. */
     get starred(): boolean {

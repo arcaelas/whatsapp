@@ -2,6 +2,18 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.1.0] - 2026-07-31
+
+### Fixed
+
+- **Message state never advanced on LID-addressed chats.** `messages.update`, `message-receipt.update` and reactions looked the document up at `/chat/${key.remoteJid}/message/${key.id}`, but WhatsApp addresses those updates by LID —with a device suffix (`…:9@lid`) more often than not— while the document lives under the JID it was stored with. Every receipt was silently dropped and messages stayed in `pending` forever. The three handlers now resolve the chat before reading, and `#resolve_jid` normalizes the device suffix out of a LID.
+- **Quoted messages were sent without the quote.** `send()` passed `quoted` inside `sendMessage`'s *content*, but baileys reads it from the *options* argument, so the outgoing message carried no `contextInfo` and `mid` came back `null`. This affected **every reply**: the `mid` option of the statics *and* all the instance reply methods (`msg.text()`, `msg.image()`, `msg.video()`, `msg.audio()`, …), which always quote the message they hang off. The quote now travels in the options and works for every message type.
+
+### Added
+
+- **`Message.reason`** — why the server rejected a message when `status` is `error`: `restricted` (code 463: WhatsApp limited the account and blocks opening new chats, existing ones keep working), `invalid-session` (479), or the raw code for anything else. `null` in any other state. The rejection stub is now persisted with the message.
+- **`Message.business`** — verified business name signing the message (what WhatsApp renders under the text of a Business account), or `null`.
+
 ## [6.0.0] - 2026-07-31
 
 > Publicada como `5.1.0` por error de numeración y deprecada acto seguido: los cambios de
