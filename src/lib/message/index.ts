@@ -121,10 +121,7 @@ async function send(
             }
             await wa.engine.set(`/chat/${jid}/message/${sent_id}`, serialize(instance._raw), instance._raw.created_at);
             if (binary) {
-                await wa.engine.set(
-                    `/chat/${jid}/message/${sent_id}/content`,
-                    serialize({ data: binary.toString('base64') })
-                );
+                await write_content(wa, `/chat/${jid}/message/${sent_id}/content`, binary);
             }
             result = instance;
         }
@@ -133,13 +130,49 @@ async function send(
 }
 
 /**
+ * Binario persistido de un documento: primero el crudo del engine y, si el driver no soporta
+ * binarios o el dato viene de una sesión anterior, el documento JSON con base64.
+ * A document's persisted binary: the engine's raw one first and, when the driver lacks binary
+ * support or the data comes from an older session, the base64 JSON document.
+ *
+ * @param wa - Cliente dueño / Owner client
+ * @param path - Ruta del contenido / Content path
+ * @returns Binario o null / Binary or null
+ */
+async function read_content(wa: WhatsApp, path: string): Promise<Buffer | null> {
+    const raw = await wa.engine.get_buffer?.(path);
+    if (raw?.length) {
+        return raw;
+    }
+    const legacy = deserialize<{ data: string }>(await wa.engine.get(path));
+    return legacy?.data ? Buffer.from(legacy.data, 'base64') : null;
+}
+
+/**
+ * Persiste el binario de un documento: crudo cuando el driver lo soporta, JSON con base64
+ * en caso contrario.
+ * Persists a document's binary: raw when the driver supports it, base64 JSON otherwise.
+ *
+ * @param wa - Cliente dueño / Owner client
+ * @param path - Ruta del contenido / Content path
+ * @param data - Binario a guardar / Binary to store
+ */
+async function write_content(wa: WhatsApp, path: string, data: Buffer): Promise<void> {
+    if (wa.engine.set_buffer) {
+        await wa.engine.set_buffer(path, data);
+    } else {
+        await wa.engine.set(path, serialize({ data: data.toString('base64') }));
+    }
+}
+
+/**
  * Stream del binario del mensaje: cache del engine o descarga de baileys.
  * Message binary stream: engine cache or baileys download.
  */
 async function media_stream(wa: WhatsApp, doc: Message['_raw']): Promise<Readable> {
-    const cached = deserialize<{ data: string }>(await wa.engine.get(`/chat/${doc.cid}/message/${doc.id}/content`));
-    if (cached?.data) {
-        return Readable.from(Buffer.from(cached.data, 'base64'));
+    const cached = await read_content(wa, `/chat/${doc.cid}/message/${doc.id}/content`);
+    if (cached) {
+        return Readable.from(cached);
     }
     const socket = internals(wa).socket;
     if (socket) {
@@ -315,10 +348,7 @@ export class Message {
      * @returns Buffer del contenido / Content buffer
      */
     async content(): Promise<Buffer> {
-        const cached = deserialize<{ data: string }>(
-            await this._wa.engine.get(`/chat/${this._raw.cid}/message/${this._raw.id}/content`)
-        );
-        return cached?.data ? Buffer.from(cached.data, 'base64') : Buffer.alloc(0);
+        return (await read_content(this._wa, `/chat/${this._raw.cid}/message/${this._raw.id}/content`)) ?? Buffer.alloc(0);
     }
 
     /**

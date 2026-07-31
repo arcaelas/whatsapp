@@ -4,8 +4,9 @@
  * Public bot decorators.
  */
 
+import { internals } from '~/lib/internal';
 import type { Message } from '~/lib/message';
-import type { IWhatsApp } from '~/lib/whatsapp';
+import type { IWhatsApp, WhatsApp } from '~/lib/whatsapp';
 import {
     WhatsAppBot,
     decorator,
@@ -133,9 +134,9 @@ export const pair = decorator<[]>((_meta, h) => {
 
 /**
  * Filtra por autor del mensaje. Acepta JID, LID o teléfono numérico; el string
- * se normaliza vía `wa._resolve_jid` con cache lazy. Un array produce match OR.
+ * se normaliza con la resolución interna del cliente y cache lazy. Un array produce match OR.
  * Filters by message author. Accepts JID, LID or numeric phone; the string is
- * normalized via `wa._resolve_jid` with lazy cache. An array yields OR matching.
+ * normalized through the client's internal resolution with lazy cache. An array yields OR matching.
  *
  * @param source - Identificador(es) permitidos o predicate sobre `msg.from` / Allowed identifier(s) or predicate on `msg.from`
  */
@@ -148,13 +149,11 @@ export function from(source: string | string[] | ((jid: string) => boolean)) {
             let resolved: Set<string> | null = null;
             h.guards.push(async (...args: unknown[]) => {
                 const msg = args[0] as Message;
-                const wa = args[args.length - 1] as {
-                    _resolve_jid: (uid: string) => Promise<string | null>;
-                };
+                const wa = args[args.length - 1] as WhatsApp;
                 if (resolved === null) {
                     resolved = new Set();
                     for (const raw of list) {
-                        const r = await wa._resolve_jid(raw);
+                        const r = await internals(wa).resolve_jid(raw);
                         if (r) {
                             resolved.add(r);
                         }

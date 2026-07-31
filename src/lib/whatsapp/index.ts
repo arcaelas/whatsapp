@@ -298,6 +298,19 @@ export class WhatsApp {
         return null;
     }
 
+    /**
+     * @internal
+     * Persiste un binario: crudo cuando el driver lo soporta, JSON con base64 si no.
+     * Persists a binary: raw when the driver supports it, base64 JSON otherwise.
+     */
+    async #write_content(path: string, data: Buffer): Promise<void> {
+        if (this.engine.set_buffer) {
+            await this.engine.set_buffer(path, data);
+        } else {
+            await this.engine.set(path, serialize({ data: data.toString('base64') }));
+        }
+    }
+
     /** @internal Encola una tarea en la cadena serial de handlers. / Queues a task on the serial handler chain. */
     #enqueue(task: () => Promise<void>): void {
         this.#chain = this.#chain.then(task).catch(() => { });
@@ -644,7 +657,7 @@ export class WhatsApp {
                 };
                 await this.engine.set(`/status/${doc.id}`, serialize(doc), created_at);
                 if (post.content) {
-                    await this.engine.set(`/status/${doc.id}/content`, serialize({ data: post.content.toString('base64') }));
+                    await this.#write_content(`/status/${doc.id}/content`, post.content);
                 }
                 result = new Feed(this, doc);
                 this.emit('feed:created', result, this);
@@ -1029,10 +1042,7 @@ export class WhatsApp {
                     }
                     await this.engine.set(`/status/${mid}`, serialize(feed_raw));
                     if (content_buf.length > 0) {
-                        await this.engine.set(
-                            `/status/${mid}/content`,
-                            serialize({ data: content_buf.toString('base64') }),
-                        );
+                        await this.#write_content(`/status/${mid}/content`, content_buf);
                     }
                     this.emit('feed:created', new Feed(this, feed_raw), this);
                     continue;
@@ -1250,10 +1260,7 @@ export class WhatsApp {
                 }
 
                 if (content_buf.length > 0) {
-                    await this.engine.set(
-                        `/chat/${cid}/message/${mid}/content`,
-                        serialize({ data: content_buf.toString('base64') })
-                    );
+                    await this.#write_content(`/chat/${cid}/message/${mid}/content`, content_buf);
                 }
 
                 const instance = message(this, doc);
