@@ -782,10 +782,16 @@ export class WhatsApp {
         if (doc.lid) {
             await this.engine.set(`/lid/${doc.lid}`, serialize(doc.id));
         }
-        if (!current) {
+        // Una ficha que existía vacía y ahora tiene nombre es un cambio que el consumidor
+        // necesita: sin avisar, quien memorice el contacto sigue mostrando el número.
+        // A card that existed empty and now has a name is a change the consumer needs: without
+        // notifying, whoever memoized the contact keeps showing the bare number.
+        const changed = current && (['lid', 'name', 'notify', 'verified_name', 'img_url', 'status'] as const).some((key) => current[key] !== doc[key]);
+        if (!current || changed) {
             const person = new this.Contact(doc);
             const cached_chat = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${doc.id}`));
-            this.emit('contact:created', person, new this.Chat(cached_chat ?? { id: doc.id, name: person.name }), this);
+            const chat = new this.Chat(cached_chat ?? { id: doc.id, name: person.name });
+            this.emit(current ? 'contact:updated' : 'contact:created', person, chat, this);
         }
     }
 
