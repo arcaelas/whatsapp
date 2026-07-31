@@ -51,6 +51,8 @@ import { deserialize, serialize, type Engine } from '~/lib/store';
 /** Documento persistido de un status broadcast, tal como lo construye el cliente. / Persisted status broadcast document, as built by the client. */
 type FeedRaw = ConstructorParameters<typeof Feed>[1];
 
+/** Rechazo del servidor: estado terminal, el único que puede retroceder el avance. / Server rejection: terminal state, the only one allowed to move the state backwards. */
+const ERROR = 0;
 /** Estados legibles del mensaje que el receipt puede avanzar. / Readable message states a receipt can advance to. */
 const READ = 4;
 const PLAYED = 5;
@@ -1187,6 +1189,13 @@ export class WhatsApp {
                     if (existing_doc.reactions) {
                         doc.reactions = existing_doc.reactions;
                     }
+                    // El historial reporta el estado que tenía al sincronizarse: si acá se reescribe
+                    // por otro cambio (edición, destacado), el estado ya conocido se conserva.
+                    // History reports the state it had when synced: if the doc gets rewritten here
+                    // for another change (edit, star), the state already known is kept.
+                    if (existing_doc.status > doc.status) {
+                        doc.status = existing_doc.status;
+                    }
                     if (
                         existing_doc.status >= doc.status &&
                         existing_doc.caption === doc.caption &&
@@ -1363,7 +1372,13 @@ export class WhatsApp {
                             await msg_instance.chat(),
                             this,
                         );
-                    } else if (status !== undefined) {
+                        // WhatsApp reemite los acks desordenados al reconectar (un `sent` después
+                        // de un `delivered`), así que el estado solo avanza; el rechazo (`error`)
+                        // es terminal y sí puede pisar lo que hubiera.
+                        // WhatsApp re-emits acks out of order on reconnect (a `sent` after a
+                        // `delivered`), so the state only moves forward; a rejection (`error`) is
+                        // terminal and may override whatever was there.
+                    } else if (status !== undefined && (status > doc.status || status === ERROR)) {
                         raw.status = status;
                         doc.status = status;
                         // El rechazo del servidor viaja como stub del update; sin persistirlo el

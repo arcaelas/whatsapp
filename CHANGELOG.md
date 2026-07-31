@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.1.1] - 2026-07-31
+
+### Fixed
+
+- **Message state could move backwards.** WhatsApp re-emits acks out of order when a session reconnects — a `sent` (2) arriving after a `delivered` (3) for the same message — and `messages.update` applied whatever came last, so a message already read fell back to sent and the UI showed fewer ticks than it had. The state now only moves forward; `error` stays terminal and may still override. The history re-sync got the same guard: when a document is rewritten because something else changed (an edit, a star), the state already known is kept instead of the one the history reports.
+
 ## [6.1.0] - 2026-07-31
 
 ### Fixed
