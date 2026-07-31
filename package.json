@@ -68,7 +68,7 @@
     "build:esm": "tsc --module ESNext --moduleResolution bundler --outDir build/esm && tsc-alias --resolve-full-paths --outDir build/esm && echo '{\"type\":\"module\"}' > build/esm/package.json",
     "docs": "mkdocs gh-deploy --force",
     "lint": "eslint src/ --fix",
-    "prepublishOnly": "rm -rf build && npm version minor && yarn build",
+    "prepublishOnly": "rm -rf build && yarn build",
     "release": "npm publish --access public"
   },
   "types": "./build/esm/index.d.ts",
