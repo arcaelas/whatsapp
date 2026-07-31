@@ -2,7 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
-## [5.0.0] - 2026-07-31
+## [6.0.0] - 2026-07-31
+
+> Publicada como `5.1.0` por error de numeración y deprecada acto seguido: los cambios de
+> abajo son breaking, así que la versión correcta es la 6.0.0.
+> Released as `5.1.0` by a numbering mistake and deprecated right after: the changes below are
+> breaking, so the correct version is 6.0.0.
 
 ### BREAKING CHANGES
 
