@@ -181,6 +181,12 @@ Valores numéricos de `status`, y el string legible que expone
 | `4`   | `'read'`      | Leído por el destinatario      |
 | `5`   | `'played'`    | Reproducido (audio/video)      |
 
+El documento no guarda campos propios para el rechazo ni para la firma del negocio: ambos se
+leen del `raw` de baileys. Cuando el servidor rechaza un envío, el stub del ack se persiste en
+`raw.messageStubParameters` y [`Message.reason`](references/message.es.md) lo traduce
+(`463` → `restricted`, `479` → `invalid-session`); el nombre del negocio verificado llega en
+`raw.verifiedBizName` y lo expone `Message.business`.
+
 ---
 
 ### Contenido del mensaje — `/chat/<cid>/message/<mid>/content`

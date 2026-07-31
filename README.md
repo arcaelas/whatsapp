@@ -198,6 +198,8 @@ const msg = await wa.Message.get(cid, mid);
 | `caption` | texto del mensaje o pie del media |
 | `status` | `'error'` `'pending'` `'sent'` `'delivered'` `'read'` `'played'` |
 | `read` `starred` `forwarded` `edited` `once` | banderas del mensaje |
+| `reason` | motivo del rechazo cuando `status` es `'error'` (`restricted`, `invalid-session`, o el código del servidor), si no `null` |
+| `business` | nombre del negocio verificado que firma el mensaje, o `null` |
 | `created_at` `expires_at` | fechas en ISO UTC (`expires_at` solo en mensajes temporales) |
 
 **Métodos**

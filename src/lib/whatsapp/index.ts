@@ -378,12 +378,15 @@ export class WhatsApp {
         if (uid.endsWith('@g.us') || uid.endsWith('@s.whatsapp.net')) {
             result = uid;
         } else if (uid.endsWith('@lid')) {
-            const direct = deserialize<string>(await this.engine.get(`/lid/${uid}`));
+            // Los receipts direccionan por dispositivo (`…:9@lid`); el índice se guarda sin él.
+            // Receipts address per device (`…:9@lid`); the index is stored without it.
+            const lid = jidNormalizedUser(uid);
+            const direct = deserialize<string>(await this.engine.get(`/lid/${lid}`));
             if (direct) {
                 result = direct.includes('@') ? direct : `${direct}@s.whatsapp.net`;
             } else {
                 const reverse = deserialize<string | number>(
-                    await this.engine.get(`/lid/${uid.split('@')[0]}_reverse`)
+                    await this.engine.get(`/lid/${lid.split('@')[0]}_reverse`)
                 );
                 if (reverse != null) {
                     result = `${reverse}@s.whatsapp.net`;
@@ -394,7 +397,7 @@ export class WhatsApp {
                     // realmente está guardado, y el mensaje/poll no se encuentra.
                     const pn = await (this.#internals.socket as unknown as {
                         signalRepository?: { lidMapping?: { getPNForLID(lid: string): Promise<string | null | undefined> } };
-                    } | null)?.signalRepository?.lidMapping?.getPNForLID(uid).catch(() => null);
+                    } | null)?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null);
                     if (pn) {
                         // getPNForLID puede traer sufijo de dispositivo (`:0`); se normaliza para
                         // que el JID coincida con el que usa el store (sin device).
@@ -929,13 +932,14 @@ export class WhatsApp {
                 continue;
             }
             if (key.remoteJid && key.id && (receipt.readTimestamp != null || receipt.playedTimestamp != null)) {
-                const doc = deserialize<Message['_raw']>(await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`));
-                if (doc) {
+                const found = await this.#locate(key.remoteJid, key.id);
+                if (found) {
+                    const { path, doc } = found;
                     const next = receipt.playedTimestamp != null ? PLAYED : READ;
                     if (doc.status < next) {
                         doc.status = next;
                         doc.raw.status = next as unknown as WAMessage['status'];
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        await this.engine.set(path, serialize(doc), doc.created_at);
                     }
                     const msg_instance = message(this, doc);
                     this.emit('message:seen', msg_instance, await msg_instance.chat(), this);
@@ -1277,6 +1281,34 @@ export class WhatsApp {
         }
     }
 
+    /**
+     * Ubica el documento de un mensaje partiendo del chat crudo del key. Los updates y
+     * receipts llegan direccionados por LID —con o sin dispositivo— mientras el documento
+     * vive bajo el JID con el que se guardó, así que se prueban ambas formas.
+     * Locates a message document from the raw chat in the key. Updates and receipts arrive
+     * LID-addressed —with or without device— while the document lives under the JID it was
+     * stored with, so both forms are tried.
+     *
+     * @param cid - Chat tal como viene en el key / Chat as it comes in the key
+     * @param mid - Identificador del mensaje / Message identifier
+     * @returns Ruta y documento, o null si no existe / Path and document, or null when missing
+     * @internal
+     */
+    async #locate(cid: string, mid: string): Promise<{ path: string; doc: Message['_raw'] } | null> {
+        const tried = new Set<string>();
+        for (const candidate of [await this.#resolve_jid(cid), cid, jidNormalizedUser(cid)]) {
+            if (candidate && !tried.has(candidate)) {
+                tried.add(candidate);
+                const path = `/chat/${candidate}/message/${mid}`;
+                const doc = deserialize<Message['_raw']>(await this.engine.get(path));
+                if (doc) {
+                    return { path, doc };
+                }
+            }
+        }
+        return null;
+    }
+
     /** @internal */
     async #handle_messages_update(updates: WAMessageUpdate[]): Promise<void> {
         for (const { key, update: upd } of updates) {
@@ -1288,15 +1320,15 @@ export class WhatsApp {
                 if (key.remoteJid === 'status@broadcast') {
                     continue;
                 }
-                const doc = deserialize<Message['_raw']>(
-                    await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
-                );
-                if (doc) {
+                const found = await this.#locate(key.remoteJid, key.id);
+                if (found) {
+                    const { path, doc } = found;
                     const raw: WAMessage = doc.raw ?? { key };
                     const upd_any = upd as {
                         message?: proto.IMessage & { editedMessage?: { message?: proto.IMessage } };
                         status?: number;
                         starred?: boolean;
+                        messageStubParameters?: (string | null)[];
                     };
                     const edited_message = upd_any.message?.editedMessage?.message;
                     const content_update = upd_any.message;
@@ -1308,7 +1340,7 @@ export class WhatsApp {
                         doc.raw = raw;
                         doc.edited = true;
                         doc.caption = message(this, raw).caption;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        await this.engine.set(path, serialize(doc), doc.created_at);
                         const msg_instance = message(this, doc);
                         this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     } else if (content_update) {
@@ -1316,14 +1348,14 @@ export class WhatsApp {
                         raw.message = { ...raw.message, ...content_update };
                         doc.raw = raw;
                         doc.caption = message(this, raw).caption;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        await this.engine.set(path, serialize(doc), doc.created_at);
                         const msg_instance = message(this, doc);
                         this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     } else if (starred_changed) {
                         doc.starred = upd_any.starred === true;
                         raw.starred = doc.starred;
                         doc.raw = raw;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        await this.engine.set(path, serialize(doc), doc.created_at);
                         const msg_instance = message(this, doc);
                         this.emit(
                             doc.starred ? 'message:starred' : 'message:unstarred',
@@ -1334,8 +1366,15 @@ export class WhatsApp {
                     } else if (status !== undefined) {
                         raw.status = status;
                         doc.status = status;
+                        // El rechazo del servidor viaja como stub del update; sin persistirlo el
+                        // mensaje queda en error sin decir por qué.
+                        // The server rejection travels as an update stub; without persisting it the
+                        // message stays in error without saying why.
+                        if (upd_any.messageStubParameters) {
+                            raw.messageStubParameters = upd_any.messageStubParameters;
+                        }
                         doc.raw = raw;
-                        await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                        await this.engine.set(path, serialize(doc), doc.created_at);
                         const msg_instance = message(this, doc);
                         this.emit('message:updated', msg_instance, await msg_instance.chat(), this);
                     }
@@ -1364,17 +1403,16 @@ export class WhatsApp {
                     }
                     continue;
                 }
-                const doc = deserialize<Message['_raw']>(
-                    await this.engine.get(`/chat/${key.remoteJid}/message/${key.id}`)
-                );
-                if (doc) {
+                const found = await this.#locate(key.remoteJid, key.id);
+                if (found) {
+                    const { path, doc } = found;
                     const reactor = jidNormalizedUser(key.participant ?? key.remoteJid);
                     const emoji = reaction.text ?? '';
                     doc.reactions = [
                         ...(doc.reactions ?? []).filter((r) => r.author !== reactor),
                         ...(emoji ? [{ author: reactor, emoji, at: Date.now() }] : []),
                     ];
-                    await this.engine.set(`/chat/${key.remoteJid}/message/${key.id}`, serialize(doc), doc.created_at);
+                    await this.engine.set(path, serialize(doc), doc.created_at);
                     const msg_instance = message(this, doc);
                     this.emit(
                         'message:reacted',

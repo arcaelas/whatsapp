@@ -180,6 +180,13 @@ Numeric `status` values, and the readable string [`Message.status`](references/m
 | `4`   | `'read'`      | Read by recipient              |
 | `5`   | `'played'`    | Played (audio/video)           |
 
+The document keeps no dedicated fields for the rejection or the business signature: both are
+read from the baileys `raw`. When the server rejects a send, the ack stub is persisted in
+`raw.messageStubParameters` and [`Message.reason`](references/message.md) translates it
+(`463` → `restricted`, `479` → `invalid-session`); the verified business name arrives in
+`raw.verifiedBizName` and `Message.business` exposes it.
+
+
 ---
 
 ### Message content — `/chat/<cid>/message/<mid>/content`

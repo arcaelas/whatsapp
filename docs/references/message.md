@@ -113,6 +113,8 @@ switch (msg.type) {
 | `caption`    | `string`                                                          | Message text or media caption (the question in a poll, the description in an event).             |
 | `status`     | `'error' \| 'pending' \| 'sent' \| 'delivered' \| 'read' \| 'played'` | Readable delivery state.                                                                    |
 | `read`       | `boolean`                                                         | `true` once the state reached `read` or `played`.                                                |
+| `reason`     | `string \| null`                                                  | Rejection reason when `status` is `error`: `restricted` (WhatsApp limited the account and blocks new chats), `invalid-session`, or the raw server code otherwise. `null` in any other state. |
+| `business`   | `string \| null`                                                  | Verified business name signing the message (WhatsApp renders it under the text), or `null`.      |
 | `starred`    | `boolean`                                                         | `true` when the message is starred.                                                              |
 | `forwarded`  | `boolean`                                                         | `true` when the message was forwarded.                                                           |
 | `edited`     | `boolean`                                                         | `true` when the message was edited.                                                              |
@@ -127,6 +129,18 @@ switch (msg.type) {
 
     ```typescript
     const age_ms = Date.now() - new Date(msg.created_at).getTime();
+    ```
+
+!!! danger "`status: 'error'` with `reason: 'restricted'` is not fixed by retrying"
+    That is server code **463**: WhatsApp limited the account and blocks it from **opening new
+    chats**, while already established chats keep working. Re-sending the same message fails
+    again; the same text from another account goes through.
+
+    ```typescript
+    const sent = await Message.text(wa, cid, "hi");
+    if (sent?.status === 'error' && sent.reason === 'restricted') {
+        // this line can only continue conversations that already exist
+    }
     ```
 
 ---
