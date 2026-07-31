@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.1.2] - 2026-07-31
+
+### Fixed
+
+- **Re-syncs wiped contact names.** `contacts.upsert` arrives during a re-sync with the fields empty, and `#persist_contact` overwrote the whole document with it, so `name`, `notify` and `verified_name` already known were lost and chats fell back to showing the bare phone number (a verified business that read `Cleverty` turned into `56927587725`). The document is now merged: an incoming `null` never erases a value already stored. `contacts.update` also picks up `verifiedName`, which it was ignoring.
+- **A blanked contact card now heals itself.** Message upserts filled the contact in only when it did not exist; they now also complete it when it exists with no name at all, using the `pushName` and the verified business name that travel with the message.
+
 ## [6.1.1] - 2026-07-31
 
 ### Fixed
