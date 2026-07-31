@@ -124,8 +124,14 @@ interface ChatRaw {
     pinned?: number | null;          // pin timestamp; null/absent = unpinned
     mute_end_time?: number | null;   // epoch ms; <= Date.now() means unmuted
     unread_count?: number | null;
+    activity?: number | null;        // last message epoch ms: orders the list
 }
 ```
+
+`activity` is the score every chat write passes to the engine, so `Chat.list` returns chats by
+real activity. Pinning, archiving, muting or marking as read rewrite the document **keeping**
+that score: only a new message moves the chat. On a document stored before the field existed,
+the activity is derived from its last persisted message, so nothing needs migrating.
 
 Example payload:
 
@@ -136,7 +142,8 @@ Example payload:
     "archived": false,
     "pinned": 1767371367857,
     "mute_end_time": null,
-    "unread_count": 5
+    "unread_count": 5,
+    "activity": 1767371360000
 }
 ```
 

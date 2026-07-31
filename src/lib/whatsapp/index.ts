@@ -847,6 +847,21 @@ export class WhatsApp {
         await this.engine.set(`/lid/${pn}`, serialize(lid));
     }
 
+    /**
+     * Actividad del chat según su último mensaje persistido. Es el respaldo para los
+     * documentos que se guardaron antes de que el chat llevara su propia marca.
+     * Chat activity from its last persisted message. It is the fallback for documents stored
+     * before the chat carried its own stamp.
+     *
+     * @param cid - Identificador del chat / Chat identifier
+     * @returns Epoch ms del último mensaje, o 0 si el chat no tiene ninguno / Last message epoch ms, or 0 when the chat has none
+     * @internal
+     */
+    async #activity(cid: string): Promise<number> {
+        const [raw] = await this.engine.list(`/chat/${cid}/message`, 0, 1);
+        return deserialize<Message['_raw']>(raw ?? null)?.created_at ?? 0;
+    }
+
     /** @internal */
     async #handle_chats_upsert(chats: BaileysChat[]): Promise<void> {
         for (const ch of chats) {
@@ -863,7 +878,13 @@ export class WhatsApp {
                 if (ch.name) {
                     raw.name = ch.name;
                 }
-                await this.engine.set(`/chat/${ch.id}`, serialize(raw));
+                // El sync trae la última actividad del chat; sin ella la lista quedaría ordenada
+                // por el momento en que se escribió cada documento.
+                // The sync carries the chat's last activity; without it the list would be ordered
+                // by the moment each document happened to be written.
+                const stamp = ch.conversationTimestamp != null ? Number(ch.conversationTimestamp) * 1_000 : null;
+                raw.activity = Math.max(stamp ?? 0, raw.activity ?? 0, await this.#activity(ch.id)) || null;
+                await this.engine.set(`/chat/${ch.id}`, serialize(raw), raw.activity ?? 0);
                 if (current === null) {
                     this.emit('chat:created', new this.Chat(raw), this);
                 }
@@ -901,7 +922,9 @@ export class WhatsApp {
                 }
                 if (Object.keys(patch).length > 0) {
                     const merged: Chat['_raw'] = { ...current, ...patch };
-                    await this.engine.set(`/chat/${ch.id}`, serialize(merged));
+                    // Fijar, archivar o silenciar no es actividad: el chat conserva su posición.
+                    // Pinning, archiving or muting is not activity: the chat keeps its position.
+                    await this.engine.set(`/chat/${ch.id}`, serialize(merged), merged.activity ?? undefined);
 
                     if (pinned_changed) {
                         this.emit(
@@ -1258,13 +1281,24 @@ export class WhatsApp {
                         const chat_raw: Chat['_raw'] = {
                             id: cid,
                             name: is_group ? null : push_name,
+                            activity: doc.created_at,
                         };
-                        await this.engine.set(`/chat/${cid}`, serialize(chat_raw));
+                        await this.engine.set(`/chat/${cid}`, serialize(chat_raw), doc.created_at);
                         this.emit('chat:created', new this.Chat(chat_raw), this);
                     }
                 }
 
                 await this.engine.set(`/chat/${cid}/message/${mid}`, serialize(doc), doc.created_at);
+
+                // El mensaje más nuevo define la posición del chat en la lista; un mensaje viejo
+                // que llega en un re-sync no la altera.
+                // The newest message defines the chat's position in the list; an old message
+                // arriving in a re-sync does not move it.
+                const chat_doc = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${cid}`));
+                if (chat_doc && doc.created_at > (chat_doc.activity ?? 0)) {
+                    chat_doc.activity = doc.created_at;
+                    await this.engine.set(`/chat/${cid}`, serialize(chat_doc), doc.created_at);
+                }
 
                 // El binario solo se materializa en la primera entrega; en re-syncs ya vive en el engine.
                 // The binary is only materialized on first delivery; on re-syncs it already lives in the engine.

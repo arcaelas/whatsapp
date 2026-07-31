@@ -2,6 +2,16 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.2.0] - 2026-07-31
+
+### Added
+
+- **`activity` on the chat document** — epoch ms of the chat's last message. It is now the score every chat write passes to the engine, so `Chat.list` comes back ordered by real activity instead of by whichever document happened to be written last. The field is additive: a document stored without it falls back to the last persisted message, so no migration is required.
+
+### Fixed
+
+- **Any chat write reordered the list.** Chats were persisted with no score, and `Engine.set` defaults to `Date.now()`, so pinning, archiving, muting, marking as read or merely receiving a flag update pushed the chat to the top of `Chat.list`. This is the same defect already fixed for messages in 6.0.0. Every chat write — the sync upserts, the flag updates and the `pin`/`archive`/`mute`/`seen` actions — now passes the chat's activity, and only a new message moves it.
+
 ## [6.1.3] - 2026-07-31
 
 ### Fixed

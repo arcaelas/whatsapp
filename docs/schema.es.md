@@ -124,8 +124,15 @@ interface ChatRaw {
     pinned?: number | null;          // timestamp del pin; null/ausente = sin fijar
     mute_end_time?: number | null;   // epoch ms; <= Date.now() significa sin silenciar
     unread_count?: number | null;
+    activity?: number | null;        // epoch ms del último mensaje: ordena la lista
 }
 ```
+
+`activity` es el score con el que se escribe el documento, así que `Chat.list` devuelve los
+chats por actividad real. Fijar, archivar, silenciar o marcar leído reescriben el documento
+**conservando** ese score: solo un mensaje nuevo mueve el chat de sitio. En un documento
+guardado antes de que el campo existiera, la actividad se deduce de su último mensaje
+persistido, de modo que no hace falta migrar nada.
 
 Ejemplo de payload:
 
@@ -136,7 +143,8 @@ Ejemplo de payload:
     "archived": false,
     "pinned": 1767371367857,
     "mute_end_time": null,
-    "unread_count": 5
+    "unread_count": 5,
+    "activity": 1767371360000
 }
 ```
 

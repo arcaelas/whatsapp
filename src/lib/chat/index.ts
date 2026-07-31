@@ -29,6 +29,8 @@ export class Chat {
       pinned?: number | null;
       mute_end_time?: number | null;
       unread_count?: number | null;
+      /** Epoch ms del último mensaje: ordena la lista y sobrevive a las escrituras de flags. / Last message epoch ms: orders the list and survives flag writes. */
+      activity?: number | null;
     }
   ) { }
 
@@ -83,6 +85,17 @@ export function chat(wa: WhatsApp) {
    * Último mensaje del chat en el formato que exige `chatModify`.
    * The chat's last message in the shape `chatModify` requires.
    */
+  /**
+   * Actividad del chat según su último mensaje: mantiene la posición en la lista cuando se
+   * reescribe el documento por fijar, archivar, silenciar o marcar leído.
+   * Chat activity from its last message: keeps its position in the list when the document is
+   * rewritten by pinning, archiving, muting or marking as read.
+   */
+  async function activity_of(cid: string): Promise<number> {
+    const [raw] = await wa.engine.list(`/chat/${cid}/message`, 0, 1);
+    return deserialize<{ created_at: number }>(raw ?? null)?.created_at ?? 0;
+  }
+
   async function last_messages(cid: string) {
     const [raw] = await wa.engine.list(`/chat/${cid}/message`, 0, 1);
     const parsed = deserialize<{ id: string; me: boolean; created_at: number }>(raw ?? null);
@@ -229,7 +242,7 @@ export function chat(wa: WhatsApp) {
       if (socket) {
         await socket.chatModify({ archive: value, lastMessages: await last_messages(this._raw.id) }, this._raw.id);
         this._raw.archived = value;
-        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw));
+        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? (await activity_of(this._raw.id)));
         ok = true;
       }
       return ok;
@@ -252,7 +265,7 @@ export function chat(wa: WhatsApp) {
         if (allowed) {
           await socket.chatModify({ pin: value }, this._raw.id);
           this._raw.pinned = value ? Date.now() : null;
-          await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw));
+          await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? (await activity_of(this._raw.id)));
           ok = true;
         }
       }
@@ -274,7 +287,7 @@ export function chat(wa: WhatsApp) {
         const muted = end > Date.now();
         await socket.chatModify({ mute: muted ? end : null }, this._raw.id);
         this._raw.mute_end_time = muted ? end : null;
-        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw));
+        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? (await activity_of(this._raw.id)));
         ok = true;
       }
       return ok;
@@ -292,7 +305,7 @@ export function chat(wa: WhatsApp) {
       if (socket) {
         await socket.chatModify({ markRead: true, lastMessages: await last_messages(this._raw.id) }, this._raw.id);
         this._raw.unread_count = 0;
-        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw));
+        await wa.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? (await activity_of(this._raw.id)));
         ok = true;
       }
       return ok;
