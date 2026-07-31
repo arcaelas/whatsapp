@@ -23,6 +23,8 @@ export interface RedisClient {
   zrem(key: string, members: string | string[]): Promise<unknown>;
   zrevrange(key: string, start: number, stop: number): Promise<string[]>;
   zcard(key: string): Promise<number>;
+  getBuffer?(key: string): Promise<Buffer | null>;
+  setBuffer?(key: string, value: Buffer): Promise<unknown>;
   pipeline?(): {
     set(key: string, value: string): unknown;
     del(keys: string | string[]): unknown;
@@ -107,11 +109,11 @@ export class RedisEngine implements Engine {
     const full = normalize_path(path);
     const pipeline = this._client.pipeline?.();
     if (pipeline) {
-      pipeline.del(this._doc_key(full));
+      pipeline.del([this._doc_key(full), `${this._doc_key(full)}:bin`]);
       pipeline.zrem(this._idx_key(parent), full);
       await pipeline.exec();
     } else {
-      await this._client.del(this._doc_key(full));
+      await this._client.del([this._doc_key(full), `${this._doc_key(full)}:bin`]);
       await this._client.zrem(this._idx_key(parent), full);
     }
     await Promise.all([
@@ -141,6 +143,27 @@ export class RedisEngine implements Engine {
    */
   async count(path: string): Promise<number> {
     return this._client.zcard(this._idx_key(path));
+  }
+
+  /**
+   * Lee el binario del documento. Requiere un cliente con soporte de buffers (ioredis lo
+   * trae con `getBuffer`); sin él la librería cae al documento serializado.
+   * Reads the document binary. Requires a buffer-capable client (ioredis ships `getBuffer`);
+   * without it the library falls back to the serialized document.
+   */
+  async get_buffer(path: string): Promise<Buffer | null> {
+    return (await this._client.getBuffer?.(`${this._doc_key(path)}:bin`)) ?? null;
+  }
+
+  /**
+   * Escribe el binario del documento en su propia key, sin JSON ni base64.
+   * Writes the document binary in its own key, with no JSON nor base64.
+   */
+  async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+    const { parent } = split_path(path);
+    const full = normalize_path(path);
+    await this._client.setBuffer?.(`${this._doc_key(full)}:bin`, data);
+    await this._client.zadd(this._idx_key(parent), score ?? Date.now(), full);
   }
 
   /**

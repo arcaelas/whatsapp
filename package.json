@@ -72,5 +72,21 @@
     "release": "npm publish --access public"
   },
   "types": "./build/esm/index.d.ts",
-  "version": "6.0.0"
+  "version": "6.0.0",
+  "peerDependencies": {
+    "@aws-sdk/client-s3": ">=3",
+    "jimp": ">=1",
+    "sharp": ">=0.33"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "jimp": {
+      "optional": true
+    },
+    "sharp": {
+      "optional": true
+    }
+  }
 }

@@ -48,6 +48,22 @@ export interface Engine {
 
   /** Vacía completamente el almacén. / Clears the entire store. */
   clear(): Promise<void>;
+
+  /**
+   * Lee un binario por path. Opcional: un driver que no lo implemente sigue siendo válido y
+   * la librería cae al documento serializado.
+   * Reads a binary by path. Optional: a driver that does not implement it stays valid and the
+   * library falls back to the serialized document.
+   */
+  get_buffer?(path: string): Promise<Buffer | null>;
+
+  /**
+   * Escribe un binario sin pasar por JSON ni base64 (un 33% menos de peso y sin parseo para
+   * leerlo). Opcional, igual que `get_buffer`.
+   * Writes a binary without JSON nor base64 (33% less weight and no parsing to read it back).
+   * Optional, just like `get_buffer`.
+   */
+  set_buffer?(path: string, data: Buffer, score?: number): Promise<void>;
 }
 
 export { FileSystemEngine } from '~/lib/store/engine/lib/file_system';

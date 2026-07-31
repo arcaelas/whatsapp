@@ -15,6 +15,9 @@ const INDEX_FILE = 'index.json';
 /** Índice de orden persistido junto a los hijos del directorio. / Ordering index persisted next to the directory children. */
 const ORDER_FILE = '.order';
 
+/** Binario del documento, guardado crudo junto a su JSON. / Document binary, stored raw next to its JSON. */
+const BINARY_FILE = 'content.bin';
+
 /**
  * Driver de persistencia en sistema de archivos.
  * Cada documento se almacena como `<base>/<path>/index.json` de modo que un recurso pueda
@@ -174,6 +177,33 @@ export class FileSystemEngine implements Engine {
    */
   async count(path: string): Promise<number> {
     return (await this._index(path)).size;
+  }
+
+  /**
+   * Lee el binario del documento, o null si no existe.
+   * Reads the document binary, or null when missing.
+   */
+  async get_buffer(path: string): Promise<Buffer | null> {
+    return readFile(join(this._dir(path), BINARY_FILE)).catch(() => null);
+  }
+
+  /**
+   * Escribe el binario del documento como archivo crudo, sin JSON ni base64.
+   * Writes the document binary as a raw file, with no JSON nor base64.
+   */
+  async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+    const dir = this._dir(path);
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, BINARY_FILE);
+    const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+    await writeFile(tmp, data);
+    await rename(tmp, file);
+    const when = score ?? Date.now();
+    if (score !== undefined) {
+      await utimes(file, new Date(score), new Date(score)).catch(() => { });
+    }
+    const { parent, name } = split_path(path);
+    this._indexes.get(parent)?.set(name, when);
   }
 
   /**

@@ -62,6 +62,8 @@ export class SQLiteEngine implements Engine {
   private readonly _page: SQLiteStatement;
   private readonly _total: SQLiteStatement;
   private readonly _wipe: SQLiteStatement;
+  private readonly _read_blob: SQLiteStatement;
+  private readonly _write_blob: SQLiteStatement;
 
   /**
    * @param _db - Base SQLite ya abierta / Already open SQLite database
@@ -78,7 +80,7 @@ export class SQLiteEngine implements Engine {
       /* optional tuning */
     }
     _db.exec(
-      `CREATE TABLE IF NOT EXISTS ${table} (path TEXT PRIMARY KEY, parent TEXT NOT NULL, score INTEGER NOT NULL, value TEXT NOT NULL);
+      `CREATE TABLE IF NOT EXISTS ${table} (path TEXT PRIMARY KEY, parent TEXT NOT NULL, score INTEGER NOT NULL, value TEXT NOT NULL DEFAULT '', binary BLOB);
        CREATE INDEX IF NOT EXISTS ${table}_order ON ${table} (parent, score DESC);`
     );
     this._read = _db.prepare(`SELECT value FROM ${table} WHERE path = ?`);
@@ -92,6 +94,9 @@ export class SQLiteEngine implements Engine {
     this._page = _db.prepare(`SELECT value FROM ${table} WHERE parent = ? ORDER BY score DESC LIMIT ? OFFSET ?`);
     this._total = _db.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE parent = ?`);
     this._wipe = _db.prepare(`DELETE FROM ${table}`);
+    this._read_blob = _db.prepare(`SELECT binary FROM ${table} WHERE path = ?`);
+    this._write_blob = _db.prepare(`INSERT INTO ${table} (path, parent, score, value, binary) VALUES (?, ?, ?, '', ?)
+       ON CONFLICT(path) DO UPDATE SET binary = excluded.binary, score = excluded.score`);
   }
 
   /**
@@ -136,6 +141,24 @@ export class SQLiteEngine implements Engine {
    */
   async count(path: string): Promise<number> {
     return Number((this._total.get(normalize_path(path)) as { total: number }).total);
+  }
+
+  /**
+   * Lee el binario del documento, o null si la fila no lo tiene.
+   * Reads the document binary, or null when the row has none.
+   */
+  async get_buffer(path: string): Promise<Buffer | null> {
+    const row = this._read_blob.get(normalize_path(path)) as { binary: Buffer | Uint8Array | null } | undefined;
+    return row?.binary ? Buffer.from(row.binary) : null;
+  }
+
+  /**
+   * Escribe el binario del documento como BLOB, sin JSON ni base64.
+   * Writes the document binary as a BLOB, with no JSON nor base64.
+   */
+  async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
+    const { parent } = split_path(path);
+    this._write_blob.run(normalize_path(path), parent, score ?? Date.now(), data);
   }
 
   /**

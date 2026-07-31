@@ -2,362 +2,396 @@
 
 # @arcaelas/whatsapp
 
-> A **multi‑device**, storage‑agnostic WhatsApp client for Node.js.
+> Cliente de WhatsApp para Node.js sobre **baileys**, con persistencia intercambiable.
 >
-> _Typed end‑to‑end · Sends any media · Zero‑boilerplate API · Written in TypeScript only_
+> _TypeScript de punta a punta · Entidades con getters puros · Motores enchufables · DSL de decoradores_
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@arcaelas/whatsapp"><img src="https://img.shields.io/npm/v/@arcaelas/whatsapp?color=cb3837" alt="npm version"></a>
-  <img src="https://img.shields.io/bundlephobia/minzip/@arcaelas/whatsapp?label=gzip" alt="bundle size">
-  <img src="https://img.shields.io/github/license/arcaelas/whatsapp" alt="MIT">
+  <img src="https://img.shields.io/badge/node-%E2%89%A520-339933" alt="node >=20">
 </p>
 
 ---
 
-## Contents
+## Contenido
 
--   [Install](#install)
--   [Quick Start](#quick-start)
--   [Zero to Hero Guide](#zero-to-hero-guide)
-
-    -   [1. Create a Store](#1-create-a-store)
-    -   [2. Initialise the client](#2-initialise-the-client)
-    -   [3. Read chats & messages](#3-read-chats--messages)
-    -   [4. Send your first message](#4-send-your-first-message)
-
--   [Interfaces & Types](#interfaces--types)
-
-    -   [`IWhatsApp`](#iwhatsapp)
-    -   [`Store`](#store)
-
--   [API Reference](#api-reference)
-
-    -   [Chats](#chats)
-    -   [Messages](#messages)
-    -   [Presence](#presence)
-    -   [Media Helpers](#media-helpers)
-
--   [Storage Back‑ends](#storage-back‑ends)
-
-    -   [In‑memory](#in‑memory)
-    -   [File‑system](#file‑system)
-    -   [Redis](#redis)
-
--   [Recipes](#recipes)
--   [Troubleshooting](#troubleshooting)
--   [Contributing](#contributing)
--   [License](#license)
+- [Instalación](#instalación)
+- [Primeros pasos](#primeros-pasos)
+- [Cliente](#cliente)
+- [Entidades](#entidades)
+  - [Contact](#contact)
+  - [Chat](#chat)
+  - [Message](#message)
+  - [Feed](#feed)
+- [Eventos](#eventos)
+- [Motores de persistencia](#motores-de-persistencia)
+- [Bots con decoradores](#bots-con-decoradores)
+- [Recetas](#recetas)
+- [Licencia](#licencia)
 
 ---
 
-## Install
+## Instalación
 
 ```bash
-# core package
 yarn add @arcaelas/whatsapp
 ```
 
-> Node 18+ required. Works in ESM & TypeScript projects out of the box.
+Node 20 o superior. El paquete se distribuye en ESM y CJS.
+
+**Peers opcionales**, solo si usás la función correspondiente:
+
+| Paquete | Necesario para |
+| --- | --- |
+| `@aws-sdk/client-s3` | `S3Engine` |
+| `sharp` o `jimp` | `wa.profile({ photo })` |
+
+`RedisEngine` y `SQLiteEngine` no necesitan nada: reciben el cliente ya construido, así que servís vos el `ioredis`, `better-sqlite3` o `node:sqlite` que prefieras.
 
 ---
 
-## Quick Start
+## Primeros pasos
 
 ```ts
-import WhatsApp from '@arcaelas/whatsapp';
-import qrcode from 'qrcode-terminal';
+import WhatsApp, { FileSystemEngine } from '@arcaelas/whatsapp';
 
-const socket = new WhatsApp({
-    phone: '+01000000000',
-    loginType: 'qr',
-    qr: (buffer) => qrcode.generate(buffer.toString('base64'), { small: true }),
+const wa = new WhatsApp({
+    engine: new FileSystemEngine('.sessions/584144709840'),
+    phone: 584144709840,
 });
 
-await socket.ready(); // blocks until authenticated
+wa.on('message:created', async (msg) => {
+    if (!msg.me && msg.caption === 'ping') {
+        await msg.text('pong 🏓');
+    }
+});
 
-const [chat] = await socket.chats();
-await chat.send('Hello from Arcaelas 🤖');
-```
-
----
-
-## Zero‑to‑Hero Guide
-
-### 1. Create a Store
-
-The library is **storage‑agnostic**. Implement the minimal `Store` contract once and reuse everywhere.
-
-```ts
-/** Minimal in‑memory store for demos */
-const MemoryStore: Store = {
-    map: new Map<string, string>(),
-
-    has(key) {
-        return this.map.has(key);
-    },
-    get(key) {
-        return JSON.parse(this.map.get(key) ?? 'null');
-    },
-    set(key, value) {
-        if (value == null) return this.delete(key);
-        this.map.set(key, JSON.stringify(value));
-        return true;
-    },
-    delete(key) {
-        return this.map.delete(key);
-    },
-    async *keys() {
-        for (const k of this.map.keys()) yield k;
-    },
-    async *values() {
-        for (const v of this.map.values()) yield JSON.parse(v);
-    },
-    async *entries() {
-        for (const [k, v] of this.map.entries()) yield [k, JSON.parse(v)];
-    },
-    clear() {
-        this.map.clear();
-        return true;
-    },
-};
-```
-
-## Storage Layer
-
-The client is completely storage-agnostic. You may use Redis, filesystem or in-memory persistence. The storage system must implement the `Store` interface.
-
-### Key structure (logical)
-
-```
-account:{phone}:index                           → Account
-account:{phone}:chat:{id}:index                 → Chat
-account:{phone}:chat:{id}:message:{id}:index    → Message
-```
-
-### Directory-style translation
-
-```
-account/
-└── {phone}/
-    ├── index
-    └── chat/
-        └── {id}/
-            ├── index
-            └── message/
-                └── {id}/
-                    └── index
-```
-
-> ✅ Esto permite separar metadatos de contenido, aplicar TTLs, y reducir lecturas innecesarias.
-
-### 2. Initialise the client
-
-```ts
-const socket = new WhatsApp({
-    phone: '+584100000000',
-    loginType: 'code',
-    code: (pairCode) => console.log('Pair with:', pairCode),
-    store: MemoryStore,
+// Con `phone` llega un PIN (string); sin `phone`, el QR como Buffer PNG.
+await wa.connect((auth) => {
+    console.log(typeof auth === 'string' ? `PIN: ${auth}` : 'QR listo');
 });
 ```
 
-### 3. Read chats & messages
+---
+
+## Cliente
 
 ```ts
-const chats = await socket.chats();
-for (const chat of chats) {
-    console.log(`📨 ${chat.id} has ${await chat.messages().then((m) => m.length)} messages`);
-}
+new WhatsApp({ engine, phone?, method?, autoclean?, reconnect?, sync? })
 ```
 
-### 4. Send your first message
+| Opción | Descripción |
+| --- | --- |
+| `engine` | Motor de persistencia. Único obligatorio. |
+| `phone` | Teléfono de la cuenta. Habilita el emparejamiento por PIN; sin él la vinculación es siempre por QR. |
+| `method` | `'otp'` (default) o `'qr'`. **Solo aplica cuando hay `phone`**. |
+| `autoclean` | Al recibir `loggedOut`: `true` (default) vacía el motor; `false` borra solo las credenciales. |
+| `reconnect` | `true` (default) reintenta indefinidamente cada 60 s. Acepta `false`, un número de intentos o `{ max, interval }`. |
+| `sync` | Descarga el historial completo al vincular (default `true`). |
+
+### Superficie
 
 ```ts
-const [target] = chats;
-await target.send('¡Hola Mundo!', { once: true });
+wa.engine                     // motor de persistencia
+wa.contact                    // Contact de la cuenta autenticada, o null sin sesión
+wa.Contact / wa.Chat / wa.Message   // entidades ligadas a este cliente
+
+await wa.connect(callback)    // callback recibe el PIN (string) o el QR (Buffer PNG)
+await wa.disconnect({ silent?, destroy? })
+
+wa.on(event, handler)         // devuelve la función para desuscribirse
+wa.once(event, handler)
+wa.off(event, handler)
+wa.emit(event, ...args)
+
+await wa.profile({ name?, content?, photo? })   // nombre público, bio y foto
+await wa.feed({ content?, caption?, contacts }) // publica un estado
 ```
+
+El estado interno (socket de baileys, emisor, credenciales) es **privado de verdad**: no está accesible desde la instancia. Todo pasa por los métodos de arriba.
+
+### Perfil y estados
+
+```ts
+await wa.profile({ name: 'Ventas', content: 'Atendemos 9-18h' });
+await wa.profile({ photo: buffer });        // o una URL
+await wa.profile({ photo: null });          // elimina la foto
+
+const post = await wa.feed({
+    caption: '¡Estamos en vivo!',
+    contacts: ['584144709840', '56963091328'],   // audiencia obligatoria
+});
+```
+
+`contacts` no es opcional: WhatsApp no entrega el estado a nadie fuera de esa lista. Con `content` (Buffer) se publica imagen o video —el tipo se deduce de la firma del binario— y `caption` queda como pie.
 
 ---
 
-## Interfaces & Types
+## Entidades
 
-### `IWhatsApp`
+Cada entidad expone getters puros sobre su documento y métodos que actúan contra WhatsApp. `wa.Contact`, `wa.Chat` y `wa.Message` ya vienen ligados al cliente; las clases sueltas se importan del paquete cuando querés `instanceof` o los estáticos con el cliente explícito.
 
-```ts
-interface IWhatsApp<T extends 'qr' | 'code'> {
-    phone: string;
-    store?: Store;
-    loginType: T;
-    code: T extends 'code' ? (code: string) => void : never;
-    qr: T extends 'qr' ? (buffer: Buffer) => void : never;
-}
-```
-
-| Field       | Required      | Description                                                                        |
-| ----------- | ------------- | ---------------------------------------------------------------------------------- |
-| `phone`     | ✔             | International format (`+5841…`).                                                   |
-| `store`     | ✖             | Backend persistence (defaults to in‑memory volatile store).                        |
-| `loginType` | ✔             | `'qr'` or `'code'`. Determines which callback is required.                         |
-| `code`      | _Conditional_ | Fired once with the pairing **numeric code** when `loginType === 'code'`.          |
-| `qr`        | _Conditional_ | Fired with a **Buffer JPG/PNG** containing the QR image when `loginType === 'qr'`. |
-
-### `Store`
-
-Contract used everywhere the SDK needs persistence: creds, chats, media pointers… Full JSDoc in `src/types/Store.ts`.
+### Contact
 
 ```ts
-interface Store {
-    has(key: string): boolean | Promise<boolean>;
-    get(key: string): any | Promise<any>;
-    set(key: string, value: any): boolean | Promise<boolean>;
-    delete(key: string): boolean | Promise<boolean>;
-    keys(): AsyncGenerator<string>;
-    values(): AsyncGenerator<any>;
-    entries(): AsyncGenerator<[string, any]>;
-    clear(): boolean | Promise<boolean>;
-    scan?(pattern: string): string[] | Promise<string[]>;
-}
+const person = await wa.Contact.get('584144709840');   // teléfono, JID o LID
+const page = await wa.Contact.list(0, 50);
+
+person.name      // agenda → nombre público → teléfono
+person.phone     // solo del JID PN, nunca del LID; null si no es determinable
+person.jid       // '584144709840@s.whatsapp.net' | null
+person.lid       // '123456789@lid' | null
+person.photo     // URL de la foto | null
+await person.chat();
 ```
+
+`get` lee del motor y, si el contacto no está persistido, lo descubre por red y lo materializa.
+
+### Chat
+
+```ts
+const chat = await wa.Chat.get('584144709840');
+const chats = await wa.Chat.list(0, 50);
+
+chat.id        // teléfono en contactos; id crudo en grupos y LIDs
+chat.name
+chat.type      // 'contact' | 'group'
+chat.archived  // boolean
+chat.pinned    // boolean
+chat.muted     // fecha ISO UTC hasta la que está silenciado, o null
+
+await chat.messages(0, 50);
+await chat.members(0, 50);
+await chat.typing(true);
+await chat.recording(true);
+await chat.archive(true);
+await chat.pin(true);          // false si ya hay 3 fijados: WhatsApp descarta el cuarto
+await chat.mute('2026-08-01T10:00:00Z');   // o false para desactivar
+await chat.seen();             // marca el chat completo como leído
+await chat.clear();            // vacía los mensajes, conserva el chat
+await chat.delete();           // elimina el chat (sale del grupo si aplica)
+```
+
+### Message
+
+```ts
+import { Poll, Image } from '@arcaelas/whatsapp';
+
+const page = await wa.Message.list(cid, 0, 50);   // del más reciente al más antiguo
+const msg = await wa.Message.get(cid, mid);
+```
+
+**Propiedades**
+
+| | |
+| --- | --- |
+| `id` `cid` `mid` | identificadores del mensaje, su chat y el mensaje citado |
+| `from` `me` | JID del autor y si soy yo |
+| `type` | `text` `image` `video` `audio` `sticker` `document` `location` `poll` `vcard` `event` |
+| `mime` | `text/plain`, `text/json` en poll/location/vcard/event, el real en media |
+| `caption` | texto del mensaje o pie del media |
+| `status` | `'error'` `'pending'` `'sent'` `'delivered'` `'read'` `'played'` |
+| `read` `starred` `forwarded` `edited` `once` | banderas del mensaje |
+| `created_at` `expires_at` | fechas en ISO UTC (`expires_at` solo en mensajes temporales) |
+
+**Métodos**
+
+```ts
+await msg.author();      // Contact
+await msg.chat();        // Chat
+await msg.message();     // el mensaje citado, si hay `mid`
+await msg.content();     // Buffer
+await msg.stream();      // Readable
+await msg.reactions();   // [{ emoji, count }]
+
+await msg.react('❤️');   // emoji vacío la retira
+await msg.star(true);
+await msg.seen();
+await msg.edit('texto corregido');       // texto, imagen o video propios
+await msg.forward(otro_chat);
+await msg.delete();                      // solo en mi dispositivo
+await msg.delete(true);                  // para todos
+
+await msg.text('respuesta');             // responder citando este mensaje
+await msg.image(buffer, { caption: '…' });
+```
+
+**Envío** (los mismos nueve por tipo, en instancia para responder y en el cliente para iniciar):
+
+```ts
+await wa.Message.text(cid, 'hola', { once: true });
+await wa.Message.image(cid, buffer, { caption: 'mirá' });
+await wa.Message.video(cid, buffer);
+await wa.Message.audio(cid, buffer, { ptt: true });
+await wa.Message.location(cid, { lat: 8.3, lng: -62.7 });
+await wa.Message.poll(cid, { content: '¿Qué pedimos?', options: [{ content: 'Pizza' }, { content: 'Sushi' }] });
+await wa.Message.document(cid, buffer, { file_name: 'contrato.pdf' });
+await wa.Message.vcard(cid, [{ name: 'Ana', phone: '+584121234567' }]);
+await wa.Message.event(cid, { name: 'Demo', start: new Date() });
+```
+
+**Subclases** — el tipo decide la instancia, así que `instanceof` alcanza:
+
+```ts
+if (msg instanceof Image) console.log(msg.width, msg.height, msg.size, await msg.thumb());
+if (msg instanceof Poll)  console.log(msg.options, msg.multiple, await msg.votes());
+```
+
+| Clase | Agrega |
+| --- | --- |
+| `Text` | `preview()` → `{ link, name, content, thumb }` del enlace citado |
+| `Image` | `width` `height` `size` `thumb()` |
+| `Video` | `width` `height` `size` `duration` `thumb()` |
+| `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) |
+| `Sticker` | `width` `height` `size` `animated` |
+| `Document` | `size` |
+| `Location` | `lat` `lng` `live` `link` (Google Maps) |
+| `Poll` | `options` `multiple` `votes()` `select(i)` |
+| `VCard` | `contacts` |
+| `Event` | `name` `start` `end` `canceled` `place` `link` |
+
+### Feed
+
+Publicaciones de estado (`status@broadcast`). Extiende `Message`, así que hereda `author()`, `content()`, `stream()` y `caption`.
+
+```ts
+wa.on('feed:created', async (post) => {
+    console.log((await post.author()).name, post.caption, post.expires_at);
+    await post.view();     // envía el read receipt
+});
+```
+
+Lo que un estado no admite (`react`, `star`, `edit`, `forward`, `delete`, responder) lanza `ERR_FEED_UNSUPPORTED`.
 
 ---
 
-## API Reference
-
-### Chats
+## Eventos
 
 ```ts
-socket.chats(): Promise<Chat[]>;
+const off = wa.on('message:created', (msg, chat) => { … });
+off();   // desuscribe
 ```
 
-| Method                | Description                                                            |
-| --------------------- | ---------------------------------------------------------------------- |
-| `pin()`               | Pin chat to top.                                                       |
-| `mute()` / `unmute()` | Toggle notifications.                                                  |
-| `seen()`              | Mark as read.                                                          |
-| `presence(state)`     | Update own presence (`available`, `composing`, `recording`, `paused`). |
-| `delete()`            | Remove chat locally.                                                   |
-| `messages()`          | Fetch cached messages (lazy‑loaded).                                   |
-
-### Messages
-
-| Method              | Description                                |
-| ------------------- | ------------------------------------------ |
-| `content()`         | Returns payload: `string` or `Buffer`.     |
-| `reply(body, opts)` | Reply in thread. Supports all media types. |
-| `seen()`            | Mark as read.                              |
-| `delete()`          | Delete for everyone when possible.         |
-| `like(emoji)`       | Simple reaction helper.                    |
-| `forward(chatid)`   | Forward to another chat.                   |
-
-Return type fields:
-
-```ts
-type MessageBase = {
-    id: string;
-    type: 'text' | 'image' | 'audio' | 'video' | 'location';
-    caption?: string;
-    once?: boolean;
-    ptt?: boolean; // push‑to‑talk
-    ptv?: boolean; // video‑note
-};
-```
-
-### Presence
-
-```ts
-await chat.presence('composing'); // typing…
-```
-
-### Media Helpers
-
-All `send()`/`reply()` share the same overload signature:
-
-```ts
-send(body: string | Buffer | { lat: number; lon: number }, opts?: SendOptions): Promise<Message>;
-
-interface SendOptions {
-  type?: "audio" | "video" | "image" | "location";
-  caption?: string; // images
-  ptt?: boolean; // audio
-  ptv?: boolean; // video‑note
-  once?: boolean; // view‑once
-}
-```
+| Evento | Argumentos |
+| --- | --- |
+| `connected` `disconnected` | `(wa)` |
+| `contact:created` `contact:updated` | `(contact, chat, wa)` |
+| `chat:created` `chat:deleted` | `(chat, wa)` |
+| `chat:pinned` `chat:unpinned` | `(chat, wa)` |
+| `chat:archived` `chat:unarchived` | `(chat, wa)` |
+| `chat:muted` `chat:unmuted` | `(chat, wa)` |
+| `message:created` `message:updated` `message:deleted` | `(message, chat, wa)` |
+| `message:starred` `message:unstarred` `message:forwarded` `message:seen` | `(message, chat, wa)` |
+| `message:reacted` | `(message, chat, emoji, wa)` |
+| `feed:created` `feed:updated` `feed:deleted` | `(feed, wa)` |
 
 ---
 
-## Storage Back‑ends
+## Motores de persistencia
 
-### In‑memory
-
-Use the demo `MemoryStore` from the Zero‑to‑Hero section. Volatile.
-
-### File‑system
+Un motor es un almacén key/value de strings bajo rutas jerárquicas. El contrato completo:
 
 ```ts
-import fs from 'node:fs/promises';
+interface Engine {
+    get(path): Promise<string | null>;
+    set(path, value, score?): Promise<void>;
+    unset(path): Promise<boolean>;           // borra el sub-árbol
+    list(path, offset?, limit?): Promise<string[]>;   // hijos directos, score DESC
+    count(path): Promise<number>;
+    clear(): Promise<void>;
 
-function FSStore(dir: string): Store {
-    /* … */
+    get_buffer?(path): Promise<Buffer | null>;        // opcional: binarios sin base64
+    set_buffer?(path, data, score?): Promise<void>;
 }
 ```
 
-Stores everything under `.cache/` exactly like the suggested tree.
-
-### Redis
+`score` fija el orden de `list` (los mensajes pasan su `created_at`), de modo que reescribir historia antigua no altera la cronología. Los binarios son opcionales: un motor que no los implemente sigue siendo válido y la librería cae al documento serializado.
 
 ```ts
-import { createClient } from 'redis';
+import Database from 'better-sqlite3';
+import IORedis from 'ioredis';
+import { S3Client } from '@aws-sdk/client-s3';
+import { FileSystemEngine, SQLiteEngine, RedisEngine, S3Engine } from '@arcaelas/whatsapp';
 
-function RedisStore(client = createClient()): Store {
-    /* … */
-}
+new FileSystemEngine('.sessions/584144709840');
+new SQLiteEngine(new Database('.sessions/584144709840.db'));
+new RedisEngine(new IORedis(), 'wa:584144709840');
+new S3Engine({ s3: new S3Client({}), bucket: 'sesiones', basedir: 'wa/584144709840' });
 ```
 
-Use `SCAN` for iteration and implement `scan(pattern)` via `KEYS`/`SCAN` glob.
+`SQLiteEngine` es el más eficiente de los integrados. Sobre un chat real de 55.146 mensajes, frente al filesystem: 220 MB → 64 MB en disco, primera página 115 ms → 0,6 ms, y dos archivos en lugar de ~110.000 inodes.
+
+Cada cliente necesita **su propio** motor: nunca compartas una instancia entre dos cuentas.
 
 ---
 
-## Recipes
-
-### Auto‑responder bot
+## Bots con decoradores
 
 ```ts
-socket.on('message', async (msg) => {
-    if (msg.type === 'text' && msg.content().includes('ping')) {
-        await msg.reply('pong 🏓');
+import { FileSystemEngine } from '@arcaelas/whatsapp';
+import { WhatsAppBot, connect, command, from, every } from '@arcaelas/whatsapp/decorators';
+
+class Bot extends WhatsAppBot {
+    @connect()
+    async on_ready() {
+        console.log('conectado');
+    }
+
+    @command('/precio')
+    async price(msg, chat, args) {
+        await msg.text(`Consultando ${args[0] ?? 'el catálogo'}…`);
+    }
+
+    @from('584144709840')
+    async only_admin(msg) {
+        await msg.react('👑');
+    }
+
+    @every(3_600_000)
+    async hourly() {
+        console.log('cada hora, mientras esté conectado');
+    }
+}
+
+const bot = new Bot({ engine: new FileSystemEngine('.sessions/bot'), phone: 584144709840 });
+await bot.connect((auth) => console.log(auth));
+```
+
+Decoradores disponibles: `@on`, `@once`, `@connect`, `@disconnect`, `@command`, `@guard`, `@from`, `@pipe`, `@every`, `@delay`, `@pair`, y `@Bot` como decorador de clase.
+
+---
+
+## Recetas
+
+**Descargar el media de cada imagen recibida**
+
+```ts
+wa.on('message:created', async (msg) => {
+    if (msg instanceof Image) {
+        await fs.writeFile(`${msg.id}.jpg`, await msg.content());
     }
 });
 ```
 
-### Send location every hour
+**Responder solo en grupos**
 
 ```ts
-setInterval(async () => {
-    await chat.send({ lat: 8.3014, lon: -62.7166 }, { type: 'location' });
-}, 3.6e6);
+wa.on('message:created', async (msg, chat) => {
+    if (chat.type === 'group' && !msg.me) {
+        await msg.react('👀');
+    }
+});
+```
+
+**Reconectar con límite y cerrar en silencio**
+
+```ts
+const wa = new WhatsApp({ engine, phone, reconnect: { max: 5, interval: 30 } });
+await wa.disconnect({ silent: true });   // no emite `disconnected`
 ```
 
 ---
 
-## Troubleshooting
+## Licencia
 
-| Error                           | Cause & Fix                                                                            |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `401 – Session invalid`         | Credentials expired → re‑authenticate (clear `store` keys for `auth:` prefix).         |
-| `ERR_PACKAGE_PATH_NOT_EXPORTED` | Make sure you import ESM build (`import …`).                                           |
-| `BaileysBoomError 428`          | Connection closed by server – client will auto‑retry; ensure network clock is in sync. |
-
----
-
-## Contributing
-
-1. Fork → branch → PR (conventional commits).
-2. `yarn lint && yarn test` must pass.
-3. Document new features in this README.
-
----
-
-## License
-
-MIT — © 2025 [Miguel Alejandro](https://github.com/arcaelas) / Arcaelas Insiders.
+ISC — © 2026 [Miguel Alejandro](https://github.com/arcaelas) / Arcaelas Insiders.
