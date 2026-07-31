@@ -80,7 +80,7 @@ class MyBot extends WhatsAppBot {
   }
 }
 
-const bot = new MyBot({ engine: new FileSystemEngine(".sessions/bot"), phone: 584144709840 });
+const bot = new MyBot({ engine: new FileSystemEngine(".sessions/bot"), phone: 5491112345678 });
 await bot.connect((auth) => console.log(auth));
 ```
 

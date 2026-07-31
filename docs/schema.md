@@ -96,9 +96,9 @@ Example payload:
 
 ```json
 {
-    "id": "584144709840@s.whatsapp.net",
+    "id": "5491112345678@s.whatsapp.net",
     "lid": "140913951141911@lid",
-    "phone_number": "584144709840@s.whatsapp.net",
+    "phone_number": "5491112345678@s.whatsapp.net",
     "name": "Juan Perez",
     "notify": "Juanito",
     "verified_name": null,
@@ -316,7 +316,7 @@ import { RedisEngine } from '@arcaelas/whatsapp';
 
 const redis = new IORedis(process.env.REDIS_URL!);
 
-const engine_a = new RedisEngine(redis, 'wa:584144709840');
+const engine_a = new RedisEngine(redis, 'wa:5491112345678');
 const engine_b = new RedisEngine(redis, 'wa:584121234567');
 ```
 

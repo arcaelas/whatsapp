@@ -107,8 +107,8 @@ Constructores, keyspaces y opciones están documentados en
 import { DatabaseSync } from 'node:sqlite';
 import { SQLiteEngine, WhatsApp } from '@arcaelas/whatsapp';
 
-const engine = new SQLiteEngine(new DatabaseSync('.sessions/584144709840.db'));
-const wa = new WhatsApp({ engine, phone: 584144709840 });
+const engine = new SQLiteEngine(new DatabaseSync('.sessions/5491112345678.db'));
+const wa = new WhatsApp({ engine, phone: 5491112345678 });
 ```
 
 ---
@@ -201,7 +201,7 @@ export class MemoryEngine implements Engine {
 import { WhatsApp } from '@arcaelas/whatsapp';
 import { MemoryEngine } from './memory-engine';
 
-const wa = new WhatsApp({ engine: new MemoryEngine(), phone: 584144709840 });
+const wa = new WhatsApp({ engine: new MemoryEngine(), phone: 5491112345678 });
 ```
 
 !!! warning "Volátil significa volátil"
@@ -239,8 +239,8 @@ const redis = new IORedis(process.env.REDIS_URL!);
 
 // Cuenta A — respaldada por Redis (caliente, apta para múltiples instancias)
 const wa_a = new WhatsApp({
-    engine: new RedisEngine(redis, 'wa:584144709840'),
-    phone: 584144709840,
+    engine: new RedisEngine(redis, 'wa:5491112345678'),
+    phone: 5491112345678,
 });
 
 // Cuenta B — archivo SQLite local

@@ -102,16 +102,16 @@ new SQLiteEngine(db: SQLiteDatabase, table = 'documents')
 import { DatabaseSync } from 'node:sqlite';
 import { WhatsApp, SQLiteEngine } from '@arcaelas/whatsapp';
 
-const engine = new SQLiteEngine(new DatabaseSync('.sessions/584144709840.db'));
+const engine = new SQLiteEngine(new DatabaseSync('.sessions/5491112345678.db'));
 
-const wa = new WhatsApp({ engine, phone: 584144709840 });
+const wa = new WhatsApp({ engine, phone: 5491112345678 });
 ```
 
 ```typescript title="better-sqlite3"
 import Database from 'better-sqlite3';
 import { SQLiteEngine } from '@arcaelas/whatsapp';
 
-const engine = new SQLiteEngine(new Database('.sessions/584144709840.db'));
+const engine = new SQLiteEngine(new Database('.sessions/5491112345678.db'));
 ```
 
 The driver injects no dependency of its own: the database arrives already open, exactly like

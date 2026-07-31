@@ -49,11 +49,11 @@ export interface SQLiteDatabase {
  *
  * @example
  * import Database from 'better-sqlite3';
- * const engine = new SQLiteEngine(new Database('.sessions/584144709840.db'));
+ * const engine = new SQLiteEngine(new Database('.sessions/5491112345678.db'));
  *
  * @example
  * import { DatabaseSync } from 'node:sqlite';
- * const engine = new SQLiteEngine(new DatabaseSync('.sessions/584144709840.db'));
+ * const engine = new SQLiteEngine(new DatabaseSync('.sessions/5491112345678.db'));
  */
 export class SQLiteEngine implements Engine {
   private readonly _read: SQLiteStatement;

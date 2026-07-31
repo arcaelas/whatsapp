@@ -22,7 +22,7 @@ type CommandHandler = (args: string, msg: Message, chat: Conversation) => Promis
 
 const wa = new WhatsApp({
     engine: new FileSystemEngine(join(__dirname, 'session')),
-    phone: 584144709840,
+    phone: 5491112345678,
 });
 
 const commands = new Map<string, CommandHandler>();

@@ -56,8 +56,8 @@ Node 20 o superior. El paquete se distribuye en ESM y CJS.
 import WhatsApp, { FileSystemEngine } from '@arcaelas/whatsapp';
 
 const wa = new WhatsApp({
-    engine: new FileSystemEngine('.sessions/584144709840'),
-    phone: 584144709840,
+    engine: new FileSystemEngine('.sessions/5491112345678'),
+    phone: 5491112345678,
 });
 
 wa.on('message:created', async (msg) => {
@@ -119,7 +119,7 @@ await wa.profile({ photo: null });          // elimina la foto
 
 const post = await wa.feed({
     caption: '¡Estamos en vivo!',
-    contacts: ['584144709840', '56963091328'],   // audiencia obligatoria
+    contacts: ['5491112345678', '584121234567'],   // audiencia obligatoria
 });
 ```
 
@@ -134,13 +134,13 @@ Cada entidad expone getters puros sobre su documento y métodos que actúan cont
 ### Contact
 
 ```ts
-const person = await wa.Contact.get('584144709840');   // teléfono, JID o LID
+const person = await wa.Contact.get('5491112345678');   // teléfono, JID o LID
 const page = await wa.Contact.list(0, 50);
 
 if (person) {
     person.name      // agenda → nombre público → nombre verificado → teléfono
     person.phone     // solo del JID PN, nunca del LID; null si no es determinable
-    person.jid       // '584144709840@s.whatsapp.net' | null
+    person.jid       // '5491112345678@s.whatsapp.net' | null
     person.lid       // '123456789@lid' | null
     person.photo     // URL de la foto | null
     await person.chat();
@@ -152,7 +152,7 @@ if (person) {
 ### Chat
 
 ```ts
-const chat = await wa.Chat.get('584144709840');
+const chat = await wa.Chat.get('5491112345678');
 const chats = await wa.Chat.list(0, 50);
 
 if (chat) {
@@ -319,10 +319,10 @@ import IORedis from 'ioredis';
 import { S3Client } from '@aws-sdk/client-s3';
 import { FileSystemEngine, SQLiteEngine, RedisEngine, S3Engine } from '@arcaelas/whatsapp';
 
-new FileSystemEngine('.sessions/584144709840');
-new SQLiteEngine(new Database('.sessions/584144709840.db'));
-new RedisEngine(new IORedis(), 'wa:584144709840');
-new S3Engine({ s3: new S3Client({}), bucket: 'sesiones', basedir: 'wa/584144709840' });
+new FileSystemEngine('.sessions/5491112345678');
+new SQLiteEngine(new Database('.sessions/5491112345678.db'));
+new RedisEngine(new IORedis(), 'wa:5491112345678');
+new S3Engine({ s3: new S3Client({}), bucket: 'sesiones', basedir: 'wa/5491112345678' });
 ```
 
 `SQLiteEngine` es el más eficiente de los integrados. Sobre un chat real de 55.146 mensajes, frente al filesystem: 220 MB → 64 MB en disco, primer `list` 115 ms → 0,6 ms, y dos archivos en total en lugar de ~110.000 inodes.
@@ -348,7 +348,7 @@ class Bot extends WhatsAppBot {
         await msg.text(`Consultando ${args[0] ?? 'el catálogo'}…`);
     }
 
-    @from('584144709840')
+    @from('5491112345678')
     async only_admin(msg: Message) {
         await msg.react('👑');
     }
@@ -359,7 +359,7 @@ class Bot extends WhatsAppBot {
     }
 }
 
-const bot = new Bot({ engine: new FileSystemEngine('.sessions/bot'), phone: 584144709840 });
+const bot = new Bot({ engine: new FileSystemEngine('.sessions/bot'), phone: 5491112345678 });
 await bot.connect((auth) => console.log(auth));
 ```
 
@@ -395,7 +395,7 @@ wa.on('message:created', async (msg, chat) => {
 **Reconectar con límite y cerrar en silencio**
 
 ```ts
-const wa = new WhatsApp({ engine, phone: 584144709840, reconnect: { max: 5, interval: 30 } });
+const wa = new WhatsApp({ engine, phone: 5491112345678, reconnect: { max: 5, interval: 30 } });
 await wa.disconnect({ silent: true });   // no emite `disconnected`
 ```
 
