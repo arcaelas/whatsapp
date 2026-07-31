@@ -762,15 +762,30 @@ export class WhatsApp {
      * @internal
      */
     async #persist_contact(raw: Contact['_raw']): Promise<void> {
-        const existing = await this.engine.get(`/contact/${raw.id}`);
-        await this.engine.set(`/contact/${raw.id}`, serialize(raw));
-        if (raw.lid) {
-            await this.engine.set(`/lid/${raw.lid}`, serialize(raw.id));
+        const current = deserialize<Contact['_raw']>(await this.engine.get(`/contact/${raw.id}`));
+        // Los upserts del re-sync llegan con los campos vacíos: sin fusionar borran el nombre
+        // que ya se conocía y el chat pasa a mostrar el número pelado.
+        // Re-sync upserts arrive with empty fields: without merging they wipe the name already
+        // known and the chat falls back to showing the bare number.
+        const doc: Contact['_raw'] = current
+            ? {
+                id: raw.id,
+                lid: raw.lid ?? current.lid,
+                name: raw.name ?? current.name,
+                notify: raw.notify ?? current.notify,
+                verified_name: raw.verified_name ?? current.verified_name,
+                img_url: raw.img_url ?? current.img_url,
+                status: raw.status ?? current.status,
+            }
+            : raw;
+        await this.engine.set(`/contact/${raw.id}`, serialize(doc));
+        if (doc.lid) {
+            await this.engine.set(`/lid/${doc.lid}`, serialize(doc.id));
         }
-        if (existing === null) {
-            const person = new this.Contact(raw);
-            const cached_chat = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${raw.id}`));
-            this.emit('contact:created', person, new this.Chat(cached_chat ?? { id: raw.id, name: person.name }), this);
+        if (!current) {
+            const person = new this.Contact(doc);
+            const cached_chat = deserialize<Chat['_raw']>(await this.engine.get(`/chat/${doc.id}`));
+            this.emit('contact:created', person, new this.Chat(cached_chat ?? { id: doc.id, name: person.name }), this);
         }
     }
 
@@ -800,6 +815,7 @@ export class WhatsApp {
                     const patch: Partial<Contact['_raw']> = {
                         ...(c.notify && { notify: c.notify }),
                         ...(c.name && { name: c.name }),
+                        ...(c.verifiedName && { verified_name: c.verifiedName }),
                         ...(c.imgUrl && { img_url: c.imgUrl }),
                         ...(c.status && { status: c.status }),
                         ...(c.lid && { lid: c.lid }),
@@ -1211,16 +1227,25 @@ export class WhatsApp {
                     const push_name = msg.pushName ?? null;
                     const is_group = cid.endsWith('@g.us');
 
-                    if (doc.author && !(await this.engine.get(`/contact/${doc.author}`))) {
-                        await this.#persist_contact({
-                            id: doc.author,
-                            lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : null,
-                            name: null,
-                            notify: push_name,
-                            verified_name: msg.verifiedBizName ?? null,
-                            img_url: null,
-                            status: null,
-                        });
+                    // El contacto se completa cuando no existe y también cuando existe sin ningún
+                    // nombre: el mensaje trae el pushName y el nombre del negocio verificado, que
+                    // es lo único que queda si un re-sync anterior dejó la ficha en blanco.
+                    // The contact is filled in when missing and also when it exists with no name at
+                    // all: the message carries the pushName and the verified business name, the only
+                    // thing left when an earlier re-sync blanked the card.
+                    if (doc.author) {
+                        const known = deserialize<Contact['_raw']>(await this.engine.get(`/contact/${doc.author}`));
+                        if (!known || !(known.name ?? known.notify ?? known.verified_name)) {
+                            await this.#persist_contact({
+                                id: doc.author,
+                                lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : null,
+                                name: null,
+                                notify: push_name,
+                                verified_name: msg.verifiedBizName ?? null,
+                                img_url: null,
+                                status: null,
+                            });
+                        }
                     }
 
                     if (!(await this.engine.get(`/chat/${cid}`))) {
