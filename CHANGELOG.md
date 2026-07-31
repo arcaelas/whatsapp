@@ -2,15 +2,55 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
-## [Unreleased]
+## [5.0.0] - 2026-07-31
+
+### BREAKING CHANGES
+
+- **Entities rewritten to a minimal surface.** `Contact`, `Chat`, `Message` and `Feed` now expose only their documented properties and methods; every entity file exports just its base class and its factory. Removed along the way: `IContactRaw`/`IChatRaw`/`IMessage`/`MessageStatus` and the `Send*` types (the shapes are inline and reused via indexed access, e.g. `Message['_raw']`), the `contact_name` helper, `Contact.rename/refresh/me/content/id`, `Chat.cid/content/read/readonly/refresh`, `Message.watch/count` and the `Gps` class (now `Location`).
+- **`Message` subclasses are module-level exports** — `Text`, `Image`, `Video`, `Audio`, `Sticker`, `Document`, `Location`, `Poll`, `VCard`, `Event` extend `Message` and are imported directly (`msg instanceof Poll`) instead of hanging off the client (`wa.Message.Poll`). Instances are built with `message(wa, raw)`, which accepts the persisted document or a raw `WAMessage` and dispatches by type; `Message` statics take the client first (`Message.text(wa, cid, …)`).
+- **Readable message values** — `status` is now `'error' | 'pending' | 'sent' | 'delivered' | 'read' | 'played'`, `created_at` and `expires_at` are ISO UTC strings, `delete()` defaults to this-device-only (`delete(true)` deletes for everyone), and `mime` reports `text/json` for poll/location/vcard/event. The persisted document keeps the protocol numeric values, so no data migration is required.
+- **`Feed` extends `Message`** — inherits `author/chat/content/stream`, adds `viewed`/`view()`, and throws `ERR_FEED_UNSUPPORTED` on everything a status cannot do (`react`, `star`, `edit`, `forward`, `delete`, replies).
+- **The client's internal state is now truly private.** `_socket`, `_event`, `_resolve_jid`, `_phone`, `_method`, `_autoclean`, `_reconnect` and `_sync` became JS `#` fields: they no longer show up in `Object.keys`, `getOwnPropertyNames` or symbols, and the `.d.ts` only emits `#private`. Consumers interact through `on`/`once`/`off`/`emit` and the documented methods; entities reach the socket via an internal friend channel that is not part of the public barrel. Code reaching into `wa._socket` for raw baileys access must be reworked.
+- **Linking method simplified** — without `phone` the method is always QR; `method` only picks the channel when `phone` is set (OTP by default). Previously `method: 'otp'` without a phone silently fell back to QR.
 
 ### Added
 
+- **Ordering score in the `Engine` contract** — `set(path, value, score?)`: the score (document epoch ms, e.g. `created_at`) drives `list` ordering instead of write time. `FileSystemEngine` applies it via file mtime, `RedisEngine` via the sorted-set score and `S3Engine` via its persisted index. Every message write passes `created_at`, so re-syncs that rewrite history no longer destroy chronology.
+- **Persisted reactions** — reactions live on the message document and survive restarts; `msg.reactions()` returns `{ emoji, count }[]`.
+- **Media metadata straight from the protocol** — `Image`/`Video` expose `width`, `height`, `size` and `thumb()`; `Video`/`Audio` expose `duration`; `Audio` adds the protocol `waveform` (0-100, ready to paint without decoding the file); `Text.preview()` returns the embedded link card (`{ link, name, content, thumb }`).
+- **`Sticker` message type**, `msg.message()` for the quoted message, real view-once detection in `msg.once`, and `once` as a send option.
+- **`wa.profile({ name, content, photo })`** — updates the WhatsApp profile in one call: public name, bio and picture (URL or Buffer; `null` removes it). Throws `ERR_PROFILE_PICTURE_LIB` when neither `sharp` nor `jimp` is installed, since baileys needs one of them to resize the picture.
+- **`wa.feed({ content, caption, contacts })`** — publishes a status broadcast and returns the created `Feed`. `contacts` is the audience: WhatsApp does not deliver the status to anyone outside `statusJidList`. Text (caption only) or image/video (type inferred from the binary signature).
+- **`wa.contact`** — the authenticated account as a `Contact` (jid, lid, name), or `null` while there is no session.
+- **`wa.emit(event, …)`** — public emitter, so entities and consumers propagate events through the same documented surface.
+- **`SQLiteEngine`** — SQLite persistence driver: one `(path, parent, score, value)` table with a `(parent, score DESC)` index. The most efficient built-in driver, since it delegates to the engine what the others hand-roll: `list` is an indexed `ORDER BY score DESC LIMIT/OFFSET` (no in-memory index, no order file), `count` a `COUNT(*)` and cascading `unset` a single range statement. Measured on a real 55,146-message chat against the filesystem: **220 MB → 64 MB on disk**, first `list` **115 ms → 0.6 ms**, writes 0.34 ms → 0.19 ms, and two files instead of ~110,000 inodes. Adds no dependency: the already-open database is injected (`new SQLiteEngine(db)`) and both `better-sqlite3` and the native `node:sqlite` satisfy the `SQLiteDatabase` interface.
 - **`S3Engine`** — AWS S3 persistence driver implementing the `Engine` contract, with an optional in-memory cache. Options: `{ s3, bucket, basedir, cache }`, where `cache` is `false` (disabled) or `{ ttl, when(key) }` — `when` decides which keys are cached and each entry is cleared by a `setTimeout` (no read-time expiry check). Requires the peer `@aws-sdk/client-s3`.
+
+### Fixed
+
+- **Re-syncs no longer rewrite nor re-download the already-persisted history.** On every reconnect baileys re-delivers the full history; documents without visible changes are now skipped entirely (no write, no event spam) and message binaries are only materialized on first delivery — previously every reconnect rewrote every doc and re-downloaded every media file.
+- **Atomic writes in `FileSystemEngine`** — documents are written to a temp file and renamed, so an interrupted write can no longer leave a truncated `index.json`.
+- **Corrupt documents no longer poison reads** — `deserialize` returns `null` on invalid JSON instead of throwing, so one truncated doc behaves as missing instead of breaking the whole page.
+- **Duplicate handler wiring on reconnect** — calling `WhatsAppBot.connect()` again (e.g. after a manual `disconnect`) re-wired every decorated handler, firing each one twice per event. Wiring now happens once per instance.
+- **Serialized event handling** — baileys handlers ran concurrently and interleaved read-modify-write cycles over the same document (lost updates). All business handlers now run through a per-client serial queue.
+- **Read receipts persist message status** — `message-receipt.update` now advances `status` to `READ`/`PLAYED` on the stored document (it previously only emitted `message:seen`, leaving the doc stale).
+- **`connect()` while connected self-heals** — an existing socket is closed silently before starting the new one instead of leaking two live sockets.
+- **`disconnect({ silent: true })` finally works** — the option was dead code (`void options.silent`); it now actually suppresses that close's `disconnected` event.
+- **`wa.Message` works again after the entity refactor** — it is a bound-shortcut object exposing the same `Message` statics without repeating the client, plus the ten subclasses for `instanceof`.
+
+### Changed
+
+- **baileys upgraded to `7.0.0-rc14`** — brings the profile-picture `tctoken` fix (rc13 nested it wrong in the IQ, so `profilePictureUrl` could hang for contacts with a privacy token), a refreshed WhatsApp Web version and the experimental `Browsers.android`.
+- **Every engine now keeps a per-directory sorted index, maintained incrementally.** `list` and `count` no longer scan and re-sort the parent on each page — the ordering is kept up to date by `set`/`unset`. Measured on a real 55.146-message chat: **warm page 21 ms → 1.3 ms**, `count` O(1), index memory ~7 MB and bounded (LRU, `cached` option, default 12 directories).
+  - `FileSystemEngine` — index backed by `<dir>/.order`, so a fresh process no longer needs 55k `stat` calls: **cold page 728 ms → 115 ms**. The file is rebuilt automatically when the child count does not match (external deletions) or when it is unreadable.
+  - `RedisEngine` — the index already lived in Redis; writes now group document and index in a **pipeline**, halving latency and removing the window where a crash between `SET` and `ZADD` left a document orphaned from the index (invisible to `list`).
+  - `S3Engine` — used to page by listing the **whole** prefix on every call (~55 `ListObjectsV2` per page on a large chat); it now lists once and reuses the index, backed by the `.order` object. That object also stores the explicit `score`, which S3 cannot represent (`LastModified` is read-only), so **`S3Engine` finally honors chronological ordering** like the other drivers.
+- **Shared driver utilities moved to `store/engine/lib`** (`SortedIndex`, `IndexCache`, path helpers). `FileSystemEngine` and `RedisEngine` no longer reach the barrel that re-exports `S3Engine`, so importing them never pulls the optional `@aws-sdk/client-s3` peer.
+
 
 ### Changed (internal)
 
-- **Internal refactors with no public API or behavior changes.** Deduplicated the contact upsert logic into a private `_persist_contact` helper shared by `contacts.upsert` and the message auto-create path; extracted a `contact_name` helper for the `name → notify → phone` fallback used across `Contact` and the client; consolidated the bot decorator schema initialization into `ensure_schema` (now reused by `resolve` and `register_workflow_step`, with `once`/`command` composing over `resolve`).
+- **Internal refactors with no public API or behavior changes.** Deduplicated the contact upsert logic into a private helper shared by `contacts.upsert` and the message auto-create path; consolidated the bot decorator schema initialization into `ensure_schema` (now reused by `resolve` and `register_workflow_step`, with `once`/`command` composing over `resolve`).
 - **Parallelized independent I/O in the Signal session store** — `keys.get` / `keys.set` now use `Promise.all` instead of serial `await` loops, reducing handshake latency.
 - **Declarative cleanups** — contact-update patch built with conditional spread; engine `list` filters with `.filter()` instead of imperative push loops.
 

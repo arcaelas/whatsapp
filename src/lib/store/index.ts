@@ -6,7 +6,7 @@
 
 import { BufferJSON } from 'baileys';
 
-export { FileSystemEngine, RedisEngine, S3Engine, type Engine, type RedisClient } from '~/lib/store/engine';
+export { FileSystemEngine, RedisEngine, S3Engine, SQLiteEngine, type Engine, type RedisClient, type SQLiteDatabase } from '~/lib/store/engine';
 
 /**
  * Serializa un documento a string preservando Buffers con BufferJSON de baileys.
@@ -20,8 +20,12 @@ export function serialize<T>(doc: T): string {
 }
 
 /**
- * Deserializa un string JSON a documento aplicando BufferJSON. Retorna null si la entrada es null.
- * Deserializes a JSON string to document using BufferJSON. Returns null if input is null.
+ * Deserializa un string JSON a documento aplicando BufferJSON. Retorna null si la entrada es
+ * null o no es JSON válido: un documento corrupto (escritura interrumpida, truncado) se
+ * comporta como inexistente en vez de propagar el parse error a toda la página.
+ * Deserializes a JSON string to document using BufferJSON. Returns null when the input is
+ * null or invalid JSON: a corrupt document (interrupted write, truncation) behaves as
+ * missing instead of poisoning the whole page with a parse error.
  *
  * @param raw - String JSON o null / JSON string or null
  * @returns Documento parseado o null / Parsed document or null
@@ -30,5 +34,9 @@ export function deserialize<T>(raw: string | null): T | null {
   if (raw === null) {
     return null;
   }
-  return JSON.parse(raw, BufferJSON.reviver) as T;
+  try {
+    return JSON.parse(raw, BufferJSON.reviver) as T;
+  } catch {
+    return null;
+  }
 }

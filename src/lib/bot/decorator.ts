@@ -120,6 +120,9 @@ export function decorator<P extends unknown[]>(
  * `connect()` listeners get wired against the real event emitter automatically.
  */
 export class WhatsAppBot extends WhatsApp {
+    /** @internal Evita re-cablear handlers en reconexiones (duplicaría cada listener). / Prevents re-wiring handlers on reconnects (would duplicate every listener). */
+    private _wired = false;
+
     constructor(options: IWhatsApp) {
         super(options);
     }
@@ -176,6 +179,10 @@ export class WhatsAppBot extends WhatsApp {
      * (`@on`/`@once`), timers (`@every`) and workflows (`@pipe`).
      */
     private _wire_handlers(): void {
+        if (this._wired) {
+            return;
+        }
+        this._wired = true;
         const metadata = (this.constructor as { [Symbol.metadata]?: Metadata })[Symbol.metadata];
         if (metadata) {
             const schema = metadata[HANDLERS] as BotSchema | undefined;

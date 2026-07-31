@@ -827,10 +827,10 @@ atomic-sleep@^1.0.0:
   resolved "https://registry.yarnpkg.com/atomic-sleep/-/atomic-sleep-1.0.0.tgz#eb85b77a601fc932cfe432c5acd364a9e2c9075b"
   integrity sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==
 
-baileys@7.0.0-rc13:
-  version "7.0.0-rc13"
-  resolved "https://registry.yarnpkg.com/baileys/-/baileys-7.0.0-rc13.tgz#d922360df0680d943ea075a5fa30d0b0baa12ecb"
-  integrity sha512-v8k74K8B5R7WNYGa26MyJAYEu3Wc4BSuK01QaK8lr30lhE8Nga31nWNu8KN0NDDt+Fsvkq4SQFFI8Q13ghjKmA==
+baileys@7.0.0-rc14:
+  version "7.0.0-rc14"
+  resolved "https://registry.yarnpkg.com/baileys/-/baileys-7.0.0-rc14.tgz#d4495d44c839b16bc6da0eb3e3f2aeda38376040"
+  integrity sha512-pewtrljhWx5JTUBvvkXZz1fL3JPiwzjBsnhx/DWf2LWBx1cZNH7J/sF22xDehba5mySWUQU4a1Pwt7lWARUxaA==
   dependencies:
     "@cacheable/node-cache" "^1.4.0"
     "@hapi/boom" "^9.1.3"

@@ -9,7 +9,7 @@
     "url": "https://github.com/arcaelas/whatsapp/issues"
   },
   "dependencies": {
-    "baileys": "7.0.0-rc13",
+    "baileys": "7.0.0-rc14",
     "pino": "^10.1.0",
     "qrcode": "^1.5.4"
   },
@@ -72,5 +72,5 @@
     "release": "npm publish --access public"
   },
   "types": "./build/esm/index.d.ts",
-  "version": "4.5.0"
+  "version": "5.0.0"
 }
