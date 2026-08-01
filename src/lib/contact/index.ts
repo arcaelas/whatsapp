@@ -5,10 +5,10 @@
  */
 
 import { jidNormalizedUser } from 'baileys';
-import { internals } from '~/lib/internal';
+import { session, resolve_jid } from '~/lib/internal';
 import type { Chat } from '~/lib/chat';
 import { deserialize, serialize } from '~/lib/store';
-import type { WhatsApp } from '~/lib/whatsapp';
+import type WhatsApp from '~/lib/whatsapp';
 
 /**
  * Clase base del contacto: recibe el raw de baileys y deriva todo con getters.
@@ -108,14 +108,14 @@ export function contact(wa: WhatsApp) {
     static async get(uid: string | number): Promise<_Contact | null> {
       const digits = String(uid).replace(/\D+/g, '');
       const jid = String(uid).includes('@')
-        ? await internals(wa).resolve_jid(String(uid))
+        ? await resolve_jid(wa, String(uid))
         : digits
           ? `${digits}@s.whatsapp.net`
           : null;
       if (jid && !jid.endsWith('@g.us')) {
         const cached = deserialize<Contact['_raw']>(await wa.engine.get(`/contact/${jid}`));
         if (cached) return new _Contact(cached);
-        const socket = internals(wa).socket;
+        const socket = session(wa);
         if (socket) {
           const found = (await socket.onWhatsApp(jid.split('@')[0]))?.[0] as
             | { jid: string; exists: boolean; lid?: string }

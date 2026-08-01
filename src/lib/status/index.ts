@@ -7,10 +7,10 @@
  */
 
 import type { WAMessage } from 'baileys';
-import { internals } from '~/lib/internal';
+import { session } from '~/lib/internal';
 import { Message } from '~/lib/message';
 import { serialize } from '~/lib/store';
-import type { WhatsApp } from '~/lib/whatsapp';
+import type WhatsApp from '~/lib/whatsapp';
 
 /** Vida útil del status: 24 horas en ms. / Status lifetime: 24h in ms. */
 export const TTL_MS = 24 * 60 * 60 * 1000;
@@ -66,7 +66,7 @@ export class Feed extends Message {
      */
     async view(): Promise<boolean> {
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket) {
             if (!this.viewed) {
                 await socket.readMessages([

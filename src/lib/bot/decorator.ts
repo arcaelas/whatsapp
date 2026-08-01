@@ -4,7 +4,9 @@
  * Base infrastructure for Stage 3 decorators over WhatsApp.
  */
 
-import WhatsApp, { type IWhatsApp } from '~/lib/whatsapp';
+import WhatsApp from '~/lib/whatsapp';
+
+type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
 
 (Symbol as { metadata?: symbol }).metadata ??= Symbol.for('Symbol.metadata');
 
