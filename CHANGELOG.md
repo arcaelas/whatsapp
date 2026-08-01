@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.2.1] - 2026-08-01
+
+### Changed
+
+- **`connect` wires the socket and the class stops holding the processing.** Every baileys handler (`messaging-history.set`, contacts, LID mapping, chats, messages and receipts) is now a plain function in `whatsapp/lib/handlers.ts` that takes the client, processes the event and re-emits it through `wa.emit(...)`; `connect` subscribes them and owns the serial chain that keeps two events over the same document from interleaving. The client dropped its 17 private methods and went from 13 private fields to 3 — the emitter, the normalized options and the teardown that `disconnect` invokes — while connection state (retries, timer, intentional/silent close) lives in the closure of the connection that owns it. `index.ts` went from 1511 lines to 671. **The public API is unchanged**: same options, same properties, same methods, same events, verified by diffing the emitted declarations against 6.2.0.
+
 ## [6.2.0] - 2026-07-31
 
 ### Added
