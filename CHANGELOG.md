@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.2.2] - 2026-08-01
+
+### Changed
+
+- **The event processing moved into `connect` and shrank.** 6.2.1 had relocated the handlers to a `lib/handlers.ts` without actually removing anything: the client plus that file added up to more lines than the original. They now live inside `connect` as local closures sharing four helpers (`load`, `save`, `fire`, `locate`), which removed 14 exported signatures with their bilingual JSDoc; the contact merge became a single spread, the chat flags compute their patch and their event in one place instead of two, poll-vote decryption became a dedicated function, and message bodies are a table by type. The module is a single file again: 1214 lines against the 1511 it started with. **The public API is unchanged**, verified by diffing the emitted declarations.
+
 ## [6.2.1] - 2026-08-01
 
 ### Changed
