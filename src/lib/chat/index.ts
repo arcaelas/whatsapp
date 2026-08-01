@@ -4,11 +4,11 @@
  * Chat entity — individual and group conversations.
  */
 
-import { internals } from '~/lib/internal';
+import { session, resolve_jid } from '~/lib/internal';
 import type { Contact } from '~/lib/contact';
 import { Message } from '~/lib/message';
 import { deserialize, serialize } from '~/lib/store';
-import type { WhatsApp } from '~/lib/whatsapp';
+import type WhatsApp from '~/lib/whatsapp';
 
 /**
  * Clase base del chat: recibe el raw y deriva todo con getters.
@@ -132,7 +132,7 @@ export function chat(wa: WhatsApp) {
   const groups_cache = new Map<string, Promise<{ participants: { id: string }[]; desc?: string | null }>>();
   function group_meta(jid: string): Promise<{ participants: { id: string }[]; desc?: string | null }> {
     if (!groups_cache.has(jid)) {
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       groups_cache.set(
         jid,
         socket ? socket.groupMetadata(jid).catch(() => ({ participants: [] })) : Promise.resolve({ participants: [] })
@@ -164,7 +164,7 @@ export function chat(wa: WhatsApp) {
       const ids =
         this.type === 'group'
           ? (await group_meta(this._raw.id)).participants.map((participant) => participant.id)
-          : [this._raw.id, internals(wa).socket?.user?.id].filter((id): id is string => Boolean(id));
+          : [this._raw.id, session(wa)?.user?.id].filter((id): id is string => Boolean(id));
       return Promise.all(ids.slice(offset, offset + limit).map(load_contact));
     }
 
@@ -204,7 +204,7 @@ export function chat(wa: WhatsApp) {
      */
     async typing(value: boolean): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         await socket.sendPresenceUpdate(value ? 'composing' : 'paused', this._raw.id);
         ok = true;
@@ -221,7 +221,7 @@ export function chat(wa: WhatsApp) {
      */
     async recording(value: boolean): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         await socket.sendPresenceUpdate(value ? 'recording' : 'paused', this._raw.id);
         ok = true;
@@ -238,7 +238,7 @@ export function chat(wa: WhatsApp) {
      */
     async archive(value: boolean): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         await socket.chatModify({ archive: value, lastMessages: await last_messages(this._raw.id) }, this._raw.id);
         this._raw.archived = value;
@@ -259,7 +259,7 @@ export function chat(wa: WhatsApp) {
      */
     async pin(value: boolean): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         const allowed = value ? (await count_pinned(this._raw.id)) < MAX_PINNED : true;
         if (allowed) {
@@ -281,7 +281,7 @@ export function chat(wa: WhatsApp) {
      */
     async mute(until: string | number | Date | false): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         const end = until === false ? 0 : new Date(until).getTime();
         const muted = end > Date.now();
@@ -301,7 +301,7 @@ export function chat(wa: WhatsApp) {
      */
     async seen(): Promise<boolean> {
       let ok = false;
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         await socket.chatModify({ markRead: true, lastMessages: await last_messages(this._raw.id) }, this._raw.id);
         this._raw.unread_count = 0;
@@ -318,7 +318,7 @@ export function chat(wa: WhatsApp) {
      * @returns true siempre; la limpieza local es idempotente / always true; local cleanup is idempotent
      */
     async clear(): Promise<boolean> {
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         await socket
           .chatModify({ clear: true, lastMessages: await last_messages(this._raw.id) }, this._raw.id)
@@ -337,7 +337,7 @@ export function chat(wa: WhatsApp) {
      * @returns true siempre; la limpieza local es idempotente / always true; local cleanup is idempotent
      */
     async delete(): Promise<boolean> {
-      const socket = internals(wa).socket;
+      const socket = session(wa);
       if (socket) {
         if (this.type === 'group') {
           await socket.groupLeave(this._raw.id).catch(() => null);
@@ -363,7 +363,7 @@ export function chat(wa: WhatsApp) {
     static async get(cid: string | number): Promise<_Chat | null> {
       const digits = String(cid).replace(/\D+/g, '');
       const jid = String(cid).includes('@')
-        ? await internals(wa).resolve_jid(String(cid))
+        ? await resolve_jid(wa, String(cid))
         : digits
           ? `${digits}@s.whatsapp.net`
           : null;

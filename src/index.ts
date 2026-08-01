@@ -4,8 +4,13 @@
  * Public entry point of the @arcaelas/whatsapp library.
  */
 
-export { WhatsApp, default } from '~/lib/whatsapp';
-export type { IWhatsApp, DisconnectOptions, ReconnectOption } from '~/lib/whatsapp';
+import WhatsApp from '~/lib/whatsapp';
+
+export { WhatsApp };
+export default WhatsApp;
+export type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
+export type DisconnectOptions = NonNullable<Parameters<WhatsApp['disconnect']>[0]>;
+export type ReconnectOption = NonNullable<IWhatsApp['reconnect']>;
 
 export { FileSystemEngine, RedisEngine, S3Engine, SQLiteEngine, serialize, deserialize } from '~/lib/store';
 export type { Engine, RedisClient, SQLiteDatabase } from '~/lib/store';

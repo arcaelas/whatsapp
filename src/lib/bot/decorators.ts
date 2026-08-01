@@ -4,9 +4,11 @@
  * Public bot decorators.
  */
 
-import { internals } from '~/lib/internal';
+import { resolve_jid } from '~/lib/internal';
 import type { Message } from '~/lib/message';
-import type { IWhatsApp, WhatsApp } from '~/lib/whatsapp';
+import type WhatsApp from '~/lib/whatsapp';
+
+type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
 import {
     WhatsAppBot,
     decorator,
@@ -153,7 +155,7 @@ export function from(source: string | string[] | ((jid: string) => boolean)) {
                 if (resolved === null) {
                     resolved = new Set();
                     for (const raw of list) {
-                        const r = await internals(wa).resolve_jid(raw);
+                        const r = await resolve_jid(wa, raw);
                         if (r) {
                             resolved.add(r);
                         }

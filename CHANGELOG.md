@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [6.2.3] - 2026-08-01
+
+### Changed
+
+- **The client file is down to the class alone.** Inline comments are gone and the JSDoc is one bilingual line per member plus its `@param`/`@returns`/`@throws`; `sniff_media`, `write_content` and the poll-vote decryption dissolved into the two places that used them, and so did the type tables and the numeric status constants, which now read from `proto.WebMessageInfo.Status`. The module no longer exports anything but `export default class WhatsApp`: `IWhatsApp`, `DisconnectOptions` and `ReconnectOption` are derived in the entry point from the class itself, so the package's public surface is unchanged. 897 lines against 1214.
+- **The internal channel only carries the socket.** `bind(owner, socket)` and `session(owner)` replace the state object with a function inside, and `resolve_jid` became a plain function in `internal.ts` that takes the owner. The constructor's wiring is now `bind(this, null)`.
+
 ## [6.2.2] - 2026-08-01
 
 ### Changed

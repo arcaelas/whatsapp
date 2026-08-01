@@ -25,11 +25,11 @@ import {
 } from 'baileys';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { internals } from '~/lib/internal';
+import { session, resolve_jid } from '~/lib/internal';
 import { Chat } from '~/lib/chat';
 import { Contact } from '~/lib/contact';
 import { deserialize, serialize } from '~/lib/store';
-import type { WhatsApp } from '~/lib/whatsapp';
+import type WhatsApp from '~/lib/whatsapp';
 
 /** Estados legibles indexados por el status numérico de baileys. / Readable states indexed by the baileys numeric status. */
 const STATUS = ['error', 'pending', 'sent', 'delivered', 'read', 'played'] as const;
@@ -113,8 +113,8 @@ async function send(
     doc_overrides?: Partial<Message['_raw']>,
 ): Promise<Message | null> {
     let result: Message | null = null;
-    const jid = await internals(wa).resolve_jid(cid);
-    const socket = internals(wa).socket;
+    const jid = await resolve_jid(wa, cid);
+    const socket = session(wa);
     if (jid && socket) {
         const quoted = extra.mid
             ? (deserialize<Message['_raw']>(await wa.engine.get(`/chat/${jid}/message/${extra.mid}`))?.raw ?? undefined)
@@ -189,7 +189,7 @@ async function media_stream(wa: WhatsApp, doc: Message['_raw']): Promise<Readabl
     if (cached) {
         return Readable.from(cached);
     }
-    const socket = internals(wa).socket;
+    const socket = session(wa);
     if (socket) {
         try {
             return (await downloadMediaMessage(doc.raw, 'stream', {})) as unknown as Readable;
@@ -409,7 +409,7 @@ export class Message {
      */
     async react(emoji: string): Promise<boolean> {
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket) {
             const { cid, id, me, author } = this._raw;
             await socket.sendMessage(cid, {
@@ -432,7 +432,7 @@ export class Message {
      */
     async star(value: boolean): Promise<boolean> {
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket) {
             const doc = this._raw;
             await socket.chatModify({ star: { messages: [{ id: doc.id, fromMe: doc.me }], star: value } }, doc.cid);
@@ -451,7 +451,7 @@ export class Message {
      */
     async seen(): Promise<boolean> {
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket) {
             const { cid, id, author } = this._raw;
             await socket.readMessages([
@@ -472,7 +472,7 @@ export class Message {
     async edit(caption: string): Promise<boolean> {
         const doc = this._raw;
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket && doc.me) {
             if (doc.type === 'text') {
                 await socket.sendMessage(doc.cid, {
@@ -525,9 +525,9 @@ export class Message {
         const to_cid =
             typeof target === 'string' ? target : target instanceof Chat ? target._raw.id : (target.jid ?? target.lid ?? '');
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket && to_cid) {
-            const jid = await internals(this._wa).resolve_jid(to_cid);
+            const jid = await resolve_jid(this._wa, to_cid);
             if (jid && doc.raw.message) {
                 try {
                     const wa_msg = generateWAMessageFromContent(jid, generateForwardMessageContent(doc.raw, false), {
@@ -555,7 +555,7 @@ export class Message {
     async delete(all = false): Promise<boolean> {
         const doc = this._raw;
         let ok = false;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (socket) {
             if (all) {
                 await socket.sendMessage(doc.cid, { delete: { remoteJid: doc.cid, id: doc.id, fromMe: doc.me } });
@@ -627,7 +627,7 @@ export class Message {
      * @returns Mensaje o null / Message or null
      */
     static async get(wa: WhatsApp, cid: string, mid: string): Promise<Message | null> {
-        const jid = await internals(wa).resolve_jid(cid);
+        const jid = await resolve_jid(wa, cid);
         if (jid) {
             const doc = deserialize<Message['_raw']>(await wa.engine.get(`/chat/${jid}/message/${mid}`));
             if (doc) return message(wa, doc);
@@ -646,7 +646,7 @@ export class Message {
      * @returns Página de mensajes / Message page
      */
     static async list(wa: WhatsApp, cid: string, offset = 0, limit = 50): Promise<Message[]> {
-        const jid = await internals(wa).resolve_jid(cid);
+        const jid = await resolve_jid(wa, cid);
         if (jid) {
             return (await wa.engine.list(`/chat/${jid}/message`, offset, limit))
                 .map((raw) => deserialize<Message['_raw']>(raw))
@@ -1045,7 +1045,7 @@ export class Poll extends Message {
     get options(): { name: string; count: number }[] {
         const aggregated = getAggregateVotesInPollMessage(
             { message: this._raw.raw.message ?? undefined, pollUpdates: this._updates },
-            internals(this._wa).socket?.user?.id
+            session(this._wa)?.user?.id
         );
         const counts = new Map(aggregated.map((entry) => [entry.name, entry.voters.length]));
         return (this._poll?.options ?? []).map((option) => ({
@@ -1063,12 +1063,12 @@ export class Poll extends Message {
     async votes(): Promise<{ name: string; contact: string }[]> {
         const aggregated = getAggregateVotesInPollMessage(
             { message: this._raw.raw.message ?? undefined, pollUpdates: this._updates },
-            internals(this._wa).socket?.user?.id
+            session(this._wa)?.user?.id
         );
         const result: { name: string; contact: string }[] = [];
         for (const entry of aggregated) {
             for (const voter of entry.voters) {
-                const jid = await internals(this._wa).resolve_jid(voter);
+                const jid = await resolve_jid(this._wa, voter);
                 result.push({ name: entry.name, contact: (jid ?? voter).split('@')[0].split(':')[0] });
             }
         }
@@ -1096,7 +1096,7 @@ export class Poll extends Message {
             .map((i) => sha256(Buffer.from(opts[i].optionName ?? '')));
         const secret_raw = doc.raw.message?.messageContextInfo?.messageSecret;
         const poll_enc_key = typeof secret_raw === 'string' ? Buffer.from(secret_raw, 'base64') : secret_raw;
-        const socket = internals(this._wa).socket;
+        const socket = session(this._wa);
         if (!poll_enc_key || !socket || selected_options.length === 0) {
             return false;
         }
@@ -1242,7 +1242,7 @@ export function message(wa: WhatsApp, raw: Message['_raw'] | WAMessage): Message
             | undefined;
         const context_info = (msg_content as { contextInfo?: proto.IContextInfo } | undefined)?.contextInfo;
         const ephemeral_duration = raw.ephemeralDuration ?? context_info?.expiration;
-        const self_id = internals(wa).socket?.user?.id;
+        const self_id = session(wa)?.user?.id;
         doc = {
             id: key.id ?? '',
             cid: (key as { remoteJidAlt?: string }).remoteJidAlt ?? key.remoteJid ?? '',
