@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.0.1] - 2026-08-02
+
+### Fixed
+
+- **Messages died at a single check when the receiver asked for a retry.** When the peer cannot decrypt a message (session desync — routine against WhatsApp Business API numbers, which rotate keys often) it sends a retry request. The internal baileys retry cache indexes the sent message by its JID, but the retry request arrives addressed by LID, so the lookup missed, baileys answered "message not available" and the message was silently lost forever — stuck at one check while the very next message, encrypted over the renegotiated session, went through. That alternating loss is fixed by wiring the official `getMessage` fallback to the engine: the store locates the message under either addressing and baileys re-encrypts and resends it.
+
 ## [7.0.0] - 2026-08-01
 
 ### BREAKING CHANGES
