@@ -2,6 +2,28 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.0.0] - 2026-08-01
+
+### BREAKING CHANGES
+
+- **The client is the emitter and the session; everything else moved into `connect`.** `WhatsApp` exposes `emit/on/once/off`, `connect`, `disconnect`, `engine` and the entities it publishes once the socket exists: `wa.Contact`, `wa.Chat`, `wa.Message` and `wa.account()`. Before the first `connect` those properties are undefined. Event processing lives inside `connect` as listeners over the socket — no private methods, no handler modules, no internal channel.
+- **Entity factories take the live session.** `contact(init)`, `chat(init)`, `message(init)` and `Feed` receive `{ wa, engine, socket }`, so their methods no longer null-check the socket. Each entity file exports its base class as `default` plus its factory; the package barrel keeps every public name (`Contact`, `Chat`, `Message`, `Feed`, subclasses, engines).
+- **`Message` statics dropped the client argument.** `Message.text(wa, cid, …)` is now `wa.Message.text(cid, …)` — same for `get`, `list`, every send and every by-id action. The `message(wa, raw)` factory is gone: `new Message(init, raw)` derives the document from a raw `WAMessage` and returns the per-type subclass from the constructor itself (`new Message(init, poll_raw) instanceof Poll`).
+- **`wa.profile()`, `wa.feed()` and the `wa.contact` getter were replaced by `Account`.** `await wa.account()` returns an `Account extends Contact` bound to the session.
+- **`internal.ts` removed.** The socket no longer travels through a WeakMap: entities receive it in their `init`. The shared identifier resolution is now `jid_of(engine, uid, socket?)`, exported from the store barrel.
+- **`IWhatsApp`, `DisconnectOptions` and `ReconnectOption` are derived types.** The client file exports only the class; the entry point derives those names from it, so existing imports keep compiling.
+
+### Added
+
+- **`Account extends Contact`** — the authenticated account: `rename(name)` updates the public name, `picture(content)` sets the profile picture (Buffer or URL; `null` removes it), `content()` reads the bio and `content(text)` updates it, `online(value)` publishes presence (the socket starts with `markOnlineOnConnect: false`), and `post({ caption, buffer, audience })` publishes a status where the audience accepts `Contact` instances, JIDs, LIDs or phone numbers.
+- **`connect` over a live session replaces it** — the previous socket is closed silently before opening the new one.
+
+### Fixed
+
+- **`Feed.content()` read a path that never existed** (`/chat/status@broadcast/message/…` instead of `/status/…`), so status binaries were never found. `Feed` now overrides `content()` with the real path.
+- **A module cycle crashed direct imports.** `message → contact → status → message` left `Feed extends Message` evaluating against an uninitialized binding when the message module was the entry point. Moving `jid_of` to the store barrel broke the cycle; every module now loads standalone.
+- **Factory return types exposed the bare base.** `Chat.get`/`list` (and Contact's) typed their result as the base class without methods, so consumers lost `chat.pin`, `chat.messages` and friends at compile time. The factories now name their class (`_Chat`, `_Contact`) and the event map types instances of the bound classes.
+
 ## [6.2.3] - 2026-08-01
 
 ### Changed

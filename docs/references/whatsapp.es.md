@@ -63,26 +63,24 @@ La opción `engine` es **obligatoria**. Todos los demás campos son opcionales.
 ## Superficie
 
 ```typescript
-wa.engine                            // el motor de almacenamiento que pasaste
-wa.contact                           // Contact de la cuenta autenticada, o null sin sesión
-wa.Contact / wa.Chat / wa.Message    // entidades ligadas a este cliente
+wa.engine                            // el motor de persistencia que pasaste
+wa.Contact / wa.Chat / wa.Message    // entidades, publicadas al conectar
+await wa.account()                   // Account del usuario autenticado, o null durante el pairing
 
 await wa.connect(callback)           // el callback recibe el PIN (string) o el QR (Buffer PNG)
 await wa.disconnect({ silent?, destroy? })
 
-wa.on(event, handler)                // devuelve la función de desuscripción
-wa.once(event, handler)              // devuelve la función de desuscripción
+wa.on(event, handler)                // devuelve la función para desuscribirse
+wa.once(event, handler)              // devuelve la función para desuscribirse
 wa.off(event, handler)               // devuelve `this`
-wa.emit(event, ...args)              // devuelve true si había listeners
-
-await wa.profile({ name?, content?, photo? })
-await wa.feed({ content?, caption?, contacts })
+wa.emit(event, ...args)              // true si había listeners
 ```
 
-!!! danger "No hay estado privado al que llegar"
-    El socket de baileys, el emisor de eventos, las opciones de vinculación y el resolutor de JIDs
-    viven en campos privados `#` y en un `WeakMap` fuera de la instancia. `wa._socket`, `wa._event`
-    y `wa._resolve_jid` **no existen**: todo pasa por los métodos de arriba.
+!!! danger "No hay estado privado que alcanzar"
+    El socket de baileys, las credenciales y el estado de reintentos viven en el closure de
+    `connect`, no en la instancia. `wa._socket` y compañía **no existen**: todo pasa por los
+    métodos de arriba. Las entidades y `account()` se publican dentro de `connect`, cuando el
+    socket ya existe — antes de la primera conexión no están definidas.
 
 ---
 
@@ -186,80 +184,65 @@ off(); // desengancha más tarde
 
 ---
 
-## Perfil
+## La cuenta
 
 ```typescript
-profile(patch: { name?: string; content?: string; photo?: string | Buffer | null }): Promise<boolean>
+account(): Promise<Account | null>
 ```
 
-Actualiza el perfil de la cuenta en WhatsApp. Solo se envía lo que llega en el parche;
-`photo: null` elimina la foto actual. Devuelve `false` cuando no hay sesión abierta.
+Devuelve la cuenta autenticada como un [`Account`](contact.es.md#account) — subclase de
+`Contact` ligada a la sesión — o `null` mientras no hay usuario (durante el pairing). La ficha
+llega con la foto de perfil ya resuelta.
 
-```typescript title="profile.ts"
-await wa.profile({ name: 'Ventas', content: 'Atendemos 9-18h' });
-await wa.profile({ photo: buffer });                 // un Buffer o una URL https
-await wa.profile({ photo: null });                   // elimina la foto
-```
+```typescript title="account.ts"
+const cuenta = await wa.account();
 
-!!! warning "`ERR_PROFILE_PICTURE_LIB`"
-    baileys redimensiona la foto con `sharp` o `jimp`. Ninguna es dependencia de esta librería, así
-    que si faltan ambas, `profile({ photo })` lanza `ERR_PROFILE_PICTURE_LIB`. Instala una de ellas
-    para usar ese campo.
+await cuenta.rename('Ventas');              // nombre público
+await cuenta.picture(buffer);               // Buffer o URL https; null la elimina
+await cuenta.content();                     // lee la bio
+await cuenta.content('Atendemos 9-18h');    // la actualiza
+await cuenta.online(true);                  // presencia: el socket arranca offline
 
----
-
-## Estados (status broadcast)
-
-```typescript
-feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[] }): Promise<Feed | null>
-```
-
-Publica un estado y devuelve el [`Feed`](feed.es.md) creado, o `null` cuando no hay sesión abierta.
-
-- Solo con `caption` → estado de texto.
-- Con `content` → imagen o video; el tipo se deduce de la firma del binario y `caption` queda como
-  pie.
-- `contacts` es la **audiencia** y es obligatoria: WhatsApp no entrega el estado a nadie fuera de
-  esa lista.
-
-```typescript title="feed.ts"
-const post = await wa.feed({
+const post = await cuenta.post({
     caption: '¡Estamos en vivo!',
-    contacts: ['5491112345678', 584121234567],
+    audience: [contacto, 5491112345678, '584121234567@s.whatsapp.net'],
 });
 ```
 
-| Error              | Se lanza cuando                                        |
-| ------------------ | ------------------------------------------------------ |
-| `ERR_FEED_EMPTY`   | No se pasó ni `content` ni `caption`.                  |
-| `ERR_FEED_MEDIA`   | `content` no es JPEG/PNG/WebP ni MP4.                  |
+`post` publica un estado y devuelve el [`Feed`](feed.es.md) creado; la audiencia es obligatoria
+y acepta instancias de `Contact`, JIDs, LIDs o teléfonos.
+
+| Error                     | Cuándo                                              |
+| ------------------------- | --------------------------------------------------- |
+| `ERR_FEED_EMPTY`          | No llegó ni `buffer` ni `caption`.                  |
+| `ERR_FEED_MEDIA`          | `buffer` no es JPEG/PNG/WebP ni MP4.                |
+| `ERR_PROFILE_PICTURE_LIB` | `picture()` sin `sharp` ni `jimp` instalados.       |
 
 ---
 
 ## Entidades
 
-La instancia lleva las tres entidades ligadas al cliente y al motor actuales:
+La instancia lleva las tres entidades ligadas a la sesión actual, publicadas al conectar:
 
-| Propiedad    | Qué es                                                                                              |
+| Propiedad    | Qué es                                                                                                |
 | ------------ | ----------------------------------------------------------------------------------------------------- |
 | `wa.Contact` | Subclase de `Contact` ligada a la sesión: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`.  |
 | `wa.Chat`    | Subclase de `Chat` ligada a la sesión: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`.              |
-| `wa.Message` | Objeto delegado: los estáticos de `Message` sin repetir el cliente, más las subclases.                 |
+| `wa.Message` | Subclase de `Message` ligada a la sesión: lecturas, envíos, acciones por id y las subclases.            |
 | `wa.engine`  | Acceso directo al motor de almacenamiento.                                                             |
-| `wa.contact` | `Contact` de la cuenta autenticada, o `null` mientras no hay sesión abierta.                           |
+| `wa.account()` | El usuario autenticado como [`Account`](contact.es.md#account), o `null` durante el pairing.         |
 
 ```typescript title="Usando las entidades"
 const chats  = await wa.Chat.list(0, 20);
 const person = await wa.Contact.get('5491112345678');
 await wa.Message.text('5491112345678', 'Hola');
 
-console.log(wa.contact?.name, wa.contact?.phone);
+console.log((await wa.account())?.name);
 ```
 
-### El delegado `wa.Message`
+### La clase `wa.Message`
 
-Cada método refleja el estático de `Message` del mismo nombre con el cliente ya aplicado:
-`wa.Message.text(cid, …)` es `Message.text(wa, cid, …)`.
+La clase ligada lleva cada lectura, envío y acción por id con la sesión ya aplicada:
 
 | Grupo   | Miembros                                                                                         |
 | ------- | ------------------------------------------------------------------------------------------------ |

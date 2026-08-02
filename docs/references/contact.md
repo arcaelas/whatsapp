@@ -46,7 +46,7 @@ the internal `contact(wa)` factory. The exported `Contact` class carries the get
 - `wa.Contact.list(offset, limit)` — paginated reads.
 - `chat.members(offset, limit)` — chat participants.
 - `msg.author()` — the sender of a message.
-- `wa.contact` — the authenticated account itself.
+- `await wa.account()` — the authenticated account itself, as an [`Account`](#account).
 - `contact:created` / `contact:updated` event payloads.
 
 ```typescript title="bootstrap.ts"
@@ -169,6 +169,22 @@ while (true) {
     offset += batch.length;
 }
 ```
+
+---
+
+## Account
+
+`Account extends Contact` is the authenticated user, returned by [`wa.account()`](whatsapp.md#the-account).
+On top of every `Contact` getter it operates on the own profile:
+
+| Member                | What it does                                                              |
+| --------------------- | ------------------------------------------------------------------------- |
+| `rename(name)`        | Updates the public name on WhatsApp (and on the instance).                |
+| `picture(content)`    | Sets the profile picture (Buffer or https URL); `null` removes it.        |
+| `content()`           | Reads the bio.                                                            |
+| `content(text)`       | Updates the bio.                                                          |
+| `online(value)`       | Publishes presence; the socket starts offline (`markOnlineOnConnect: false`). |
+| `post({ caption, buffer, audience })` | Publishes a status; the audience accepts `Contact`, JID, LID or phone. |
 
 ---
 

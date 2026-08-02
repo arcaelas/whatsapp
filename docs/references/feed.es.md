@@ -17,7 +17,7 @@ import { WhatsApp, Feed, FEED_TTL_MS } from "@arcaelas/whatsapp";
 
 Nunca construyes un `Feed` a mano. Las instancias llegan de:
 
-- `wa.feed({ … })` — la publicación que tú creas.
+- `(await wa.account()).post({ … })` — la publicación que tú creas.
 - Los eventos `feed:created`, `feed:updated` y `feed:deleted`.
 
 ---
@@ -25,25 +25,26 @@ Nunca construyes un `Feed` a mano. Las instancias llegan de:
 ## Publicar
 
 ```typescript
-wa.feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[] }): Promise<Feed | null>
+account.post(input: { caption?: string; buffer?: Buffer; audience: (string | number | Contact)[] }): Promise<Feed | null>
 ```
 
 ```typescript title="publish.ts"
 // Estado de texto
-await wa.feed({
+const cuenta = await wa.account();
+await cuenta.post({
   caption: "¡Estamos en vivo!",
-  contacts: ["5491112345678", 584121234567],
+  audience: ["5491112345678", 584121234567],
 });
 
 // Estado de imagen o video — el tipo se deduce de la firma del binario
-await wa.feed({
-  content: await readFile("./promo.jpg"),
+await cuenta.post({
+  buffer: await readFile("./promo.jpg"),
   caption: "Nueva colección",
-  contacts: ["5491112345678"],
+  audience: ["5491112345678"],
 });
 ```
 
-!!! warning "`contacts` es la audiencia, y es obligatoria"
+!!! warning "`audience` es la audiencia, y es obligatoria"
     WhatsApp no entrega el estado a nadie fuera de la lista que pases. No hay atajo de "todos mis
     contactos": arma la lista tú mismo, por ejemplo desde `wa.Contact.list()`.
 
@@ -138,7 +139,7 @@ try {
 
 | Evento | Firma | Se dispara cuando… |
 | ------ | ----- | ------------------ |
-| `feed:created` | `[feed, wa]` | Llega un estado de un contacto, o publicas uno con `wa.feed()`. |
+| `feed:created` | `[feed, wa]` | Llega un estado de un contacto, o publicas uno con `account.post()`. |
 | `feed:updated` | `[feed, wa]` | El estado se marca como visto, o alguien reacciona a él. |
 | `feed:deleted` | `[feed, wa]` | El autor revoca el estado. |
 

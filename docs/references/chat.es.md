@@ -153,7 +153,7 @@ if (chat?.type === "group") {
 messages(offset = 0, limit = 50): Promise<Message[]>
 ```
 
-Atajo de `Message.list(wa, chat._raw.id, offset, limit)`. Los mensajes llegan del más reciente al
+Atajo de `wa.Message.list(chat._raw.id, offset, limit)`. Los mensajes llegan del más reciente al
 más antiguo.
 
 ```typescript title="messages.ts"

@@ -134,7 +134,7 @@ wa.on('message:reacted', (msg, chat, emoji) => {
 
 | Event          | Signature      | Fires when…                                                     |
 | -------------- | -------------- | ----------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | A status arrives, or you publish one with `wa.feed()`.          |
+| `feed:created` | `[feed, wa]`   | A status arrives, or you publish one with `account.post()`.          |
 | `feed:updated` | `[feed, wa]`   | The status is marked as viewed, or someone reacts to it.        |
 | `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                   |
 

@@ -65,8 +65,8 @@ The `engine` option is **required**. Every other field is optional.
 
 ```typescript
 wa.engine                            // the storage engine you passed in
-wa.contact                           // Contact of the authenticated account, or null while offline
-wa.Contact / wa.Chat / wa.Message    // entities bound to this client
+wa.Contact / wa.Chat / wa.Message    // entities, published on connect
+await wa.account()                   // Account of the authenticated user, or null while pairing
 
 await wa.connect(callback)           // callback receives the PIN (string) or the QR (PNG Buffer)
 await wa.disconnect({ silent?, destroy? })
@@ -75,15 +75,13 @@ wa.on(event, handler)                // returns the unsubscribe function
 wa.once(event, handler)              // returns the unsubscribe function
 wa.off(event, handler)               // returns `this`
 wa.emit(event, ...args)              // returns true when listeners were present
-
-await wa.profile({ name?, content?, photo? })
-await wa.feed({ content?, caption?, contacts })
 ```
 
 !!! danger "There is no private state to reach for"
-    The baileys socket, the event emitter, the pairing options and the JID resolver live in `#`
-    private fields and in a `WeakMap` outside the instance. `wa._socket`, `wa._event` and
-    `wa._resolve_jid` **do not exist**: everything goes through the methods above.
+    The baileys socket, the credentials and the retry state live in the closure of `connect`,
+    not on the instance. `wa._socket` and friends **do not exist**: everything goes through the
+    methods above. The entities and `account()` are published inside `connect`, once the socket
+    exists — before the first connection they are undefined.
 
 ---
 
@@ -187,81 +185,65 @@ off(); // detach later
 
 ---
 
-## Profile
+## The account
 
 ```typescript
-profile(patch: { name?: string; content?: string; photo?: string | Buffer | null }): Promise<boolean>
+account(): Promise<Account | null>
 ```
 
-Updates the account profile on WhatsApp. Only the given fields are sent; `photo: null` removes the
-current picture. Returns `false` when there is no open session.
+Returns the authenticated account as an [`Account`](contact.md#account) — a `Contact` subclass
+bound to the session — or `null` while there is no user yet (during pairing). The card arrives
+with the profile picture already resolved.
 
-```typescript title="profile.ts"
-await wa.profile({ name: 'Sales', content: 'Open 9-18h' });
-await wa.profile({ photo: buffer });                 // a Buffer or an https URL
-await wa.profile({ photo: null });                   // removes the picture
-```
+```typescript title="account.ts"
+const account = await wa.account();
 
-!!! warning "`ERR_PROFILE_PICTURE_LIB`"
-    baileys resizes the picture with `sharp` or `jimp`. Neither is a dependency of this library,
-    so if both are missing `profile({ photo })` throws `ERR_PROFILE_PICTURE_LIB`. Install one of
-    them to use that field.
+await account.rename('Sales');              // public name
+await account.picture(buffer);              // Buffer or https URL; null removes it
+await account.content();                    // reads the bio
+await account.content('Open 9-18h');        // updates it
+await account.online(true);                 // presence: the socket starts offline
 
----
-
-## Status broadcasts
-
-```typescript
-feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[] }): Promise<Feed | null>
-```
-
-Publishes a status broadcast and returns the created [`Feed`](feed.md), or `null` when there is no
-open session.
-
-- With only `caption` → a text status.
-- With `content` → image or video; the type is inferred from the binary signature and `caption`
-  becomes its footer.
-- `contacts` is the **audience** and is mandatory: WhatsApp does not deliver the status to anyone
-  outside that list.
-
-```typescript title="feed.ts"
-const post = await wa.feed({
+const post = await account.post({
     caption: 'We are live!',
-    contacts: ['5491112345678', 584121234567],
+    audience: [contact, 5491112345678, '584121234567@s.whatsapp.net'],
 });
 ```
 
-| Error              | Thrown when                                        |
-| ------------------ | -------------------------------------------------- |
-| `ERR_FEED_EMPTY`   | Neither `content` nor `caption` was given.          |
-| `ERR_FEED_MEDIA`   | `content` is neither a JPEG/PNG/WebP nor an MP4.    |
+`post` publishes a status broadcast and returns the created [`Feed`](feed.md); the audience is
+mandatory and accepts `Contact` instances, JIDs, LIDs or phone numbers.
+
+| Error                     | Thrown when                                       |
+| ------------------------- | ------------------------------------------------- |
+| `ERR_FEED_EMPTY`          | Neither `buffer` nor `caption` was given.         |
+| `ERR_FEED_MEDIA`          | `buffer` is neither a JPEG/PNG/WebP nor an MP4.   |
+| `ERR_PROFILE_PICTURE_LIB` | `picture()` without `sharp` nor `jimp` installed. |
 
 ---
 
 ## Entities
 
-The instance carries the three entities bound to the current client and engine:
+The instance carries the three entities bound to the current session, published on connect:
 
-| Property     | What it is                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------------- |
+| Property     | What it is                                                                                          |
+| ------------ | --------------------------------------------------------------------------------------------------- |
 | `wa.Contact` | `Contact` subclass bound to the session: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`. |
-| `wa.Chat`    | `Chat` subclass bound to the session: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`.            |
-| `wa.Message` | Delegate object: the `Message` statics without repeating the client, plus the subclasses.           |
-| `wa.engine`  | Direct access to the storage engine.                                                                |
-| `wa.contact` | `Contact` of the authenticated account, or `null` while there is no open session.                   |
+| `wa.Chat`    | `Chat` subclass bound to the session: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`.             |
+| `wa.Message` | `Message` subclass bound to the session: reads, sends, by-id actions and the subclasses.             |
+| `wa.engine`  | Direct access to the storage engine.                                                                 |
+| `wa.account()` | The authenticated user as an [`Account`](contact.md#account), or `null` while pairing.             |
 
 ```typescript title="Using the entities"
 const chats  = await wa.Chat.list(0, 20);
 const person = await wa.Contact.get('5491112345678');
 await wa.Message.text('5491112345678', 'Hello');
 
-console.log(wa.contact?.name, wa.contact?.phone);
+console.log((await wa.account())?.name);
 ```
 
-### The `wa.Message` delegate
+### The `wa.Message` class
 
-Every method mirrors the `Message` static of the same name with the client already applied —
-`wa.Message.text(cid, …)` is `Message.text(wa, cid, …)`.
+The bound class carries every read, send and by-id action with the session already applied:
 
 | Group  | Members                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------ |

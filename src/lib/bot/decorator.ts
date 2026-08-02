@@ -39,7 +39,7 @@ type Metadata = Record<string | symbol, unknown>;
  * @param metadata - Objeto metadata del contexto del decorador / Decorator context metadata object
  * @returns Schema del bot garantizado con `handlers` y `workflows` / Bot schema guaranteed to have `handlers` and `workflows`
  */
-export function ensure_schema(metadata: Metadata): BotSchema {
+function ensure_schema(metadata: Metadata): BotSchema {
     let schema = metadata[HANDLERS] as BotSchema | undefined;
     if (!schema) {
         schema = { handlers: {}, workflows: {} };
