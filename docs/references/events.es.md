@@ -134,7 +134,7 @@ wa.on('message:reacted', (msg, chat, emoji) => {
 
 | Evento         | Firma          | Se dispara cuando…                                              |
 | -------------- | -------------- | ----------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | Llega un estado, o publicas uno con `wa.feed()`.                |
+| `feed:created` | `[feed, wa]`   | Llega un estado, o publicas uno con `account.post()`.                |
 | `feed:updated` | `[feed, wa]`   | El estado se marca como visto, o alguien reacciona a él.        |
 | `feed:deleted` | `[feed, wa]`   | El autor revoca el estado.                                       |
 

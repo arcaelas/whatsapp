@@ -17,7 +17,7 @@ edición, eliminación — y diez subclases especializadas añaden lo propio de 
 | `VCard` | `contacts` |
 | `Event` | `name`, `start`, `end`, `canceled`, `link`, `place` |
 
-La factory `message(wa, raw)` evalúa el tipo y devuelve la instancia de la subclase correcta. Acepta
+La factory `new Message(init, raw)` evalúa el tipo y devuelve la instancia de la subclase correcta. Acepta
 tanto un documento persistido como un `WAMessage` crudo de baileys — en ese caso el documento (id,
 tipo, autor, caption, mime, fechas) se deriva ahí mismo.
 
@@ -137,7 +137,7 @@ switch (msg.type) {
     vuelve a fallar; el mismo texto desde otra cuenta llega sin problema.
 
     ```typescript
-    const sent = await Message.text(wa, cid, "hola");
+    const sent = await wa.Message.text(cid, "hola");
     if (sent?.status === 'error' && sent.reason === 'restricted') {
         // esta línea solo puede continuar conversaciones que ya existen
     }
@@ -325,7 +325,7 @@ Cada estático recibe el **cliente como primer argumento**. El delegado `wa.Mess
 mismos métodos con el cliente ya aplicado, que es lo que usas normalmente:
 
 ```typescript
-await Message.text(wa, cid, "hola");   // cliente explícito
+await wa.Message.text(cid, "hola");   // cliente explícito
 await wa.Message.text(cid, "hola");    // la misma llamada por el delegado
 ```
 

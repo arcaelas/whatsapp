@@ -44,7 +44,7 @@ Node 20 o superior. El paquete se distribuye en ESM y CJS.
 | Paquete | Necesario para |
 | --- | --- |
 | `@aws-sdk/client-s3` | `S3Engine` |
-| `sharp` o `jimp` | `wa.profile({ photo })` |
+| `sharp` o `jimp` | `cuenta.picture(...)` |
 
 `RedisEngine` y `SQLiteEngine` no necesitan nada: reciben el cliente ya construido, así que servís vos el `ioredis`, `better-sqlite3` o `node:sqlite` que prefieras.
 
@@ -93,8 +93,8 @@ new WhatsApp({ engine, phone?, method?, autoclean?, reconnect?, sync? })
 
 ```ts
 wa.engine                     // motor de persistencia
-wa.contact                    // Contact de la cuenta autenticada, o null sin sesión
-wa.Contact / wa.Chat / wa.Message   // entidades ligadas a este cliente
+wa.Contact / wa.Chat / wa.Message   // entidades, publicadas al conectar
+await wa.account()            // Account de la cuenta autenticada, o null sin usuario
 
 await wa.connect(callback)    // callback recibe el PIN (string) o el QR (Buffer PNG)
 await wa.disconnect({ silent?, destroy? })
@@ -103,33 +103,37 @@ wa.on(event, handler)         // devuelve la función para desuscribirse
 wa.once(event, handler)
 wa.off(event, handler)
 wa.emit(event, ...args)
-
-await wa.profile({ name?, content?, photo? })   // nombre público, bio y foto
-await wa.feed({ content?, caption?, contacts }) // publica un estado
 ```
 
-El estado interno (socket de baileys, emisor, credenciales) es **privado de verdad**: no está accesible desde la instancia. Todo pasa por los métodos de arriba.
+Las entidades y `account()` se publican dentro de `connect`, cuando el socket ya existe: antes de la primera conexión no están definidas. El estado interno (socket, credenciales, reintentos) vive en el closure de `connect` — no hay nada que hurgar en la instancia.
 
-### Perfil y estados
+### La cuenta: `Account`
+
+`await wa.account()` devuelve un `Account extends Contact`: todos los getters de un contacto (`name`, `phone`, `jid`, `lid`, `photo`) más las operaciones que solo existen para uno mismo.
 
 ```ts
-await wa.profile({ name: 'Ventas', content: 'Atendemos 9-18h' });
-await wa.profile({ photo: buffer });        // o una URL
-await wa.profile({ photo: null });          // elimina la foto
+const cuenta = await wa.account();
 
-const post = await wa.feed({
+await cuenta.rename('Ventas');            // nombre público
+await cuenta.picture(buffer);             // foto de perfil (Buffer o URL)
+await cuenta.picture(null);               // la elimina
+await cuenta.content();                   // lee la bio
+await cuenta.content('Atendemos 9-18h');  // la actualiza
+await cuenta.online(true);                // presencia online/offline
+
+const post = await cuenta.post({
     caption: '¡Estamos en vivo!',
-    contacts: ['5491112345678', '584121234567'],   // audiencia obligatoria
+    audience: [contacto, 5491112345678, '584121234567@s.whatsapp.net', '999@lid'],
 });
 ```
 
-`contacts` no es opcional: WhatsApp no entrega el estado a nadie fuera de esa lista. Con `content` (Buffer) se publica imagen o video —el tipo se deduce de la firma del binario— y `caption` queda como pie.
+`audience` no es opcional: WhatsApp no entrega el estado a nadie fuera de esa lista, y acepta instancias de `Contact`, JIDs, LIDs o teléfonos. Con `buffer` se publica imagen o video —el tipo se deduce de la firma del binario— y `caption` queda como pie. La presencia arranca en offline (`markOnlineOnConnect: false`): `online()` es el único interruptor.
 
 ---
 
 ## Entidades
 
-Cada entidad expone getters puros sobre su documento y métodos que actúan contra WhatsApp. `wa.Contact`, `wa.Chat` y `wa.Message` ya vienen ligados al cliente; las clases sueltas se importan del paquete cuando querés `instanceof` o los estáticos con el cliente explícito.
+Cada entidad expone getters puros sobre su documento y métodos que actúan contra WhatsApp. `wa.Contact`, `wa.Chat` y `wa.Message` ya vienen ligados a la sesión; las clases sueltas se importan del paquete cuando querés `instanceof`.
 
 ### Contact
 

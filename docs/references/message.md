@@ -17,7 +17,7 @@ deletion — and ten specialized subclasses add the payload-specific parts:
 | `VCard`    | `contacts`                                                              |
 | `Event`    | `name`, `start`, `end`, `canceled`, `link`, `place`                     |
 
-The `message(wa, raw)` factory evaluates the type and returns the right subclass instance. It
+The `new Message(init, raw)` factory evaluates the type and returns the right subclass instance. It
 accepts either a persisted document or a raw baileys `WAMessage` — in the latter case the document
 (id, type, author, caption, mime, dates) is derived on the spot.
 
@@ -137,7 +137,7 @@ switch (msg.type) {
     again; the same text from another account goes through.
 
     ```typescript
-    const sent = await Message.text(wa, cid, "hi");
+    const sent = await wa.Message.text(cid, "hi");
     if (sent?.status === 'error' && sent.reason === 'restricted') {
         // this line can only continue conversations that already exist
     }
@@ -325,7 +325,7 @@ Every static takes the **client as its first argument**. The `wa.Message` delega
 methods with the client already applied, which is what you normally use:
 
 ```typescript
-await Message.text(wa, cid, 'hello');   // explicit client
+await wa.Message.text(cid, 'hello');   // explicit client
 await wa.Message.text(cid, 'hello');    // same call through the delegate
 ```
 

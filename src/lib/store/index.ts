@@ -4,6 +4,8 @@
  * Store module barrel — re-exports Engine + drivers and provides serialization helpers.
  */
 
+import { jidNormalizedUser, type WASocket } from 'baileys';
+import type { Engine } from '~/lib/store/engine';
 import { BufferJSON } from 'baileys';
 
 export { FileSystemEngine, RedisEngine, S3Engine, SQLiteEngine, type Engine, type RedisClient, type SQLiteDatabase } from '~/lib/store/engine';
@@ -40,3 +42,27 @@ export function deserialize<T>(raw: string | null): T | null {
     return null;
   }
 }
+
+/**
+ * JID canónico de un teléfono, JID o LID: los grupos y JIDs pasan tal cual, el LID se mapea
+ * contra los índices `/lid` del engine (o contra baileys cuando hay socket) y el resto se
+ * trata como teléfono.
+ * Canonical JID for a phone, JID or LID: groups and JIDs pass through, the LID is mapped
+ * against the engine `/lid` indexes (or against baileys when a socket is given) and the rest
+ * is treated as a phone.
+ *
+ * @param engine - Motor con los índices `/lid` / Engine holding the `/lid` indexes
+ * @param uid - Identificador crudo / Raw identifier
+ * @param socket - Socket vivo para el mapping de baileys, si hay / Live socket for the baileys mapping, if any
+ * @returns JID canónico, o null si es irresoluble / Canonical JID, or null when unresolvable
+ */
+export const jid_of = async (engine: Engine, uid: string, socket?: WASocket): Promise<string | null> => {
+    if (uid.endsWith('@g.us') || uid.endsWith('@s.whatsapp.net')) return uid;
+    const lid = uid.endsWith('@lid') ? jidNormalizedUser(uid) : '';
+    const mapped = lid
+        ? deserialize<string>(await engine.get(`/lid/${lid}`))
+        ?? deserialize<string | number>(await engine.get(`/lid/${lid.split('@')[0]}_reverse`))
+        ?? await socket?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null)
+        : uid.replace(/\D/g, '');
+    return mapped ? (String(mapped).includes('@') ? jidNormalizedUser(String(mapped)) : `${mapped}@s.whatsapp.net`) : null;
+};

@@ -46,7 +46,7 @@ when you use the matching feature:
 | Package                | Needed for                                              |
 | ---------------------- | -------------------------------------------------------- |
 | `@aws-sdk/client-s3`   | `S3Engine`                                              |
-| `sharp` **or** `jimp`  | `wa.profile({ photo })` — baileys resizes the picture   |
+| `sharp` **or** `jimp`  | `account.picture(…)` — baileys resizes the picture   |
 | `ioredis`              | The client you hand to `RedisEngine`                    |
 | `better-sqlite3`       | The database you hand to `SQLiteEngine` on Node < 22    |
 

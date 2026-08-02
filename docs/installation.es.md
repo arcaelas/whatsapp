@@ -46,7 +46,7 @@ cuando usas la función correspondiente:
 | Paquete                | Necesario para                                            |
 | ---------------------- | ----------------------------------------------------------- |
 | `@aws-sdk/client-s3`   | `S3Engine`                                                 |
-| `sharp` **o** `jimp`   | `wa.profile({ photo })` — baileys redimensiona la foto     |
+| `sharp` **o** `jimp`   | `account.picture(…)` — baileys redimensiona la foto     |
 | `ioredis`              | El cliente que le pasas a `RedisEngine`                    |
 | `better-sqlite3`       | La base que le pasas a `SQLiteEngine` en Node < 22         |
 

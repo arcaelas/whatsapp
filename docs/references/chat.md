@@ -151,7 +151,7 @@ if (chat?.type === 'group') {
 messages(offset = 0, limit = 50): Promise<Message[]>
 ```
 
-Shortcut for `Message.list(wa, chat._raw.id, offset, limit)`. Messages come back from the most
+Shortcut for `wa.Message.list(chat._raw.id, offset, limit)`. Messages come back from the most
 recent to the oldest.
 
 ```typescript title="messages.ts"

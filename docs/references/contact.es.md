@@ -46,7 +46,7 @@ produce la factory interna `contact(wa)`. La clase `Contact` exportada lleva sol
 - `wa.Contact.list(offset, limit)` — lecturas paginadas.
 - `chat.members(offset, limit)` — participantes de un chat.
 - `msg.author()` — el remitente de un mensaje.
-- `wa.contact` — la propia cuenta autenticada.
+- `await wa.account()` — la propia cuenta autenticada, como [`Account`](#account).
 - Payloads de los eventos `contact:created` / `contact:updated`.
 
 ```typescript title="bootstrap.ts"
@@ -170,6 +170,22 @@ while (true) {
   offset += batch.length;
 }
 ```
+
+---
+
+## Account
+
+`Account extends Contact` es el usuario autenticado, devuelto por [`wa.account()`](whatsapp.es.md#la-cuenta).
+Sobre todos los getters de `Contact` agrega las operaciones del propio perfil:
+
+| Miembro               | Qué hace                                                                    |
+| --------------------- | --------------------------------------------------------------------------- |
+| `rename(name)`        | Actualiza el nombre público en WhatsApp (y en la instancia).                |
+| `picture(content)`    | Fija la foto de perfil (Buffer o URL https); `null` la elimina.             |
+| `content()`           | Lee la bio.                                                                 |
+| `content(text)`       | Actualiza la bio.                                                           |
+| `online(value)`       | Publica la presencia; el socket arranca offline (`markOnlineOnConnect: false`). |
+| `post({ caption, buffer, audience })` | Publica un estado; la audiencia acepta `Contact`, JID, LID o teléfono. |
 
 ---
 

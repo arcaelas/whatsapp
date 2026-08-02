@@ -17,7 +17,7 @@ import { WhatsApp, Feed, FEED_TTL_MS } from '@arcaelas/whatsapp';
 
 You never construct a `Feed` yourself. Instances come from:
 
-- `wa.feed({ … })` — the post you publish.
+- `(await wa.account()).post({ … })` — the post you publish.
 - The `feed:created`, `feed:updated` and `feed:deleted` events.
 
 ---
@@ -25,21 +25,22 @@ You never construct a `Feed` yourself. Instances come from:
 ## Publishing
 
 ```typescript
-wa.feed(post: { content?: Buffer; caption?: string; contacts: (string | number)[] }): Promise<Feed | null>
+account.post(input: { caption?: string; buffer?: Buffer; audience: (string | number | Contact)[] }): Promise<Feed | null>
 ```
 
 ```typescript title="publish.ts"
 // Text status
-await wa.feed({
+const account = await wa.account();
+await account.post({
     caption: 'We are live!',
-    contacts: ['5491112345678', 584121234567],
+    audience: ['5491112345678', 584121234567],
 });
 
 // Image or video status — the type is inferred from the binary signature
-await wa.feed({
-    content: await readFile('./promo.jpg'),
+await account.post({
+    buffer: await readFile('./promo.jpg'),
     caption: 'New collection',
-    contacts: ['5491112345678'],
+    audience: ['5491112345678'],
 });
 ```
 
@@ -138,7 +139,7 @@ try {
 
 | Event          | Signature      | Fires when…                                                                 |
 | -------------- | -------------- | ----------------------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | A status arrives from a contact, or you publish one with `wa.feed()`.        |
+| `feed:created` | `[feed, wa]`   | A status arrives from a contact, or you publish one with `account.post()`.        |
 | `feed:updated` | `[feed, wa]`   | The status is marked as viewed, or someone reacts to it.                     |
 | `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                               |
 
