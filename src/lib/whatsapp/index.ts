@@ -159,6 +159,16 @@ export default class WhatsApp {
                     logger: pino({ level: 'silent' }),
                     syncFullHistory: sync,
                     shouldSyncHistoryMessage: ({ syncType }) => sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
+                    // Cuando el receptor no puede descifrar pide un retry; el cache interno de
+                    // baileys indexa por JID pero el retry llega por LID y no lo encuentra: sin
+                    // este fallback el mensaje muere en un solo check.
+                    // When the receiver cannot decrypt it asks for a retry; the internal baileys
+                    // cache indexes by JID but the retry arrives by LID and misses: without this
+                    // fallback the message dies at a single check.
+                    getMessage: async (key) => {
+                        const found = key.remoteJid && key.id ? await locate(key.remoteJid, key.id) : null;
+                        return found?.doc.raw.message ?? undefined;
+                    },
                     markOnlineOnConnect: false,
                 });
 
