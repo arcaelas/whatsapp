@@ -23,6 +23,16 @@ import Message, { message } from '~/lib/message';
 import { Feed, TTL_MS as FEED_TTL_MS } from '~/lib/status';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 
+/**
+ * WhatsApp devuelve el nombre de la propia cuenta enmascarado —«+58∙∙∙∙∙∙∙∙40»— cuando el perfil
+ * no viajó completo. Eso no es un nombre: aceptarlo tapa al verdadero, que sí está guardado en
+ * la ficha del contacto propio.
+ * WhatsApp returns the own account name masked —«+58∙∙∙∙∙∙∙∙40»— when the profile did not travel
+ * whole. That is not a name: taking it hides the real one, which is stored on the own contact
+ * card.
+ */
+const readable = (value: string | null | undefined) => (value && !/^\+?[\d\s·•∙⋅]+$/.test(value) ? value : null);
+
 type FeedRaw = ConstructorParameters<typeof Feed>[1];
 type ChatInstance = InstanceType<ReturnType<typeof chat>>;
 type ContactInstance = InstanceType<ReturnType<typeof contact>>;
@@ -43,6 +53,15 @@ interface Options {
     reconnect?: boolean | number | { max?: number; interval?: number };
     /** Descargar el historial de mensajes al vincular; contactos, credenciales, LID mappings y tctokens se sincronizan siempre. / Download the message history on link; contacts, credentials, LID mappings and tctokens always sync. */
     sync?: boolean;
+    /**
+     * Nombre con el que esta sesión aparece en «Dispositivos vinculados» del teléfono. Cuando
+     * una cuenta tiene varias sesiones, es lo ÚNICO que permite distinguirlas para cerrar la
+     * correcta: sin él todas se ven iguales y no hay forma de saber cuál sobra.
+     * Name this session shows under the phone's «Linked devices». When an account holds several
+     * sessions it is the ONLY thing telling them apart to close the right one: without it they
+     * all look alike and there is no way to know which one is spare.
+     */
+    device?: string;
 }
 
 interface EventMap {
@@ -75,6 +94,13 @@ export default class WhatsApp {
     #event = new EventEmitter<EventMap>();
     #options: Options;
     #close: ((silent: boolean) => Promise<void>) | null = null;
+    /**
+     * Cierre completo: desvincula del teléfono y termina el socket. Es distinto de `#close`,
+     * que sólo cuelga —lo que hace falta al reconectar, donde desvincular sería absurdo—.
+     * Full close: unlinks from the phone and ends the socket. Distinct from `#close`, which
+     * merely hangs up —what reconnecting needs, where unlinking would be absurd—.
+     */
+    #unlink: ((silent: boolean) => Promise<void>) | null = null;
 
     readonly engine: Engine;
     Contact!: ReturnType<typeof contact>;
@@ -110,7 +136,7 @@ export default class WhatsApp {
 
     async connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void> {
         const { engine } = this;
-        const { phone, method, autoclean = true, sync = true, reconnect = true } = this.#options;
+        const { phone, method, autoclean = true, sync = true, reconnect = true, device } = this.#options;
         const digits = phone !== undefined ? String(phone).replace(/\D+/g, '') : '';
         const budget = reconnect === false ? 0 : reconnect === true ? null : typeof reconnect === 'number' ? reconnect : reconnect.max ?? null;
         const wait = typeof reconnect === 'object' ? (reconnect.interval ?? 60) * 1_000 : 60_000;
@@ -155,7 +181,7 @@ export default class WhatsApp {
                             },
                         },
                     },
-                    browser: Browsers.windows('Chrome'),
+                    browser: Browsers.appropriate(device ?? 'Orchestrator'),
                     logger: pino({ level: 'silent' }),
                     syncFullHistory: sync,
                     shouldSyncHistoryMessage: ({ syncType }) => sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
@@ -181,16 +207,29 @@ export default class WhatsApp {
                     const user = socket.user;
                     if (!user) return null;
                     const id = jidNormalizedUser(user.id);
+                    // La cuenta propia también se guarda por LID cuando el teléfono se anuncia
+                    // así, y entonces la ficha del JID viene vacía: se leen las dos y gana la
+                    // que tenga el dato.
+                    // The own account is stored by LID too when the phone announces itself that
+                    // way, and then the JID card comes back empty: both are read and whichever
+                    // holds the data wins.
                     const card = deserialize<ContactRaw>(await engine.get(`/contact/${id}`));
+                    const alias = user.lid ? deserialize<ContactRaw>(await engine.get(`/contact/${jidNormalizedUser(user.lid)}`)) : null;
                     return new Account(init, {
                         id,
                         phone_number: id,
-                        lid: user.lid ?? card?.lid ?? null,
-                        name: user.name ?? card?.name ?? null,
-                        notify: card?.notify ?? null,
-                        verified_name: card?.verified_name ?? null,
-                        img_url: (await socket.profilePictureUrl(id, 'image').catch(() => null)) ?? card?.img_url ?? null,
-                        status: card?.status ?? null,
+                        lid: user.lid ?? card?.lid ?? alias?.lid ?? null,
+                        // `verified_name` es el nombre de una cuenta de empresa y `notify` el
+                        // que la propia línea difunde en sus mensajes: cualquiera de los dos es
+                        // el nombre real de la cuenta cuando el perfil no viajó en el login.
+                        // `verified_name` is a business account's name and `notify` the one the
+                        // line itself broadcasts in its messages: either is the account's real
+                        // name when the profile did not travel in the login.
+                        name: readable(user.name) ?? readable(card?.name) ?? readable(alias?.name) ?? card?.verified_name ?? alias?.verified_name ?? card?.notify ?? alias?.notify ?? null,
+                        notify: card?.notify ?? alias?.notify ?? null,
+                        verified_name: card?.verified_name ?? alias?.verified_name ?? null,
+                        img_url: (await socket.profilePictureUrl(id, 'image').catch(() => null)) ?? card?.img_url ?? alias?.img_url ?? null,
+                        status: card?.status ?? alias?.status ?? null,
                     });
                 };
                 const locate = async (cid: string, mid: string): Promise<{ path: string; doc: MessageRaw } | null> => {
@@ -205,6 +244,90 @@ export default class WhatsApp {
                     }
                     return null;
                 };
+                /**
+                 * Identidad con la que se guarda a alguien. El mismo contacto llega unas veces
+                 * por teléfono y otras por LID, y tratar ambos como distintos le abre dos fichas
+                 * y dos chats. El teléfono manda; el LID sólo se conserva cuando aún no hay
+                 * forma de traducirlo.
+                 * The identity someone is stored under. The same contact arrives sometimes by
+                 * phone and sometimes by LID, and treating both as distinct opens two cards and
+                 * two chats for them. The phone wins; the LID is only kept while there is still
+                 * no way to translate it.
+                 */
+                const canonical = async (uid: string) => (uid.endsWith('@lid') ? await jid_of(engine, uid, socket).catch(() => null) : null) ?? uid;
+                /** Índice LID↔teléfono, sólo cuando traduce de verdad. / LID↔phone index, only when it actually translates. */
+                const remember = async (lid: string | null | undefined, jid: string) => {
+                    if (lid && !jid.endsWith('@lid')) {
+                        await engine.set(`/lid/${lid}`, serialize(jid));
+                        await engine.set(`/lid/${jid}`, serialize(lid));
+                    }
+                };
+                /**
+                 * Vuelca sobre el teléfono lo que se había guardado bajo el LID —ficha, chat y
+                 * mensajes— y borra el duplicado. Los campos ya presentes en el destino ganan:
+                 * son los que la cuenta viene usando.
+                 * Pours whatever was stored under the LID —card, chat and messages— onto the
+                 * phone and drops the duplicate. Fields already present on the target win: those
+                 * are the ones the account has been using.
+                 */
+                const absorb = async (lid: string, pn: string) => {
+                    const [from, to] = [jidNormalizedUser(lid), jidNormalizedUser(pn)];
+                    if (from !== to) {
+                        const stale = deserialize<ContactRaw>(await engine.get(`/contact/${from}`));
+                        if (stale) {
+                            const target = deserialize<ContactRaw>(await engine.get(`/contact/${to}`));
+                            await engine.set(`/contact/${to}`, serialize({ ...stale, ...target, id: to, lid: from }));
+                            await engine.unset(`/contact/${from}`);
+                        }
+                        const orphan = deserialize<ChatRaw>(await engine.get(`/chat/${from}`));
+                        if (orphan) {
+                            const target = deserialize<ChatRaw>(await engine.get(`/chat/${to}`));
+                            for (const raw of await engine.list(`/chat/${from}/message`, 0, 10_000)) {
+                                const msg = deserialize<MessageRaw>(raw);
+                                if (msg) {
+                                    await engine.set(`/chat/${to}/message/${msg.id}`, serialize({ ...msg, cid: to }), msg.created_at);
+                                    await engine.unset(`/chat/${from}/message/${msg.id}`);
+                                }
+                            }
+                            const doc = { ...orphan, ...target, id: to, activity: Math.max(orphan.activity ?? 0, target?.activity ?? 0) || null };
+                            await engine.set(`/chat/${to}`, serialize(doc), doc.activity ?? 0);
+                            await engine.unset(`/chat/${from}`);
+                            // Para quien escucha, el duplicado desaparece y el bueno aparece: es
+                            // literalmente lo que pasó, y deja la lista sin la fila fantasma.
+                            // To a listener the duplicate goes away and the good one shows up:
+                            // that is literally what happened, and it leaves the list without
+                            // the ghost row.
+                            this.emit('chat:deleted', new this.Chat(orphan), this);
+                            if (!target) {
+                                this.emit('chat:created', new this.Chat(doc), this);
+                            }
+                        }
+                    }
+                };
+
+                /**
+                 * Pasa por todo lo guardado bajo un LID y lo une a su teléfono. Cubre lo que se
+                 * escribió antes de que el mapeo existiera —o antes de que la librería supiera
+                 * unirlo—, que es lo que deja la lista con el mismo contacto dos veces: una con
+                 * su nombre y otra como un número largo sin sentido.
+                 * Walks everything stored under a LID and joins it to its phone. It covers what
+                 * was written before the mapping existed —or before the library knew how to join
+                 * it—, which is what leaves the same contact twice in the list: once with a name
+                 * and once as a long meaningless number.
+                 */
+                const reconcile = async () => {
+                    for (const path of ['/contact', '/chat'] as const) {
+                        for (const raw of await engine.list(path, 0, 10_000)) {
+                            const id = deserialize<{ id?: string }>(raw)?.id;
+                            if (id?.endsWith('@lid')) {
+                                const jid = await jid_of(engine, id, socket).catch(() => null);
+                                if (jid) {
+                                    await absorb(id, jid);
+                                }
+                            }
+                        }
+                    }
+                };
 
                 socket.ev.on('creds.update', () => engine.set('/session/creds', serialize(creds)));
                 socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
@@ -218,6 +341,13 @@ export default class WhatsApp {
                     if (connection === 'open') {
                         connected = true;
                         retries = 0;
+                        // Los mapeos que faltaban ya viajaron en el handshake: recién ahora se
+                        // puede unir lo que quedó partido en sesiones anteriores, cuando esos
+                        // LID todavía eran intraducibles.
+                        // The missing mappings already travelled in the handshake: only now can
+                        // whatever stayed split in earlier sessions be joined, back when those
+                        // LIDs were still untranslatable.
+                        chain = chain.then(reconcile).catch(() => { });
                         this.emit('connected', this);
                         resolve();
                     } else if (connection === 'close') {
@@ -253,10 +383,11 @@ export default class WhatsApp {
                     chain = chain.then(async () => {
                         for (const row of rows) {
                             if (row.id) {
-                                const current = deserialize<ContactRaw>(await engine.get(`/contact/${row.id}`));
+                                const id = await canonical(row.id);
+                                const current = deserialize<ContactRaw>(await engine.get(`/contact/${id}`));
                                 const doc: ContactRaw = {
-                                    id: row.id,
-                                    lid: row.lid ?? current?.lid ?? null,
+                                    id,
+                                    lid: row.lid ?? (row.id.endsWith('@lid') ? row.id : null) ?? current?.lid ?? null,
                                     name: row.name ?? current?.name ?? null,
                                     notify: row.notify ?? current?.notify ?? null,
                                     verified_name: row.verifiedName ?? current?.verified_name ?? null,
@@ -264,13 +395,11 @@ export default class WhatsApp {
                                     status: row.status ?? current?.status ?? null,
                                 };
                                 if (!current || JSON.stringify(current) !== JSON.stringify(doc)) {
-                                    await engine.set(`/contact/${row.id}`, serialize(doc));
-                                    if (doc.lid) {
-                                        await engine.set(`/lid/${doc.lid}`, serialize(doc.id));
-                                    }
+                                    await engine.set(`/contact/${id}`, serialize(doc));
+                                    await remember(doc.lid, id);
                                     const person = new this.Contact(doc);
-                                    const owner = deserialize<ChatRaw>(await engine.get(`/chat/${doc.id}`));
-                                    this.emit(current ? 'contact:updated' : 'contact:created', person, new this.Chat(owner ?? { id: doc.id, name: person.name }), this);
+                                    const owner = deserialize<ChatRaw>(await engine.get(`/chat/${id}`));
+                                    this.emit(current ? 'contact:updated' : 'contact:created', person, new this.Chat(owner ?? { id, name: person.name }), this);
                                 }
                             }
                         }
@@ -279,38 +408,44 @@ export default class WhatsApp {
                 socket.ev.on('contacts.update', (rows) => {
                     chain = chain.then(async () => {
                         for (const row of rows) {
-                            const current = row.id ? deserialize<ContactRaw>(await engine.get(`/contact/${row.id}`)) : null;
+                            const id = row.id ? await canonical(row.id) : '';
+                            const current = id ? deserialize<ContactRaw>(await engine.get(`/contact/${id}`)) : null;
                             const patch: Partial<ContactRaw> = {
                                 ...(row.notify && { notify: row.notify }),
                                 ...(row.name && { name: row.name }),
                                 ...(row.verifiedName && { verified_name: row.verifiedName }),
                                 ...(typeof row.imgUrl === 'string' && { img_url: row.imgUrl }),
                                 ...(row.status && { status: row.status }),
-                                ...(row.lid && { lid: row.lid }),
+                                ...((row.lid ?? (row.id?.endsWith('@lid') ? row.id : null)) && { lid: row.lid ?? row.id }),
                             };
-                            if (current && row.id && Object.keys(patch).length > 0) {
+                            if (current && Object.keys(patch).length > 0) {
                                 const doc = { ...current, ...patch };
-                                await engine.set(`/contact/${row.id}`, serialize(doc));
-                                if (patch.lid) {
-                                    await engine.set(`/lid/${patch.lid}`, serialize(row.id));
-                                }
+                                await engine.set(`/contact/${id}`, serialize(doc));
+                                await remember(patch.lid, id);
                                 const person = new this.Contact(doc);
-                                const owner = deserialize<ChatRaw>(await engine.get(`/chat/${row.id}`));
-                                this.emit('contact:updated', person, new this.Chat(owner ?? { id: row.id, name: person.name }), this);
+                                const owner = deserialize<ChatRaw>(await engine.get(`/chat/${id}`));
+                                this.emit('contact:updated', person, new this.Chat(owner ?? { id, name: person.name }), this);
                             }
                         }
                     }).catch(() => { });
                 });
                 socket.ev.on('lid-mapping.update', ({ lid, pn }) => {
                     chain = chain.then(async () => {
-                        await engine.set(`/lid/${lid}`, serialize(pn));
-                        await engine.set(`/lid/${pn}`, serialize(lid));
+                        await remember(lid, pn);
+                        // El mapeo recién llega: lo que se guardó bajo el LID mientras era
+                        // irresoluble se une ahora a su teléfono, o el contacto queda partido
+                        // en dos fichas y dos chats que nunca se vuelven a encontrar.
+                        // The mapping just arrived: whatever was stored under the LID while it
+                        // was unresolvable now joins its phone, or the contact stays split into
+                        // two cards and two chats that never meet again.
+                        await absorb(lid, pn);
                     }).catch(() => { });
                 });
                 socket.ev.on('chats.upsert', (rows) => {
                     chain = chain.then(async () => {
-                        for (const row of rows) {
-                            if (row.id) {
+                        for (const raw of rows) {
+                            if (raw.id) {
+                                const row = { ...raw, id: await canonical(raw.id) };
                                 const current = deserialize<ChatRaw>(await engine.get(`/chat/${row.id}`));
                                 const doc: ChatRaw = current ?? {
                                     id: row.id,
@@ -522,18 +657,33 @@ export default class WhatsApp {
                                     continue;
                                 }
                             }
+                            if (!stored && doc.me && msg.pushName && socket.user) {
+                                // Un mensaje propio lleva el nombre con el que la cuenta se
+                                // anuncia al mundo. Cuando el perfil no viajó en el login —una
+                                // reconexión, por ejemplo— esta es la única vía para conocerlo,
+                                // y sin ella la línea se ve a sí misma como un número.
+                                // An own message carries the name the account announces itself
+                                // with. When the profile did not travel in the login —a
+                                // reconnection, say— this is the only way to learn it, and
+                                // without it the line sees itself as a number.
+                                const own = jidNormalizedUser(socket.user.id);
+                                const known = deserialize<ContactRaw>(await engine.get(`/contact/${own}`));
+                                if (!(known?.name ?? known?.notify ?? known?.verified_name)) {
+                                    socket.ev.emit('contacts.upsert', [{ id: own, lid: socket.user.lid, notify: readable(msg.pushName) ?? undefined }]);
+                                }
+                            }
                             if (!stored && !doc.me) {
                                 const known = deserialize<ContactRaw>(await engine.get(`/contact/${doc.author}`));
                                 if (doc.author && !(known?.name ?? known?.notify ?? known?.verified_name)) {
                                     socket.ev.emit('contacts.upsert', [{
                                         id: doc.author,
                                         lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : undefined,
-                                        notify: msg.pushName ?? undefined,
+                                        notify: readable(msg.pushName) ?? undefined,
                                         verifiedName: msg.verifiedBizName ?? undefined,
                                     }]);
                                 }
                                 if (!(await engine.get(`/chat/${cid}`))) {
-                                    const owner: ChatRaw = { id: cid, name: cid.endsWith('@g.us') ? null : msg.pushName ?? null, activity: doc.created_at };
+                                    const owner: ChatRaw = { id: cid, name: cid.endsWith('@g.us') ? null : readable(msg.pushName), activity: doc.created_at };
                                     await engine.set(`/chat/${cid}`, serialize(owner), doc.created_at);
                                     this.emit('chat:created', new this.Chat(owner), this);
                                 }
@@ -647,6 +797,32 @@ export default class WhatsApp {
                     }).catch(() => { });
                 });
             };
+            this.#unlink = async (quiet: boolean) => {
+                intentional = true;
+                silent = quiet;
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+                try {
+                    // `logout` avisa al teléfono y termina el socket; la promesa no resuelve
+                    // hasta que el teléfono acusa, que es cuando el dispositivo ya no existe.
+                    // `logout` notifies the phone and ends the socket; the promise does not
+                    // settle until the phone acknowledges, which is when the device is gone.
+                    await alive?.logout();
+                } catch {
+                    // Sin red o con el socket ya muerto no hay a quién avisar: se cierra de
+                    // este lado para no dejar el proceso colgado de una sesión que no existe.
+                    // With no network or an already dead socket there is nobody to notify: it
+                    // closes on this side so the process is not left hanging on a dead session.
+                    try {
+                        alive?.end(Object.assign(new Error('intentional close'), { output: { statusCode: DisconnectReason.connectionClosed } }));
+                    } catch {
+                        /* el socket ya estaba cerrado / socket already closed */
+                    }
+                }
+                alive = null;
+            };
             this.#close = async (quiet: boolean) => {
                 intentional = true;
                 silent = quiet;
@@ -667,15 +843,33 @@ export default class WhatsApp {
     }
 
     /**
-     * Cierra la sesión: cancela el reintento pendiente y termina el socket.
-     * Closes the session: cancels the pending retry and ends the socket.
+     * Cierra la sesión de verdad: desvincula el dispositivo del teléfono y termina el socket.
+     * La promesa no resuelve hasta que todo eso ocurrió.
      *
-     * @param options - `silent` calla el evento `disconnected`; `destroy` vacía el engine / `silent` mutes the `disconnected` event; `destroy` clears the engine
+     * Los dos flags modulan efectos secundarios, nunca si la sesión muere: `silent` sólo calla
+     * el evento `disconnected` local, y `destroy` decide si el engine se vacía o conserva
+     * chats, mensajes y contactos para estudiarlos después. Las credenciales se borran en los
+     * dos casos: el dispositivo ya no existe, así que reconectar con ellas sólo devolvería un
+     * `loggedOut`.
+     *
+     * Closes the session for real: unlinks the device from the phone and ends the socket. The
+     * promise does not settle until all of that happened.
+     *
+     * Both flags modulate side effects, never whether the session dies: `silent` only mutes the
+     * local `disconnected` event, and `destroy` decides whether the engine is wiped or keeps
+     * chats, messages and contacts for later study. Credentials go in both cases: the device no
+     * longer exists, so reconnecting with them would only return a `loggedOut`.
+     *
+     * @param options - `silent` calla el evento; `destroy` vacía el engine entero / `silent` mutes the event; `destroy` wipes the whole engine
+     *
+     * @example
+     * await wa.disconnect();                     // desvincula y conserva el historial
+     * await wa.disconnect({ destroy: true });    // desvincula y no queda nada
      */
     async disconnect(options: { silent?: boolean; destroy?: boolean } = {}): Promise<void> {
-        await this.#close?.(options.silent === true);
-        if (options.destroy) {
-            await this.engine.clear();
-        }
+        await this.#unlink?.(options.silent === true);
+        this.#unlink = null;
+        this.#close = null;
+        await (options.destroy ? this.engine.clear() : this.engine.unset('/session'));
     }
 }
