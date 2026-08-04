@@ -11,6 +11,7 @@ import {
     downloadMediaMessage,
     generateForwardMessageContent,
     generateMessageID,
+    generateWAMessage,
     generateWAMessageFromContent,
     getAggregateVotesInPollMessage,
     getContentType,
@@ -48,6 +49,39 @@ const to_buffer = (value: Uint8Array | string | null | undefined): Buffer | null
     value instanceof Uint8Array && value.length ? Buffer.from(value) : typeof value === 'string' && value ? Buffer.from(value, 'base64') : null;
 
 /**
+ * Envío de vista única con el proto que WhatsApp entrega: se genera el contenido normal (media
+ * plano, sin wrapper), se marca `viewOnce` en el propio nodo del media y `isViewOnce` en la
+ * llave, y se transmite tal cual.
+ * View-once send with the proto WhatsApp actually delivers: the regular content is generated
+ * (flat media, no wrapper), `viewOnce` is flagged on the media node itself and `isViewOnce` on
+ * the key, and it is relayed as is.
+ *
+ * @param init - Sesión activa / Active session
+ * @param jid - Destino resuelto / Resolved target
+ * @param content - Contenido proto / Proto content
+ * @param quoted - Mensaje citado / Quoted message
+ * @returns Mensaje transmitido / Relayed message
+ */
+const once_of = async (init: Init, jid: string, content: Record<string, unknown>, quoted?: WAMessage): Promise<WAMessage> => {
+    const full = await generateWAMessage(jid, content as never, {
+        logger: init.socket.logger,
+        userJid: init.socket.user!.id,
+        upload: init.socket.waUploadToServer,
+        ...(quoted && { quoted }),
+    });
+    // El media queda al nivel superior; sólo hay que marcarlo. / The media stays top level; it only needs flagging.
+    for (const node of Object.values(full.message ?? {})) if (node && typeof node === 'object' && 'mimetype' in node) (node as { viewOnce?: boolean }).viewOnce = true;
+    full.key.isViewOnce = true;
+    await init.socket.relayMessage(jid, full.message!, { messageId: full.key.id! });
+    // El relay no publica el mensaje: se emite el upsert que `sendMessage` haría, para que el
+    // resto de la sesión (eventos, cachés de los consumidores) lo vea como cualquier envío.
+    // The relay does not publish the message: the upsert `sendMessage` would emit is fired, so
+    // the rest of the session (events, consumer caches) sees it like any other send.
+    init.socket.ev.emit('messages.upsert', { messages: [full], type: 'append' });
+    return full;
+};
+
+/**
  * Envío base: resuelve el destino, cita si hay `mid`, marca view-once, persiste el documento
  * con su binario y retorna la instancia del tipo correcto. La cita viaja en las opciones del
  * socket: dentro del contenido baileys la ignora.
@@ -59,7 +93,17 @@ const send = async (init: Init, cid: string, content: Record<string, unknown>, b
     const jid = await jid_of(init.engine, cid, init.socket);
     if (!jid) return null;
     const quoted = extra.mid ? deserialize<Message['_raw']>(await init.engine.get(`/chat/${jid}/message/${extra.mid}`))?.raw : undefined;
-    const raw = await init.socket.sendMessage(jid, { ...content, ...(extra.once && { viewOnce: true }) } as never, { ...(quoted && { quoted }) });
+    // La vista única viaja como la manda WhatsApp: el media PLANO con `viewOnce` en su propio
+    // nodo y el sobre marcado con `isViewOnce`, sin envolverlo en `viewOnceMessage(V2)` —el
+    // wrapper que arma baileys con `viewOnce: true` queda en «enviado» y no se entrega.
+    // Comprobado contra el proto de un view-once entrante real.
+    // View-once travels the way WhatsApp sends it: the media FLAT with `viewOnce` on its own
+    // node and the key flagged `isViewOnce`, never wrapped in `viewOnceMessage(V2)` —the
+    // wrapper baileys builds from `viewOnce: true` stalls at "sent" and is never delivered.
+    // Checked against the proto of a real incoming view-once.
+    const raw = extra.once
+        ? await once_of(init, jid, content, quoted)
+        : await init.socket.sendMessage(jid, content as never, { ...(quoted && { quoted }) });
     if (!raw?.key?.id) return null;
     const sent = new Message(init, raw);
     Object.assign(sent._raw, overrides);
@@ -126,6 +170,8 @@ export default class Message {
         mime: string;
         caption: string;
         edited: boolean;
+        /** Momento en que se retiró para todos, o null si sigue vigente / When it was revoked for everyone, or null while it stands */
+        revoked_at?: number | null;
         multiple?: boolean;
         reactions?: { author: string; emoji: string; at: number }[];
         viewed?: boolean | null;
@@ -210,6 +256,15 @@ export default class Message {
     get forwarded(): boolean { return this._raw.forwarded; }
     /** true si fue editado. / true when edited. */
     get edited(): boolean { return this._raw.edited; }
+    /**
+     * true si se retiró para todos. El documento no se borra: el mensaje sigue en su sitio
+     * para que la interfaz muestre «se eliminó este mensaje» en vez de un hueco.
+     * true when revoked for everyone. The document is not removed: the message stays in place
+     * so the interface can show "this message was deleted" instead of a gap.
+     */
+    get revoked(): boolean { return this._raw.revoked_at != null; }
+    /** Fecha del retiro en ISO UTC, o null. / Revocation date as ISO UTC, or null. */
+    get revoked_at(): string | null { return this._raw.revoked_at != null ? new Date(this._raw.revoked_at).toISOString() : null; }
     /** Fecha de creación en ISO UTC. / Creation date as ISO UTC. */
     get created_at(): string { return new Date(this._raw.created_at).toISOString(); }
     /** Vencimiento del mensaje temporal en ISO UTC, o null. / Ephemeral expiration as ISO UTC, or null. */
@@ -228,10 +283,18 @@ export default class Message {
     }
     /** Nombre del negocio verificado que firma el mensaje, o null. / Verified business name signing the message, or null. */
     get business(): string | null { return this._raw.raw.verifiedBizName ?? null; }
-    /** true si es de una sola lectura (view-once). / true when view-once. */
+    /**
+     * true si es de una sola lectura (view-once). La marca vive en tres sitios según quién
+     * lo envió: la llave del sobre, el propio nodo del media (forma actual) o el wrapper
+     * heredado.
+     * true when view-once. The flag lives in three places depending on the sender: the key,
+     * the media node itself (current form) or the legacy wrapper.
+     */
     get once(): boolean {
         const msg = this._raw.raw.message;
-        return Boolean(msg?.viewOnceMessage ?? msg?.viewOnceMessageV2 ?? msg?.viewOnceMessageV2Extension);
+        const body = msg ? unwrap(msg) : {};
+        const media = body[getContentType(body) as keyof typeof body] as { viewOnce?: boolean } | undefined;
+        return Boolean(this._raw.raw.key?.isViewOnce ?? media?.viewOnce ?? msg?.viewOnceMessage ?? msg?.viewOnceMessageV2 ?? msg?.viewOnceMessageV2Extension);
     }
 
     /** Contacto autor, desde el engine (ficha mínima si no está persistido). / Author contact, from the engine (minimal card when not persisted). */
@@ -367,9 +430,18 @@ export default class Message {
      */
     async delete(all = false): Promise<boolean> {
         const doc = this._raw;
-        if (all) await this._init.socket.sendMessage(doc.cid, { delete: { remoteJid: doc.cid, id: doc.id, fromMe: doc.me } });
-        else await this._init.socket.chatModify({ deleteForMe: { deleteMedia: false, key: { remoteJid: doc.cid, id: doc.id, fromMe: doc.me }, timestamp: Date.now() } }, doc.cid);
-        await this._init.engine.unset(`/chat/${doc.cid}/message/${doc.id}`);
+        // Retirar para todos deja el mensaje en su sitio, marcado; borrarlo solo para uno lo
+        // saca del historial local, que es lo que significa cada acción en WhatsApp.
+        // Revoking for everyone leaves the message in place, flagged; deleting it just for
+        // oneself drops it from the local history, which is what each action means on WhatsApp.
+        if (all) {
+            await this._init.socket.sendMessage(doc.cid, { delete: { remoteJid: doc.cid, id: doc.id, fromMe: doc.me } });
+            doc.revoked_at = Date.now();
+            await this._init.engine.set(`/chat/${doc.cid}/message/${doc.id}`, serialize(doc), doc.created_at);
+        } else {
+            await this._init.socket.chatModify({ deleteForMe: { deleteMedia: false, key: { remoteJid: doc.cid, id: doc.id, fromMe: doc.me }, timestamp: Date.now() } }, doc.cid);
+            await this._init.engine.unset(`/chat/${doc.cid}/message/${doc.id}`);
+        }
         return true;
     }
 
