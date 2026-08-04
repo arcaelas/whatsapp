@@ -2,7 +2,7 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
-## Sin publicar
+## [7.2.0] - 2026-08-04
 
 ### Changed
 
