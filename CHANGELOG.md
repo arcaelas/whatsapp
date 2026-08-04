@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.3.1] - 2026-08-04
+
+### Changed
+
+- **El nombre por defecto de la sesión vuelve a ser `Chrome` en `Windows`.** La librería traía `Orchestrator`, que es el nombre de un proyecto que la consume: un valor por defecto no puede arrastrar la identidad de quien la usa. Nombrar la sesión sigue disponible con `device` y es decisión de quien la inicializa.
+
 ## [7.2.0] - 2026-08-04
 
 ### Changed
@@ -11,7 +17,7 @@ All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
 ### Added
 
-- **Opción `device`: el nombre con el que la sesión aparece en «Dispositivos vinculados» del teléfono.** Todas se anunciaban como `Chrome (Windows)`, indistinguibles entre sí e indistinguibles de un navegador real, así que una cuenta con varias no ofrecía forma de saber cuál cerrar. Por defecto `Orchestrator`.
+- **Opción `device`: el nombre con el que la sesión aparece en «Dispositivos vinculados» del teléfono.** Todas se anunciaban como `Chrome (Windows)`, indistinguibles entre sí e indistinguibles de un navegador real, así que una cuenta con varias no ofrecía forma de saber cuál cerrar. El valor por defecto sigue siendo `Chrome` en `Windows`: nombrar la sesión es decisión de quien la abre.
 
 ### Fixed
 

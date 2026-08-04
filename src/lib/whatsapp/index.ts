@@ -54,12 +54,14 @@ interface Options {
     /** Descargar el historial de mensajes al vincular; contactos, credenciales, LID mappings y tctokens se sincronizan siempre. / Download the message history on link; contacts, credentials, LID mappings and tctokens always sync. */
     sync?: boolean;
     /**
-     * Nombre con el que esta sesión aparece en «Dispositivos vinculados» del teléfono. Cuando
-     * una cuenta tiene varias sesiones, es lo ÚNICO que permite distinguirlas para cerrar la
-     * correcta: sin él todas se ven iguales y no hay forma de saber cuál sobra.
-     * Name this session shows under the phone's «Linked devices». When an account holds several
-     * sessions it is the ONLY thing telling them apart to close the right one: without it they
-     * all look alike and there is no way to know which one is spare.
+     * Nombre con el que esta sesión aparece en «Dispositivos vinculados» del teléfono; por
+     * defecto `Chrome`. Cuando una cuenta tiene varias sesiones es lo ÚNICO que permite
+     * distinguirlas para cerrar la correcta: con el valor por defecto todas se ven iguales
+     * —y iguales a un navegador real—, así que quien abra más de una debería nombrarlas.
+     * Name this session shows under the phone's «Linked devices»; defaults to `Chrome`. When an
+     * account holds several sessions it is the ONLY thing telling them apart to close the right
+     * one: with the default they all look alike —and alike to a real browser—, so whoever opens
+     * more than one should name them.
      */
     device?: string;
 }
@@ -181,7 +183,7 @@ export default class WhatsApp {
                             },
                         },
                     },
-                    browser: Browsers.appropriate(device ?? 'Orchestrator'),
+                    browser: Browsers.windows(device ?? 'Chrome'),
                     logger: pino({ level: 'silent' }),
                     syncFullHistory: sync,
                     shouldSyncHistoryMessage: ({ syncType }) => sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
