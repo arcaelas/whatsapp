@@ -31,6 +31,26 @@ import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
  * whole. That is not a name: taking it hides the real one, which is stored on the own contact
  * card.
  */
+/**
+ * Cola por ruta para las escrituras de sesión. Baileys emite `creds.update` varias veces
+ * seguidas y lanza `keys.set` en paralelo; sin serializar, dos escrituras sobre el mismo
+ * archivo pueden resolverse en orden inverso y dejar el estado viejo encima del nuevo. Un
+ * archivo íntegro pero atrasado no se nota —el `tmp+rename` del engine lo deja bien formado—,
+ * y es peor que uno corrupto: WhatsApp lo rechaza en el handshake y cierra la sesión.
+ * Su propia referencia (`useMultiFileAuthState`) toma un mutex por archivo por esto mismo.
+ * Per-path queue for session writes. Baileys emits `creds.update` several times in a row and
+ * fires `keys.set` in parallel; without serializing, two writes to the same file can settle in
+ * reverse order and leave the old state on top of the new one. A whole but stale file goes
+ * unnoticed —the engine's `tmp+rename` leaves it well formed— and is worse than a corrupt one:
+ * WhatsApp rejects it at the handshake and closes the session. Their own reference
+ * (`useMultiFileAuthState`) takes a mutex per file for this very reason.
+ */
+const queued = (locks: Map<string, Promise<unknown>>, path: string, work: () => Promise<unknown>) => {
+    const next = (locks.get(path) ?? Promise.resolve()).then(work, work);
+    locks.set(path, next.catch(() => { }));
+    return next;
+};
+
 const readable = (value: string | null | undefined) => (value && !/^\+?[\d\s·•∙⋅]+$/.test(value) ? value : null);
 
 type FeedRaw = ConstructorParameters<typeof Feed>[1];
@@ -66,9 +86,28 @@ interface Options {
     device?: string;
 }
 
+/**
+ * Por qué se cerró la sesión. Sin esto un cierre remoto es indistinguible de otro: el evento
+ * sólo decía «se cerró», el logger va en silencio y `autoclean` borra la evidencia antes de que
+ * nadie pueda mirarla, así que no queda con qué diagnosticar por qué WhatsApp echó la línea.
+ * Why the session closed. Without it one remote close is indistinguishable from another: the
+ * event only said «it closed», the logger runs silent and `autoclean` wipes the evidence before
+ * anyone can look at it, leaving nothing to diagnose why WhatsApp dropped the line.
+ */
+export interface Farewell {
+    /** Código de baileys, si vino. / Baileys status code, if any. */
+    code: number | null;
+    /** Nombre del motivo (`loggedOut`, `connectionReplaced`, `badSession`…) o `unknown`. / Reason name or `unknown`. */
+    reason: string;
+    /** El teléfono desvinculó la sesión: no se reintenta y las credenciales ya no sirven. / The phone unlinked it: no retry, credentials are dead. */
+    expired: boolean;
+    /** Mensaje del error subyacente, si lo hubo. / Underlying error message, if any. */
+    detail: string | null;
+}
+
 interface EventMap {
     connected: [WhatsApp];
-    disconnected: [WhatsApp];
+    disconnected: [WhatsApp, Farewell];
     'contact:created': [ContactInstance, ChatInstance, WhatsApp];
     'contact:updated': [ContactInstance, ChatInstance, WhatsApp];
     'chat:created': [ChatInstance, WhatsApp];
@@ -152,6 +191,8 @@ export default class WhatsApp {
         let timer: ReturnType<typeof setTimeout> | null = null;
         let chain: Promise<void> = Promise.resolve();
 
+        const locks = new Map<string, Promise<unknown>>();
+
         return new Promise<void>((resolve, reject) => {
             const start = async (): Promise<void> => {
                 const creds: AuthenticationCreds = deserialize<AuthenticationCreds>(await engine.get('/session/creds')) ?? initAuthCreds();
@@ -174,11 +215,10 @@ export default class WhatsApp {
                             },
                             set: async (data: Record<string, Record<string, unknown | null>>) => {
                                 await Promise.all(Object.entries(data).flatMap(([category, entries]) =>
-                                    Object.entries(entries).map(([id, value]) =>
-                                        value != null
-                                            ? engine.set(`/session/${category}/${id}`, serialize(value))
-                                            : engine.unset(`/session/${category}/${id}`)
-                                    )
+                                    Object.entries(entries).map(([id, value]) => {
+                                        const path = `/session/${category}/${id}`;
+                                        return queued(locks, path, () => (value != null ? engine.set(path, serialize(value)) : engine.unset(path)));
+                                    })
                                 ));
                             },
                         },
@@ -331,7 +371,7 @@ export default class WhatsApp {
                     }
                 };
 
-                socket.ev.on('creds.update', () => engine.set('/session/creds', serialize(creds)));
+                socket.ev.on('creds.update', () => queued(locks, '/session/creds', () => engine.set('/session/creds', serialize(creds))));
                 socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
                     if (qr && !creds.registered) {
                         await callback(
@@ -355,11 +395,25 @@ export default class WhatsApp {
                     } else if (connection === 'close') {
                         const code = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
                         const transient = code === DisconnectReason.restartRequired;
+                        const farewell: Farewell = {
+                            code: code ?? null,
+                            reason: Object.entries(DisconnectReason).find(([, value]) => value === code)?.[0] ?? 'unknown',
+                            expired: code === DisconnectReason.loggedOut,
+                            detail: lastDisconnect?.error instanceof Error ? lastDisconnect.error.message : null,
+                        };
                         if (code === DisconnectReason.loggedOut) {
+                            // Las escrituras en vuelo tienen que aterrizar antes de borrar, o una
+                            // de ellas resucita las credenciales justo después del clear y la
+                            // siguiente conexión arranca con restos de una sesión ya muerta.
+                            // In-flight writes must land before wiping, or one of them resurrects
+                            // the credentials right after the clear and the next connection starts
+                            // on the leftovers of an already dead session.
+                            await Promise.allSettled([...locks.values()]);
+                            locks.clear();
                             await (autoclean ? engine.clear() : engine.unset('/session/creds'));
                         }
                         if (connected && !transient && !silent) {
-                            this.emit('disconnected', this);
+                            this.emit('disconnected', this, farewell);
                         }
                         if (intentional) {
                             /* cierre pedido por disconnect(): sin reintentos / close requested by disconnect(): no retries */

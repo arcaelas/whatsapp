@@ -2,6 +2,17 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.4.1] - 2026-08-04
+
+### Fixed
+
+- **Las escrituras de la sesión ya no se pisan entre sí.** `creds.update` se persistía sin esperar y `keys.set` disparaba todas sus claves en paralelo, así que dos escrituras sobre el mismo archivo podían resolverse en orden inverso y dejar el estado viejo encima del nuevo. El `tmp+rename` del engine garantiza un archivo íntegro, no el último: unas credenciales bien formadas pero atrasadas no se notan en disco y WhatsApp las rechaza en el handshake, cerrando la sesión. La referencia oficial de baileys (`useMultiFileAuthState`) toma un mutex por archivo exactamente por esto. Ahora cada ruta de `/session` tiene su cola.
+- **El borrado por `loggedOut` espera a las escrituras en vuelo.** Sin eso una de ellas aterrizaba después del `clear()` y resucitaba las credenciales, dejando que la siguiente conexión arrancara sobre los restos de una sesión ya muerta.
+
+### Added
+
+- **El evento `disconnected` ahora dice por qué**, con un segundo argumento `Farewell` (`code`, `reason`, `expired`, `detail`). Antes un cierre remoto era indistinguible de otro: el evento sólo avisaba que se cerró, el logger va en silencio y `autoclean` borra la evidencia antes de que nadie pueda mirarla. Con esto un cierre queda como `loggedOut (401) · Stream Errored (conflict)` y se puede diagnosticar.
+
 ## [7.3.1] - 2026-08-04
 
 ### Changed
