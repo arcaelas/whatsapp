@@ -2,6 +2,26 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.1.0] - 2026-08-03
+
+### Changed
+
+- **A revoked message is flagged, not erased.** When someone deletes a message for everyone — the peer, another of your devices, or `msg.delete(true)` from this client — the document stays in the engine with `revoked_at` set instead of being unset, and `message:deleted` carries it. Interfaces can now show "this message was deleted" where the message was, like WhatsApp does, instead of a hole in the history. `msg.delete(false)` (delete for me) still removes it locally, which is what that action means.
+- **The revoke notice is matched across addressings.** The protocol notice may arrive LID-addressed while the document lives under the JID (or the other way around): the lookup now tries the chat named by the protocol and the one of the envelope, so revocations no longer slip through unmatched.
+
+### Added
+
+- **`Message.revoked` and `Message.revoked_at`.** Boolean and ISO date of the revocation; the document persists `revoked_at` and keeps it across the rewrites of later upserts.
+
+### Fixed
+
+- **View-once now actually arrives.** Sending with `once` produced a message WhatsApp acked and never delivered: baileys wraps the content in `viewOnceMessage`/`viewOnceMessageV2`, and a wrapped view-once stalls at "sent" forever. The proto WhatsApp itself delivers carries the media **flat**, with `viewOnce` set on the media node and `isViewOnce` on the key — that is what this version relays, and the recipient receives it as a real one-time photo, video or audio. Verified against the proto of an incoming view-once and confirmed on the receiving phone.
+- **`Message.once` recognises every form of the flag.** It used to look only for the legacy wrappers, so a view-once sent by a current client read as a normal message. It now also reads `key.isViewOnce` and the media's own `viewOnce`.
+
+### Known limitation
+
+- **A received view-once cannot be downloaded from a companion session.** WhatsApp delivers view-once content only to the primary phone: a linked client (this library, WhatsApp Web) gets the envelope flagged `isViewOnce` and, at best, the media metadata **without `url`, `mediaKey` or `directPath`** — the fields needed to fetch it. So `Message.once` is true and the message can be listed, but its binary is not obtainable. This is by design on WhatsApp's side, not a limitation of the code.
+
 ## [7.0.1] - 2026-08-02
 
 ### Fixed

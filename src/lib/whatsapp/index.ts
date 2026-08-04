@@ -484,7 +484,13 @@ export default class WhatsApp {
                             }
                             if (kind === 'protocolMessage') {
                                 const protocol = msg.message?.protocolMessage;
-                                const found = protocol?.key?.id ? await locate(protocol.key.remoteJid ?? cid, protocol.key.id) : null;
+                                // El aviso puede venir direccionado por LID y el documento estar bajo el JID
+                                // (o al revés): se busca por el chat que nombra el protocolo y por el del sobre.
+                                // The notice may be LID-addressed while the document lives under the JID (or the
+                                // other way around): it is looked up by the protocol's chat and by the envelope's.
+                                const found = protocol?.key?.id
+                                    ? (await locate(protocol.key.remoteJid ?? cid, protocol.key.id)) ?? (await locate(cid, protocol.key.id))
+                                    : null;
                                 if (found && protocol?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT && protocol.editedMessage) {
                                     found.doc.raw.message = protocol.editedMessage;
                                     found.doc.edited = true;
@@ -493,7 +499,12 @@ export default class WhatsApp {
                                     const instance = new Message(init, found.doc);
                                     this.emit('message:updated', instance, await instance.chat(), this);
                                 } else if (found && protocol?.type === proto.Message.ProtocolMessage.Type.REVOKE) {
-                                    await engine.unset(found.path);
+                                    // El mensaje retirado no se borra: se marca, y así la interfaz puede
+                                    // mostrar «se eliminó este mensaje» donde estaba en vez de un hueco.
+                                    // A revoked message is not removed: it gets flagged, so the interface can
+                                    // show "this message was deleted" in its place instead of a gap.
+                                    found.doc.revoked_at = Date.now();
+                                    await engine.set(found.path, serialize(found.doc), found.doc.created_at);
                                     const instance = new Message(init, found.doc);
                                     this.emit('message:deleted', instance, await instance.chat(), this);
                                 }
@@ -504,6 +515,7 @@ export default class WhatsApp {
                             if (stored) {
                                 doc.multiple = typeof stored.multiple === 'boolean' ? stored.multiple : doc.multiple;
                                 doc.reactions = stored.reactions ?? doc.reactions;
+                                doc.revoked_at = stored.revoked_at ?? doc.revoked_at;
                                 const advanced = doc.status > stored.status;
                                 doc.status = Math.max(stored.status, doc.status);
                                 if (!advanced && stored.caption === doc.caption && stored.edited === doc.edited && stored.starred === doc.starred) {
