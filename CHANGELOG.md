@@ -2,6 +2,27 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## Sin publicar
+
+### Changed
+
+- **`disconnect()` cierra la sesión de verdad: desvincula el dispositivo del teléfono.** Antes sólo colgaba el socket, así que para WhatsApp el dispositivo seguía vinculado y seguía ocupando uno de los **cuatro** cupos de la cuenta. Las sesiones abandonadas —contenedor eliminado, archivos borrados— quedaban como fantasmas permanentes, y al agotarse los cupos WhatsApp empezaba a expulsar las sesiones más antiguas de esa cuenta, **incluida la propia `web.whatsapp.com` de la persona**. La promesa ya no resuelve hasta que el teléfono acusó la desvinculación.
+- **Los flags de `disconnect()` modulan efectos secundarios, no si la sesión muere.** `silent` sólo calla el evento `disconnected` local; `destroy` decide si el engine se vacía o conserva chats, mensajes y contactos para estudiarlos. Las credenciales se borran en los dos casos: el dispositivo ya no existe y reconectar con ellas sólo devolvería un `loggedOut`.
+
+### Added
+
+- **Opción `device`: el nombre con el que la sesión aparece en «Dispositivos vinculados» del teléfono.** Todas se anunciaban como `Chrome (Windows)`, indistinguibles entre sí e indistinguibles de un navegador real, así que una cuenta con varias no ofrecía forma de saber cuál cerrar. Por defecto `Orchestrator`.
+
+### Fixed
+
+- **El mismo contacto ya no aparece dos veces, una de ellas como un número larguísimo.** El índice que traduce LID a teléfono se guardaba apuntando a sí mismo (`/lid/1409…@lid → "1409…@lid"`), y como eso es un valor válido cortaba la cadena de respaldos justo antes del mapping de baileys —el único que sí conocía el teléfono—. El contacto quedaba partido en dos fichas y dos chats que nunca se reencontraban, y el que llevaba el LID se mostraba sin nombre. Ahora el teléfono es la identidad con la que se guarda a alguien, y al conectar se une lo que quedó partido en sesiones anteriores.
+- **El nombre de la propia cuenta.** Se leía sólo del login, que en una reconexión no lo trae, y cuando sí lo traía llegaba enmascarado (`+58∙∙∙∙∙∙∙∙40`) y tapaba al verdadero. Ahora una máscara no se acepta como nombre —ni para la cuenta ni para un contacto— y el nombre se busca también en la ficha propia guardada por LID.
+- **El nombre con el que la línea se anuncia** se descartaba: sólo se leía de los mensajes ajenos, y los propios —que son justamente los que lo llevan— se ignoraban.
+
+### Nota de migración
+
+Quien llamara a `disconnect()` esperando sólo colgar el socket (por ejemplo al apagar un proceso) **debe dejar de llamarlo**: el socket muere con el proceso y las credenciales sobreviven para reconectar. `disconnect()` es ahora una operación deliberada y definitiva.
+
 ## [7.1.0] - 2026-08-03
 
 ### Changed

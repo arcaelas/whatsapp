@@ -44,6 +44,16 @@ export function deserialize<T>(raw: string | null): T | null {
 }
 
 /**
+ * Un mapeo que lleva a otro LID no traduce nada, y al ser truthy corta la cadena de respaldos
+ * de `jid_of` justo antes de llegar al mapping de baileys —el único que sí conoce el teléfono—.
+ * Descartarlo es lo que permite que la cadena siga buscando.
+ * A mapping leading to another LID translates nothing, and being truthy it cuts `jid_of`'s
+ * fallback chain right before reaching the baileys mapping —the only one that does know the
+ * phone—. Discarding it is what lets the chain keep looking.
+ */
+const phone_like = (value: string | number | null | undefined) => (value != null && !String(value).endsWith('@lid') ? String(value) : null);
+
+/**
  * JID canónico de un teléfono, JID o LID: los grupos y JIDs pasan tal cual, el LID se mapea
  * contra los índices `/lid` del engine (o contra baileys cuando hay socket) y el resto se
  * trata como teléfono.
@@ -60,9 +70,9 @@ export const jid_of = async (engine: Engine, uid: string, socket?: WASocket): Pr
     if (uid.endsWith('@g.us') || uid.endsWith('@s.whatsapp.net')) return uid;
     const lid = uid.endsWith('@lid') ? jidNormalizedUser(uid) : '';
     const mapped = lid
-        ? deserialize<string>(await engine.get(`/lid/${lid}`))
-        ?? deserialize<string | number>(await engine.get(`/lid/${lid.split('@')[0]}_reverse`))
-        ?? await socket?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null)
+        ? phone_like(deserialize<string>(await engine.get(`/lid/${lid}`)))
+        ?? phone_like(deserialize<string | number>(await engine.get(`/lid/${lid.split('@')[0]}_reverse`)))
+        ?? phone_like(await socket?.signalRepository?.lidMapping?.getPNForLID(lid).catch(() => null))
         : uid.replace(/\D/g, '');
     return mapped ? (String(mapped).includes('@') ? jidNormalizedUser(String(mapped)) : `${mapped}@s.whatsapp.net`) : null;
 };
