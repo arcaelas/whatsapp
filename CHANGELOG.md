@@ -2,6 +2,22 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.0.0] - 2026-08-05
+
+### Changed
+
+- **BREAKING — `pair()` eliminado.** Pedir el PIN es responsabilidad de `connect()` y tener dos puertas para lo mismo sólo invitaba a usarlas mal. Con QR, el handler recibe cada refresco; con PIN, lo recibe una vez y de nuevo cada vez que caduca.
+- **El PIN vuelve a renovarse solo, pero por ciclo propio.** Se pedía uno en cada refresco del QR (~20 s) y cada petición invalida la anterior: el código moría mientras se tecleaba. Ahora se cuenta su ciclo de vida y sólo se renueva al caducar de verdad, gastando un reintento del presupuesto de `reconnect`. Agotado el presupuesto se emite `error` con código `ERR_OTP_EXPIRED`.
+- **BREAKING — `Contact.watch()` cambió de firma:** recibe un handler y devuelve la función para dejar de supervisar.
+
+### Added
+
+- **`watch()` en las tres entidades, con el mismo sobre `{ name, payload }`** —`name` dice qué pasó, `payload` trae la instancia ya resuelta—:
+  - `Contact.watch()` — entra, sale, escribe, graba, deja de escribir, deja de grabar. Un aviso por acción.
+  - `Message.watch()` — en la clase base, así que **todo tipo de mensaje lo hereda**: leído, reproducido (audio) y retirado. Traduce `message:updated`, que no distingue leído de reproducido, a lo que de verdad se quiere saber.
+  - `Chat.watch()` — compone los otros dos: lo que hace la persona más los mensajes que llegan. En grupo sólo quedan los mensajes, porque no hay una sola persona a la que seguir.
+- **Evento `error`**, para fallos que no tumban la conexión pero que quien la abrió necesita conocer.
+
 ## [7.7.0] - 2026-08-05
 
 ### Fixed

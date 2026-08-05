@@ -9,6 +9,7 @@ import type Contact from '~/lib/contact';
 import type Message from '~/lib/message';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 import type WhatsApp from '~/lib/whatsapp';
+import type { ChatWatch, WatchEvent } from '~/lib/whatsapp';
 
 /**
  * Chat: recibe el raw y deriva todo con getters.
@@ -245,6 +246,37 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
          * Marca el chat completo como leído en la cuenta.
          * Marks the whole chat as read on the account.
          */
+        /**
+         * Supervisa la conversación entera: lo que hace la persona al otro lado —entra, sale,
+         * escribe, graba, deja de escribir, deja de grabar— y los mensajes que van llegando.
+         *
+         * No reimplementa nada: monta el `watch` del contacto dueño del chat y le suma los
+         * mensajes nuevos. En un grupo no hay una sola persona a la que seguir, así que sólo
+         * quedan los mensajes.
+         * Watches the whole conversation: what the person on the other end does —comes in, leaves,
+         * types, records, stops typing, stops recording— and the messages arriving.
+         *
+         * It reimplements nothing: it sets up the watch of the chat's owning contact and adds new
+         * messages to it. In a group there is no single person to follow, so only messages remain.
+         *
+         * @param handler - Recibe cada acción y cada mensaje / Receives every action and every message
+         * @returns Función para dejar de supervisar / Function to stop watching
+         */
+        async watch(handler: (event: WatchEvent<ChatWatch, InstanceType<typeof init.wa.Contact> | Message>) => void): Promise<() => void> {
+            const off_message = init.wa.on('message:created', (msg) => {
+                if (msg.cid === this._raw.id) handler({ name: 'message', payload: msg });
+            });
+            if (this.type === 'group') {
+                return off_message;
+            }
+            const who = await init.wa.Contact.get(this._raw.id);
+            const off_presence = (await who?.watch((event) => handler(event))) ?? (() => { });
+            return () => {
+                off_message();
+                off_presence();
+            };
+        }
+
         async seen(): Promise<boolean> {
             const last = await tail(this._raw.id);
             // Marcar leído se acusa con recibos, no con una mutación del estado de la app.

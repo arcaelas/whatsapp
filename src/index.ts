@@ -9,7 +9,7 @@ import WhatsApp from '~/lib/whatsapp';
 export { WhatsApp };
 export default WhatsApp;
 export type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
-export type { Farewell } from '~/lib/whatsapp';
+export type { ChatWatch, ContactWatch, Farewell, MessageWatch, Presence, WatchEvent } from '~/lib/whatsapp';
 export type DisconnectOptions = NonNullable<Parameters<WhatsApp['disconnect']>[0]>;
 export type ReconnectOption = NonNullable<IWhatsApp['reconnect']>;
 
