@@ -84,6 +84,15 @@ interface Options {
      * more than one should name them.
      */
     device?: string;
+    /**
+     * Nivel del log interno de baileys; `silent` por defecto. En silencio un cierre remoto no
+     * deja rastro de por qué ocurrió: `Farewell` da el código, pero el intercambio que llevó
+     * hasta él —el nodo que WhatsApp rechazó— sólo aparece subiendo esto a `debug` o `trace`.
+     * Level of baileys' internal log; `silent` by default. Kept silent, a remote close leaves no
+     * trace of why it happened: `Farewell` gives the code, but the exchange leading to it —the
+     * node WhatsApp rejected— only shows up by raising this to `debug` or `trace`.
+     */
+    debug?: 'silent' | 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 }
 
 /**
@@ -177,7 +186,7 @@ export default class WhatsApp {
 
     async connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void> {
         const { engine } = this;
-        const { phone, method, autoclean = true, sync = true, reconnect = true, device } = this.#options;
+        const { phone, method, autoclean = true, sync = true, reconnect = true, device, debug } = this.#options;
         const digits = phone !== undefined ? String(phone).replace(/\D+/g, '') : '';
         const budget = reconnect === false ? 0 : reconnect === true ? null : typeof reconnect === 'number' ? reconnect : reconnect.max ?? null;
         const wait = typeof reconnect === 'object' ? (reconnect.interval ?? 60) * 1_000 : 60_000;
@@ -224,7 +233,7 @@ export default class WhatsApp {
                         },
                     },
                     browser: Browsers.windows(device ?? 'Chrome'),
-                    logger: pino({ level: 'silent' }),
+                    logger: pino({ level: debug ?? 'silent' }),
                     syncFullHistory: sync,
                     shouldSyncHistoryMessage: ({ syncType }) => sync || syncType !== proto.HistorySync.HistorySyncType.FULL,
                     // Cuando el receptor no puede descifrar pide un retry; el cache interno de

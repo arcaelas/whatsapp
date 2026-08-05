@@ -2,6 +2,14 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.4.2] - 2026-08-05
+
+### Fixed
+
+- **Abrir un chat ya no tumba la sesión.** `Chat.seen()` marcaba leído con `chatModify({ markRead })`, que emite un *app patch*. Cuando el estado local va por detrás del servidor —lo normal en un dispositivo recién vinculado, que arranca en v0— WhatsApp responde a ese patch expulsando el dispositivo con `conflict (device_removed)`, y el panel lo dispara solo al abrir cualquier chat: la línea moría en el primer chat que alguien mirara, y volvía a morir en cuanto se re-vinculaba. Ahora se acusa con recibos (`readMessages`), que es lo que hacía la 4.5.0 y lo que no toca el estado de la app.
+
+  El rastro en el log es inconfundible: `applying app patch` → `resyncing regular_low from v0` → `synced regular_low to v1` → `device_removed`.
+
 ## [7.4.1] - 2026-08-04
 
 ### Fixed
