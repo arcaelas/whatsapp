@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.7.0] - 2026-08-05
+
+### Fixed
+
+- **Estados ajenos que nunca aparecían.** El autor se leía sólo de `key.participant` y se guardaba crudo. Cuando WhatsApp identifica a quien publica por LID, ese campo viene vacío —el dato viaja en su alterno— y el estado se descartaba en silencio; si llegaba, quedaba a nombre de un número larguísimo que no casa con ningún contacto. Ahora se acepta el campo alterno y el autor se guarda canónico, como el resto de las identidades.
+
 ## [7.6.0] - 2026-08-05
 
 ### Added
