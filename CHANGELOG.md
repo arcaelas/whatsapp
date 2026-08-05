@@ -2,6 +2,17 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.6.0] - 2026-08-05
+
+### Added
+
+- **Presencia de contactos: `Contact.watch()` y el evento `contact:presence`.** Dice si alguien entró, salió, escribe o graba. WhatsApp no la difunde por su cuenta —hay que pedirla contacto por contacto— y deja de mandarla al reconectar, así que `watch()` se vuelve a llamar en cada sesión. `paused` no se propaga: es dejar de teclear un instante, no un estado que valga la pena mirar.
+- **`WhatsApp.pair()`**: pide otro PIN de vinculación sobre el socket vivo, sin reconectar.
+
+### Fixed
+
+- **El PIN de vinculación dejó de invalidarse solo.** Se pedía en cada refresco del QR —cada ~20 s—, y cada petición caduca la anterior: el código dejaba de servir mientras la persona lo tecleaba, con el síntoma de un PIN correcto que «no lo toma». Ahora se pide una sola vez por conexión; el QR sí sigue renovándose, porque ahí lo que caduca es la imagen.
+
 ## [7.5.0] - 2026-08-05
 
 ### Added
