@@ -9,6 +9,7 @@ import type Chat from '~/lib/chat';
 import { Feed, TTL_MS } from '~/lib/status';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 import type WhatsApp from '~/lib/whatsapp';
+import type { ContactWatch, WatchEvent } from '~/lib/whatsapp';
 
 /** Sesión activa que liga la entidad. / Active session binding the entity. */
 type Init = { wa: WhatsApp; engine: Engine; socket: WASocket };
@@ -87,21 +88,35 @@ export function contact(init: Init) {
         }
 
         /**
-         * Empieza a vigilar la presencia del contacto: a partir de aquí llegan sus `contact:presence`
-         * (entró, salió, escribe, graba). WhatsApp no difunde presencia por su cuenta —hay que pedirla
-         * por contacto— y deja de mandarla al reconectar, así que hay que volver a pedirla en cada
-         * sesión nueva.
-         * Starts watching the contact's presence: from here on its `contact:presence` events arrive
-         * (came in, left, typing, recording). WhatsApp does not broadcast presence on its own —it must
-         * be asked for per contact— and stops sending it on reconnect, so it has to be asked again on
-         * every new session.
+         * Supervisa lo que hace el contacto: entra, sale, escribe, graba, deja de escribir o deja
+         * de grabar. Un aviso por acción, ya filtrado a esta persona.
          *
-         * @returns true si se pidió / true once requested
+         * WhatsApp no difunde presencia por su cuenta —hay que pedirla contacto por contacto— y
+         * deja de mandarla al reconectar, así que la supervisión se vuelve a montar en cada
+         * sesión nueva.
+         * Watches what the contact does: comes in, leaves, types, records, stops typing or stops
+         * recording. One notice per action, already filtered down to this person.
+         *
+         * WhatsApp does not broadcast presence on its own —it must be asked for contact by
+         * contact— and stops sending it on reconnect, so the watch is set up again on every new
+         * session.
+         *
+         * @param handler - Recibe cada acción / Receives every action
+         * @returns Función para dejar de supervisar / Function to stop watching
          */
-        async watch(): Promise<boolean> {
+        async watch(handler: (event: WatchEvent<ContactWatch, _Contact>) => void): Promise<() => void> {
             const jid = this.jid ?? this.lid ?? this._raw.id;
+            const mine = (jid.split('@')[0] ?? '').split(':')[0]!;
             await init.socket.presenceSubscribe(jid);
-            return true;
+            return init.wa.on('contact:presence', (who, name) => {
+                // El mismo contacto llega unas veces por teléfono y otras por LID: comparar la
+                // parte identificadora es lo único que los reconoce como la misma persona.
+                // The same contact arrives sometimes by phone and sometimes by LID: comparing the
+                // identifying part is the only thing recognising them as the same person.
+                if ([who.jid, who.lid, who._raw.id].some((id) => (id ?? '').startsWith(mine))) {
+                    handler({ name, payload: who as _Contact });
+                }
+            });
         }
 
         /**

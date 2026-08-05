@@ -30,6 +30,7 @@ import Chat from '~/lib/chat';
 import type Contact from '~/lib/contact';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 import type WhatsApp from '~/lib/whatsapp';
+import type { MessageWatch, WatchEvent } from '~/lib/whatsapp';
 
 /** Estados legibles indexados por el status numérico de baileys. / Readable states indexed by the baileys numeric status. */
 const STATUS = ['error', 'pending', 'sent', 'delivered', 'read', 'played'] as const;
@@ -358,6 +359,49 @@ export default class Message {
         doc.starred = value;
         await this._init.engine.set(`/chat/${doc.cid}/message/${doc.id}`, serialize(doc), doc.created_at);
         return true;
+    }
+
+    /**
+     * Supervisa qué le pasa a este mensaje: que lo lean, que reproduzcan su audio o que lo
+     * retiren. Vive en la clase base, así que todo tipo de mensaje lo hereda.
+     *
+     * Por dentro escucha las actualizaciones del mensaje y las traduce: `message:updated` no
+     * distingue leído de reproducido —los dos son un cambio de estado— y quien supervisa un
+     * mensaje quiere saber cuál de los dos ocurrió, no que «algo cambió».
+     * Watches what happens to this message: that it gets read, that its audio gets played, or
+     * that it is retired. It lives on the base class, so every message type inherits it.
+     *
+     * Under the hood it listens to the message's updates and translates them: `message:updated`
+     * does not tell read from played —both are a status change— and whoever watches a message
+     * wants to know which of the two happened, not that «something changed».
+     *
+     * @param handler - Recibe cada cambio / Receives every change
+     * @returns Función para dejar de supervisar / Function to stop watching
+     */
+    watch(handler: (event: WatchEvent<MessageWatch, Message>) => void): () => void {
+        const { wa } = this._init;
+        let seen = this._raw.status;
+        const off_updated = wa.on('message:updated', (msg) => {
+            if (msg.id === this._raw.id) {
+                const status = msg._raw.status;
+                // Sólo los avances cuentan: un mismo estado repetido no es una noticia, y sin
+                // este corte cada acuse reenviado por WhatsApp se contaría como una lectura más.
+                // Only advances count: a repeated status is not news, and without this cut every
+                // acknowledgement WhatsApp resends would count as another read.
+                if (status > seen) {
+                    seen = status;
+                    if (status >= proto.WebMessageInfo.Status.PLAYED) handler({ name: 'played', payload: msg });
+                    else if (status >= proto.WebMessageInfo.Status.READ) handler({ name: 'read', payload: msg });
+                }
+            }
+        });
+        const off_deleted = wa.on('message:deleted', (msg) => {
+            if (msg.id === this._raw.id) handler({ name: 'deleted', payload: msg });
+        });
+        return () => {
+            off_updated();
+            off_deleted();
+        };
     }
 
     /** Marca el mensaje como leído. / Marks the message as read. */

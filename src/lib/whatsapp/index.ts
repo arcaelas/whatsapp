@@ -52,7 +52,7 @@ const queued = (locks: Map<string, Promise<unknown>>, path: string, work: () => 
 };
 
 /** Traduce el vocabulario de baileys al que se vigila; lo que no está aquí no se propaga. / Translates baileys' vocabulary into the watched one; whatever is missing is not propagated. */
-const PRESENCE: Record<string, Presence | undefined> = { available: 'online', unavailable: 'offline', composing: 'typing', recording: 'recording' };
+const PRESENCE: Record<string, Presence | 'paused' | undefined> = { available: 'online', unavailable: 'offline', composing: 'typing', recording: 'recording', paused: 'paused' };
 
 const readable = (value: string | null | undefined) => (value && !/^\+?[\d\s·•∙⋅]+$/.test(value) ? value : null);
 
@@ -65,6 +65,38 @@ const readable = (value: string | null | undefined) => (value && !/^\+?[\d\s·�
  * `paused` is not propagated: it is stopping typing, not a state of its own.
  */
 export type Presence = 'online' | 'offline' | 'typing' | 'recording';
+
+/**
+ * Lo que se supervisa con `watch()`, en un solo sobre: `name` dice qué pasó y `payload` trae la
+ * instancia a la que le pasó, ya resuelta. Quien escucha no tiene que volver a buscar de quién
+ * se trata ni filtrar lo que no le toca.
+ * What `watch()` supervises, in a single envelope: `name` says what happened and `payload` brings
+ * the already-resolved instance it happened to. Whoever listens does not have to look up who it
+ * was nor filter out what does not concern them.
+ */
+export interface WatchEvent<N extends string, P> {
+    name: N;
+    payload: P;
+}
+
+/** Cada acción de alguien al otro lado, incluido dejar de escribir o de grabar. / Every action from the other end, including stopping typing or recording. */
+export type ContactWatch = 'online' | 'offline' | 'typing' | 'recording' | 'stopped-typing' | 'stopped-recording';
+
+/** Lo que le puede pasar a un mensaje ya enviado. / What can happen to an already-sent message. */
+export type MessageWatch = 'read' | 'played' | 'deleted';
+
+/** Un chat mezcla lo que hace la persona con lo que llega a la conversación. / A chat mixes what the person does with what arrives in the conversation. */
+export type ChatWatch = ContactWatch | 'message';
+
+/**
+ * Refrescos de QR que dura un PIN antes de darlo por caducado. WhatsApp no avisa de la
+ * expiración, así que se mide por los ciclos de refresco (~20 s cada uno): tres son el margen
+ * observado en el que un código sigue siendo aceptado.
+ * QR refreshes a PIN lasts before it is considered expired. WhatsApp gives no expiry notice, so
+ * it is measured in refresh cycles (~20s each): three is the observed window in which a code is
+ * still accepted.
+ */
+const OTP_CYCLES = 3;
 
 type FeedRaw = ConstructorParameters<typeof Feed>[1];
 type ChatInstance = InstanceType<ReturnType<typeof chat>>;
@@ -130,10 +162,12 @@ export interface Farewell {
 interface EventMap {
     connected: [WhatsApp];
     disconnected: [WhatsApp, Farewell];
+    /** Fallo que no tumba la conexión pero que quien la abrió necesita saber. / A failure that does not drop the connection but whoever opened it needs to know. */
+    error: [Error & { code?: string }, WhatsApp];
     'contact:created': [ContactInstance, ChatInstance, WhatsApp];
     'contact:updated': [ContactInstance, ChatInstance, WhatsApp];
     /** Alguien entró, salió, escribe o graba. Sólo llega de quien se esté vigilando con `Contact.watch()`. / Someone came in, left, is typing or recording. Only arrives for whoever is being watched with `Contact.watch()`. */
-    'contact:presence': [ContactInstance, Presence, WhatsApp];
+    'contact:presence': [ContactInstance, ContactWatch, WhatsApp];
     'chat:created': [ChatInstance, WhatsApp];
     'chat:deleted': [ChatInstance, WhatsApp];
     'chat:pinned': [ChatInstance, WhatsApp];
@@ -166,8 +200,6 @@ export default class WhatsApp {
      * merely hangs up —what reconnecting needs, where unlinking would be absurd—.
      */
     #unlink: ((silent: boolean) => Promise<void>) | null = null;
-    /** Pide otro PIN sobre el socket vivo. / Asks for another PIN over the live socket. */
-    #pair: (() => Promise<string | null>) | null = null;
 
     readonly engine: Engine;
     Contact!: ReturnType<typeof contact>;
@@ -214,9 +246,12 @@ export default class WhatsApp {
         let intentional = false;
         let silent = false;
         let paired = false;
+        let cycles = 0;
         let alive: ReturnType<typeof makeWASocket> | null = null;
         let timer: ReturnType<typeof setTimeout> | null = null;
         let chain: Promise<void> = Promise.resolve();
+        /** Qué estaba haciendo cada quien, para poder leer su `paused`. / What each one was doing, so their `paused` can be read. */
+        const doing = new Map<string, Presence>();
 
         const locks = new Map<string, Promise<unknown>>();
 
@@ -323,14 +358,6 @@ export default class WhatsApp {
                  * two chats for them. The phone wins; the LID is only kept while there is still
                  * no way to translate it.
                  */
-                this.#pair = async () => {
-                    if (digits && !creds.registered) {
-                        const code = await socket.requestPairingCode(digits);
-                        await callback(code);
-                        return code;
-                    }
-                    return null;
-                };
                 const canonical = async (uid: string) => (uid.endsWith('@lid') ? await jid_of(engine, uid, socket).catch(() => null) : null) ?? uid;
                 /** Índice LID↔teléfono, sólo cuando traduce de verdad. / LID↔phone index, only when it actually translates. */
                 const remember = async (lid: string | null | undefined, jid: string) => {
@@ -410,21 +437,26 @@ export default class WhatsApp {
                 socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
                     if (qr && !creds.registered) {
                         if (digits && (method ?? 'otp') === 'otp') {
-                            // El PIN se pide UNA vez por conexión. WhatsApp refresca el QR cada
-                            // ~20 s y pedir un código en cada refresco invalida el anterior: el
-                            // que la persona está tecleando deja de servir mientras lo teclea, y
-                            // el síntoma es un PIN correcto que «no lo toma». El QR sí se renueva
-                            // en cada refresco, porque ahí lo caducado es la imagen y volver a
-                            // escanear no cuesta nada.
-                            // The PIN is requested ONCE per connection. WhatsApp refreshes the QR
-                            // every ~20s and asking for a code on each refresh invalidates the
-                            // previous one: the one being typed stops working mid-typing, and the
-                            // symptom is a correct PIN that «is not accepted». The QR does renew
-                            // on every refresh, because there what expires is the image and
-                            // scanning again costs nothing.
-                            if (!paired) {
-                                paired = true;
-                                await callback(await socket.requestPairingCode(digits));
+                            // El QR se refresca cada ~20 s, pero el PIN vive más: pedir uno en
+                            // cada refresco invalida el anterior y el que la persona está
+                            // tecleando deja de servir a media escritura —el síntoma es un PIN
+                            // correcto que «no lo toma»—. Por eso se cuenta el ciclo y sólo se
+                            // renueva al caducar de verdad, gastando un reintento del presupuesto.
+                            // The QR refreshes every ~20s, but the PIN lives longer: asking for
+                            // one on each refresh invalidates the previous, and the one being
+                            // typed stops working mid-typing —the symptom is a correct PIN that
+                            // «is not accepted»—. So the cycle is counted and it is only renewed
+                            // once it truly expires, spending one retry from the budget.
+                            cycles = paired ? cycles + 1 : 0;
+                            if (!paired || cycles >= OTP_CYCLES) {
+                                if (paired && budget !== null && retries >= budget) {
+                                    this.emit('error', Object.assign(new Error('El código de vinculación expiró'), { code: 'ERR_OTP_EXPIRED' }), this);
+                                } else {
+                                    retries += paired ? 1 : 0;
+                                    cycles = 0;
+                                    paired = true;
+                                    await callback(await socket.requestPairingCode(digits));
+                                }
                             }
                         } else {
                             await callback(await QRCode.toBuffer(qr, { type: 'png', margin: 2 }));
@@ -540,14 +572,20 @@ export default class WhatsApp {
                         const cid = await canonical(id);
                         for (const [participant, data] of Object.entries(presences)) {
                             const state = PRESENCE[data.lastKnownPresence];
-                            // `paused` llega cada vez que alguien deja de teclear un instante:
-                            // propagarlo convertiría una vigilancia en un goteo sin significado.
-                            // `paused` arrives every time someone stops typing for a moment:
-                            // propagating it would turn a watch into a meaningless drip.
                             if (state) {
                                 const who = await canonical(participant || cid);
+                                // `paused` es «dejó de hacer lo que hacía», y sólo el estado
+                                // anterior dice qué era: sin recordarlo no se puede distinguir
+                                // dejar de escribir de dejar de grabar.
+                                // `paused` means «stopped doing what they were doing», and only
+                                // the previous state says which: without remembering it there is
+                                // no telling stopped-typing from stopped-recording.
+                                const last = doing.get(who);
+                                const name = state === 'paused' ? (last === 'recording' ? 'stopped-recording' : 'stopped-typing') : state;
+                                if (state === 'typing' || state === 'recording') doing.set(who, state);
+                                else doing.delete(who);
                                 const card = deserialize<ContactRaw>(await engine.get(`/contact/${who}`));
-                                this.emit('contact:presence', new this.Contact(card ?? { id: who, lid: null, name: null, notify: null, verified_name: null, img_url: null, status: null }), state, this);
+                                this.emit('contact:presence', new this.Contact(card ?? { id: who, lid: null, name: null, notify: null, verified_name: null, img_url: null, status: null }), name as ContactWatch, this);
                             }
                         }
                     }).catch(() => { });
@@ -1000,22 +1038,6 @@ export default class WhatsApp {
      * await wa.disconnect();                     // desvincula y conserva el historial
      * await wa.disconnect({ destroy: true });    // desvincula y no queda nada
      */
-    /**
-     * Pide un PIN de vinculación nuevo sin tocar la conexión. El anterior queda invalidado —así
-     * funciona WhatsApp—, por eso no se renueva solo: hacerlo caducaba el código que la persona
-     * estaba tecleando. Reconectar para conseguir otro tampoco sirve: tumba el socket a medio
-     * emparejar.
-     * Asks for a fresh pairing PIN without touching the connection. The previous one is
-     * invalidated —that is how WhatsApp works—, which is why it does not renew on its own: doing
-     * so expired the code being typed. Reconnecting to get another does not work either: it
-     * takes down the half-paired socket.
-     *
-     * @returns El PIN nuevo, o null si la línea ya está vinculada o no hay socket / The fresh PIN, or null when already linked or socket-less
-     */
-    async pair(): Promise<string | null> {
-        return (await this.#pair?.()) ?? null;
-    }
-
     async disconnect(options: { silent?: boolean; destroy?: boolean } = {}): Promise<void> {
         await this.#unlink?.(options.silent === true);
         this.#unlink = null;
