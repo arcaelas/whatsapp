@@ -678,7 +678,18 @@ export default class WhatsApp {
                                     continue;
                                 }
                                 const type = ({ conversation: 'text', extendedTextMessage: 'text', imageMessage: 'image', videoMessage: 'video', audioMessage: 'audio' } as Record<string, FeedRaw['type']>)[kind ?? ''];
-                                const author = msg.key.participant ?? '';
+                                // El autor de un estado puede llegar por `participant` o por su
+                                // alterno según venga identificado por teléfono o por LID, y se
+                                // guarda canónico como todo lo demás: con el LID crudo el estado
+                                // queda a nombre de un número larguísimo que no case con ningún
+                                // contacto, y para quien mira es un estado que no llegó.
+                                // A status author can arrive via `participant` or its alternate
+                                // depending on whether it is identified by phone or by LID, and
+                                // is stored canonically like everything else: with the raw LID
+                                // the status ends up under a long meaningless number matching no
+                                // contact, and to whoever looks it is a status that never came.
+                                const claimed = msg.key.participant ?? msg.key.participantAlt ?? '';
+                                const author = claimed ? await canonical(claimed) : '';
                                 if (!type || !author) {
                                     continue;
                                 }
