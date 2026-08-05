@@ -247,7 +247,22 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
          */
         async seen(): Promise<boolean> {
             const last = await tail(this._raw.id);
-            await init.socket.chatModify({ markRead: true, lastMessages: last.messages }, this._raw.id);
+            // Marcar leído se acusa con recibos, no con una mutación del estado de la app.
+            // `chatModify({ markRead })` emite un app patch, y cuando el estado local va por
+            // detrás del servidor —lo normal en un dispositivo recién vinculado, que arranca en
+            // v0— WhatsApp responde al patch expulsando el dispositivo: `conflict
+            // (device_removed)`. Abrir un chat basta para provocarlo, así que la línea se caía
+            // sola al primer chat que se mirara. Los recibos no tocan el estado de la app.
+            // Marking read is acknowledged with receipts, not with an app-state mutation.
+            // `chatModify({ markRead })` emits an app patch, and when the local state trails the
+            // server —the norm on a freshly linked device, which starts at v0— WhatsApp answers
+            // that patch by dropping the device: `conflict (device_removed)`. Opening a chat was
+            // enough to trigger it, so the line died on the first chat anyone looked at.
+            // Receipts leave the app state alone.
+            const keys = last.messages.map(({ key }) => ({ remoteJid: key.remoteJid, id: key.id, participant: undefined }));
+            if (keys.length) {
+                await init.socket.readMessages(keys);
+            }
             this._raw.unread_count = 0;
             await init.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? last.at);
             return true;
