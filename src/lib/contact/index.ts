@@ -87,6 +87,24 @@ export function contact(init: Init) {
         }
 
         /**
+         * Empieza a vigilar la presencia del contacto: a partir de aquí llegan sus `contact:presence`
+         * (entró, salió, escribe, graba). WhatsApp no difunde presencia por su cuenta —hay que pedirla
+         * por contacto— y deja de mandarla al reconectar, así que hay que volver a pedirla en cada
+         * sesión nueva.
+         * Starts watching the contact's presence: from here on its `contact:presence` events arrive
+         * (came in, left, typing, recording). WhatsApp does not broadcast presence on its own —it must
+         * be asked for per contact— and stops sending it on reconnect, so it has to be asked again on
+         * every new session.
+         *
+         * @returns true si se pidió / true once requested
+         */
+        async watch(): Promise<boolean> {
+            const jid = this.jid ?? this.lid ?? this._raw.id;
+            await init.socket.presenceSubscribe(jid);
+            return true;
+        }
+
+        /**
          * Contacto por teléfono, JID o LID: primero el engine y, si no está persistido, se
          * descubre por red con su foto y su bio, y se materializa.
          * Contact by phone, JID or LID: the engine first and, when not persisted, it is
