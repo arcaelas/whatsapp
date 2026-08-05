@@ -2,6 +2,12 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [7.5.0] - 2026-08-05
+
+### Added
+
+- **`Audio.played` y `Audio.play()`.** Reproducido es un acuse distinto del de leído —abrir un chat no reproduce nada— y viaja como su propio recibo (`played`), que es lo que enciende el micrófono azul del lado de quien mandó la nota. Sin esto no había forma de acusar una nota de voz ni de saber si la escucharon.
+
 ## [7.4.2] - 2026-08-05
 
 ### Fixed

@@ -551,6 +551,24 @@ export class Audio extends Media {
     get duration(): number { return this._media?.seconds ?? 0; }
     /** Forma de onda 0-100 lista para pintar. / Paint-ready 0-100 waveform. */
     get waveform(): number[] { return Array.from(to_buffer(this._media?.waveform) ?? []); }
+    /** true si ya fue reproducido: el micrófono azul que ve quien lo mandó. / true when already played: the blue mic its sender sees. */
+    get played(): boolean { return this._raw.status >= proto.WebMessageInfo.Status.PLAYED; }
+
+    /**
+     * Acusa el audio como reproducido. Es un aviso aparte del de leído —abrir el chat no
+     * reproduce nada—, y por eso viaja como recibo propio: quien lo mandó ve el micrófono
+     * azul sólo después de esto.
+     * Acknowledges the audio as played. It is separate from the read receipt —opening the chat
+     * plays nothing— and so travels as its own receipt: whoever sent it sees the blue mic only
+     * after this.
+     *
+     * @returns true cuando el acuse salió / true once the receipt left
+     */
+    async play(): Promise<boolean> {
+        const { cid, id, author } = this._raw;
+        await this._init.socket.sendReceipt(cid, cid.endsWith('@g.us') ? author : undefined, [id], 'played');
+        return true;
+    }
 }
 
 /** Mensaje de sticker. / Sticker message. */
