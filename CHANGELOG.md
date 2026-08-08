@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.1.0] - 2026-08-07
+
+### Added
+
+- **`message:reacted` ahora dice QUIÉN reaccionó**: el cuarto argumento es el `Contact` autor de la reacción (la instancia `WhatsApp` pasa al quinto). El dato ya se calculaba para persistir la reacción; sólo no viajaba en el evento, y sin él distinguir la reacción real de un usuario del eco de una propia obligaba a cada consumidor a llevar su propio registro de ecos con timeouts. Los handlers existentes no se rompen: ninguno consumía el cuarto argumento posicional.
+- **`Contact.me` restaurado**: `true` cuando el contacto es la propia cuenta, comparando por JID y por LID. Existía en la 4.x y la 8.0.0 lo perdió; `members()` sin él no ofrecía forma de apartar la cuenta propia.
+
 ## [8.0.0] - 2026-08-05
 
 ### Changed

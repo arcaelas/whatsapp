@@ -179,7 +179,7 @@ interface EventMap {
     'message:created': [Message, ChatInstance, WhatsApp];
     'message:updated': [Message, ChatInstance, WhatsApp];
     'message:deleted': [Message, ChatInstance, WhatsApp];
-    'message:reacted': [Message, ChatInstance, string, WhatsApp];
+    'message:reacted': [Message, ChatInstance, string, ContactInstance, WhatsApp];
     'message:starred': [Message, ChatInstance, WhatsApp];
     'message:unstarred': [Message, ChatInstance, WhatsApp];
     'message:forwarded': [Message, ChatInstance, WhatsApp];
@@ -699,7 +699,15 @@ export default class WhatsApp {
                                     ];
                                     await engine.set(found.path, serialize(found.doc), found.doc.created_at);
                                     const instance = new Message(init, found.doc);
-                                    this.emit('message:reacted', instance, await instance.chat(), emoji, this);
+                                    // Quién reaccionó viaja en el evento: sin él, distinguir la
+                                    // reacción del usuario del eco de una propia obligaba a cada
+                                    // consumidor a llevar su propio registro de ecos con timeouts.
+                                    // Who reacted travels in the event: without it, telling the
+                                    // user's reaction from the echo of an own one forced every
+                                    // consumer to keep its own echo ledger with timeouts.
+                                    const who = await canonical(author);
+                                    const card = deserialize<ContactRaw>(await engine.get(`/contact/${who}`));
+                                    this.emit('message:reacted', instance, await instance.chat(), emoji, new this.Contact(card ?? { id: who, lid: null, name: null, notify: null, verified_name: null, img_url: null, status: null }), this);
                                 }
                                 continue;
                             }
