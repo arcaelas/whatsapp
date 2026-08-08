@@ -77,6 +77,18 @@ export default class Contact {
 export function contact(init: Init) {
     class _Contact extends Contact {
         /**
+         * true cuando este contacto es la propia cuenta. La comparación cubre JID y LID porque
+         * la cuenta se anuncia por cualquiera de los dos según el chat.
+         * true when this contact is the account itself. The comparison covers JID and LID
+         * because the account announces itself through either depending on the chat.
+         */
+        get me(): boolean {
+            const user = init.socket.user;
+            const mine = [user?.id, user?.lid].filter((id): id is string => Boolean(id)).map((id) => (id.split(':')[0] ?? '').split('@')[0]);
+            return [this.jid, this.lid, this._raw.id].some((id) => id && mine.includes((id.split('@')[0] ?? '')));
+        }
+
+        /**
          * Chat 1:1 del contacto: el persistido, o una instancia mínima.
          * The contact's 1:1 chat: the persisted one, or a minimal instance.
          *

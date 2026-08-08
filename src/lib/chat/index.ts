@@ -124,7 +124,7 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
          * @param limit - Tamaño de página / Page size
          * @returns Página de contactos / Contact page
          */
-        async members(offset = 0, limit = 50): Promise<Contact[]> {
+        async members(offset = 0, limit = 50): Promise<InstanceType<typeof init.wa.Contact>[]> {
             const ids = this.type === 'group'
                 ? (await meta(this._raw.id)).participants.map((participant) => participant.id)
                 : [this._raw.id, init.socket.user?.id].filter((id): id is string => Boolean(id));
