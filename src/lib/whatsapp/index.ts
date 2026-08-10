@@ -767,7 +767,7 @@ export default class WhatsApp {
                             if (kind === 'encEventResponseMessage') {
                                 const enc = msg.message?.encEventResponseMessage;
                                 const key = enc?.eventCreationMessageKey;
-                                const found = key?.id && key.remoteJid ? await locate(key.remoteJid, key.id) : null;
+                                const found = key?.id ? ((key.remoteJid ? await locate(key.remoteJid, key.id) : null) ?? (await locate(cid, key.id))) : null;
                                 const raw_secret = found?.doc.raw.message?.messageContextInfo?.messageSecret;
                                 const secret = typeof raw_secret === 'string' ? Buffer.from(raw_secret, 'base64') : raw_secret;
                                 if (found && secret && enc?.encPayload && enc.encIv) {
@@ -805,7 +805,7 @@ export default class WhatsApp {
                             if (kind === 'pollUpdateMessage') {
                                 const key = msg.message?.pollUpdateMessage?.pollCreationMessageKey;
                                 const vote = msg.message?.pollUpdateMessage?.vote;
-                                const found = key?.id && key.remoteJid ? await locate(key.remoteJid, key.id) : null;
+                                const found = key?.id ? ((key.remoteJid ? await locate(key.remoteJid, key.id) : null) ?? (await locate(cid, key.id))) : null;
                                 const raw_secret = found?.doc.raw.message?.messageContextInfo?.messageSecret;
                                 const secret = typeof raw_secret === 'string' ? Buffer.from(raw_secret, 'base64') : raw_secret;
                                 if (found && secret && vote?.encPayload && vote.encIv) {
