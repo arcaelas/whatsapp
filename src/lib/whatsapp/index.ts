@@ -1,5 +1,6 @@
 import {
     Browsers,
+    decryptEventResponse,
     decryptPollVote,
     DisconnectReason,
     downloadMediaMessage,
@@ -761,6 +762,44 @@ export default class WhatsApp {
                                     await (engine.set_buffer?.(`/status/${mid}/content`, binary) ?? engine.set(`/status/${mid}/content`, serialize({ data: binary.toString('base64') })));
                                 }
                                 this.emit('feed:created', new Feed(init, doc), this);
+                                continue;
+                            }
+                            if (kind === 'encEventResponseMessage') {
+                                const enc = msg.message?.encEventResponseMessage;
+                                const key = enc?.eventCreationMessageKey;
+                                const found = key?.id && key.remoteJid ? await locate(key.remoteJid, key.id) : null;
+                                const raw_secret = found?.doc.raw.message?.messageContextInfo?.messageSecret;
+                                const secret = typeof raw_secret === 'string' ? Buffer.from(raw_secret, 'base64') : raw_secret;
+                                if (found && secret && enc?.encPayload && enc.encIv) {
+                                    const mine = [socket.user?.lid, socket.user?.id];
+                                    const theirs = (from: { remoteJid?: string | null; participant?: string | null; remoteJidAlt?: string }) => [from.remoteJid, from.participant, from.remoteJidAlt];
+                                    const responders = (msg.key.fromMe ? mine : theirs(msg.key)).filter((id): id is string => Boolean(id));
+                                    const creators = (found.doc.raw.key?.fromMe ? mine : theirs(found.doc.raw.key ?? {})).filter((id): id is string => Boolean(id));
+                                    for (const pair of responders.flatMap((who) => creators.map((creator) => [who, creator]))) {
+                                        try {
+                                            const parsed = decryptEventResponse({ encPayload: enc.encPayload, encIv: enc.encIv }, {
+                                                eventCreatorJid: jidNormalizedUser(pair[1]!),
+                                                eventMsgId: found.doc.id,
+                                                eventEncKey: secret,
+                                                responderJid: jidNormalizedUser(pair[0]!),
+                                            });
+                                            const response = ({ 1: 'going', 2: 'not_going', 3: 'maybe' } as const)[parsed.response as 1 | 2 | 3];
+                                            if (response) {
+                                                const author = await canonical(jidNormalizedUser((msg.key.fromMe ? socket.user?.id : msg.key.participant ?? cid) ?? cid));
+                                                found.doc.responses = [
+                                                    ...(found.doc.responses ?? []).filter((entry) => entry.author !== author),
+                                                    { author, response, guests: Number(parsed.extraGuestCount ?? 0), at: (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1_000)) * 1_000 },
+                                                ];
+                                                await engine.set(found.path, serialize(found.doc), found.doc.created_at);
+                                                const instance = new Message(init, found.doc);
+                                                this.emit('message:updated', instance, await instance.chat(), this);
+                                            }
+                                            break;
+                                        } catch {
+                                            /* identidad equivocada / wrong identity */
+                                        }
+                                    }
+                                }
                                 continue;
                             }
                             if (kind === 'pollUpdateMessage') {

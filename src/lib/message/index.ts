@@ -175,6 +175,7 @@ export default class Message {
         revoked_at?: number | null;
         multiple?: boolean;
         reactions?: { author: string; emoji: string; at: number }[];
+        responses?: { author: string; response: 'going' | 'not_going' | 'maybe'; guests: number; at: number }[];
         viewed?: boolean | null;
         raw: WAMessage;
     };
@@ -754,6 +755,26 @@ export class VCard extends Message {
 export class Event extends Message {
     /** @internal Bloque del evento en el raw. / Raw event block. */
     get _event() { return this._raw.raw.message?.eventMessage; }
+    /** Asistentes confirmados, acompañantes incluidos. / Confirmed attendees, companions included. */
+    get going(): number {
+        return (this._raw.responses ?? []).filter((entry) => entry.response === 'going').reduce((sum, entry) => sum + 1 + entry.guests, 0);
+    }
+
+    /**
+     * Respuestas de asistencia al evento, con el nombre resuelto de cada contacto y en orden
+     * de llegada — la última es la más reciente.
+     * Attendance responses, with each contact's resolved name, in arrival order — the last one
+     * is the most recent.
+     */
+    async attendees(): Promise<{ name: string; contact: string; response: 'going' | 'not_going' | 'maybe'; guests: number }[]> {
+        const rows: { name: string; contact: string; response: 'going' | 'not_going' | 'maybe'; guests: number }[] = [];
+        for (const entry of this._raw.responses ?? []) {
+            const who = await this._init.wa.Contact.get(entry.author).catch(() => null);
+            const contact = (who?.phone ?? entry.author.split('@')[0]!.split(':')[0]!);
+            rows.push({ name: who?.name ?? contact, contact, response: entry.response, guests: entry.guests });
+        }
+        return rows;
+    }
     /** Nombre del evento. / Event name. */
     get name(): string { return this._event?.name ?? ''; }
     /** Inicio en ISO UTC. / Start as ISO UTC. */
