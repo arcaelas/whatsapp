@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.2.0] - 2026-08-09
+
+### Added
+
+- **Respuestas de asistencia a eventos.** La respuesta «Asistiré / No asistiré / Quizás» llega cifrada (`encEventResponseMessage`) y hasta ahora caía al tipo `text` con contenido vacío: quien escuchaba recibía un mensaje sin cuerpo. Ahora se descifra con el secreto del evento original —el mismo esquema que los votos de poll—, se persiste en el documento del evento (`responses`, una por autor: cambiar de opinión reemplaza, no duplica) y se emite `message:updated` con la instancia `Event` actualizada; nunca aparece como mensaje nuevo en el chat.
+- **`Event.going`** — asistentes confirmados, acompañantes incluidos — y **`Event.attendees()`**, las respuestas con el nombre resuelto de cada contacto, en orden de llegada.
+
 ## [8.1.0] - 2026-08-07
 
 ### Added
