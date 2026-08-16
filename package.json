@@ -50,7 +50,7 @@
     "arcaelas-insiders",
     "javascript"
   ],
-  "license": "ISC",
+  "license": "MIT",
   "main": "./build/cjs/index.js",
   "module": "./build/esm/index.js",
   "name": "@arcaelas/whatsapp",
