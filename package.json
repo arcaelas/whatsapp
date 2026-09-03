@@ -31,6 +31,11 @@
       "types": "./build/esm/index.d.ts",
       "import": "./build/esm/index.js",
       "require": "./build/cjs/index.js"
+    },
+    "./decorators": {
+      "types": "./build/esm/decorators.d.ts",
+      "import": "./build/esm/decorators.js",
+      "require": "./build/cjs/decorators.js"
     }
   },
   "files": [
@@ -64,7 +69,7 @@
     "prepublishOnly": "yarn build"
   },
   "types": "./build/esm/index.d.ts",
-  "version": "8.2.2",
+  "version": "8.2.3",
   "engines": {
     "node": ">=20"
   },
