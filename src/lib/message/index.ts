@@ -256,6 +256,28 @@ export default class Message {
     get starred(): boolean { return this._raw.starred; }
     /** true si fue reenviado. / true when forwarded. */
     get forwarded(): boolean { return this._raw.forwarded; }
+    /**
+     * @internal Identificadores mencionados en el cuerpo, tal como viajan en el protocolo:
+     * LID en chats con addressing LID, JID legado en el resto.
+     * Identifiers mentioned in the body, exactly as they travel in the protocol: LID in
+     * LID-addressed chats, legacy JID otherwise.
+     */
+    get _mentions(): string[] {
+        const body = unwrap(this._raw.raw.message ?? {});
+        const content = body[getContentType(body) as keyof typeof body] as { contextInfo?: proto.IContextInfo } | undefined;
+        return (content?.contextInfo?.mentionedJid ?? []).filter((uid): uid is string => Boolean(uid));
+    }
+    /**
+     * true si la cuenta autenticada está mencionada. La comparación cubre JID y LID porque la
+     * cuenta se menciona por cualquiera de los dos según el chat.
+     * true when the authenticated account is mentioned. The comparison covers JID and LID
+     * because the account is mentioned through either depending on the chat.
+     */
+    get mentioned(): boolean {
+        const user = this._init.socket.user;
+        const mine = [user?.id, user?.lid].filter((uid): uid is string => Boolean(uid)).map((uid) => (uid.split(':')[0] ?? '').split('@')[0]);
+        return this._mentions.some((uid) => mine.includes(uid.split('@')[0] ?? ''));
+    }
     /** true si fue editado. / true when edited. */
     get edited(): boolean { return this._raw.edited; }
     /**
@@ -308,6 +330,23 @@ export default class Message {
     async author(): Promise<InstanceType<WhatsApp['Contact']>> {
         const jid = (await jid_of(this._init.engine, this._raw.author, this._init.socket).catch(() => null)) ?? this._raw.author;
         return new this._init.wa.Contact(deserialize<Contact['_raw']>(await this._init.engine.get(`/contact/${jid}`)) ?? { id: jid });
+    }
+
+    /**
+     * Contactos mencionados en el cuerpo, en orden de aparición (ficha mínima si no están
+     * persistidos). El caption conserva el identificador crudo —`@233539534610440`—: resolver
+     * el nombre es cosa de quien lo presenta.
+     * Contacts mentioned in the body, in order of appearance (minimal card when not persisted).
+     * The caption keeps the raw identifier —`@233539534610440`—: resolving the name belongs to
+     * whoever renders it.
+     */
+    async mentions(): Promise<InstanceType<WhatsApp['Contact']>[]> {
+        const rows: InstanceType<WhatsApp['Contact']>[] = [];
+        for (const uid of this._mentions) {
+            const jid = (await jid_of(this._init.engine, uid, this._init.socket).catch(() => null)) ?? uid;
+            rows.push(new this._init.wa.Contact(deserialize<Contact['_raw']>(await this._init.engine.get(`/contact/${jid}`)) ?? { id: jid }));
+        }
+        return rows;
     }
 
     /** Chat al que pertenece el mensaje. / Chat the message belongs to. */

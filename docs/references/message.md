@@ -118,6 +118,7 @@ switch (msg.type) {
 | `starred`    | `boolean`                                                         | `true` when the message is starred.                                                              |
 | `forwarded`  | `boolean`                                                         | `true` when the message was forwarded.                                                           |
 | `edited`     | `boolean`                                                         | `true` when the message was edited.                                                              |
+| `mentioned`  | `boolean`                                                         | `true` when the authenticated account is mentioned in the body (compares JID and LID).           |
 | `once`       | `boolean`                                                         | `true` when the message is view-once.                                                            |
 | `created_at` | `string`                                                          | Creation date as an **ISO UTC string**.                                                          |
 | `expires_at` | `string \| null`                                                  | Expiration of an ephemeral message as **ISO UTC**, or `null`.                                    |
@@ -162,6 +163,26 @@ const sender = await msg.author();
 const chat   = await msg.chat();
 
 console.log(sender.name, sender.phone, chat.name);
+```
+
+### `mentions()`
+
+```typescript
+mentions(): Promise<Contact[]>
+```
+
+The contacts **mentioned** in the body, in order of appearance, resolved from the engine with a
+minimal instance when they are not persisted. Only text, image and video carry mentions.
+
+The `caption` keeps the raw protocol identifier —`@233539534610440`—: replacing it with the name
+belongs to whoever renders it.
+
+```typescript title="mentions.ts"
+if (msg.mentioned) {
+    const people = await msg.mentions();
+    const text = people.reduce((acc, person) => acc.replace(`@${(person.lid ?? person.jid ?? '').split('@')[0]}`, `@${person.name}`), msg.caption);
+    console.log(text);
+}
 ```
 
 ### `message()`
