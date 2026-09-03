@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.3.1] - 2026-09-03
+
+### Fixed
+
+- **El índice `/lid` se escribía bajo una clave que nunca se leía.** El LID llega unas veces con sufijo de dispositivo —`233539534610440:76@lid`— y se indexaba tal cual, mientras `jid_of` lo consulta siempre normalizado: todo contacto anunciado con sufijo quedaba irresoluble y volvía como ficha mínima con el LID por nombre. Ahora ambos lados del índice se normalizan al escribirse.
+- **`Contact.lid` devuelve el LID sin sufijo de dispositivo**, igual que `jid` ya hacía con el teléfono. Devolverlo crudo impedía casar el identificador con el que el LID aparece en el cuerpo de un mensaje.
+
 ## [8.3.0] - 2026-09-03
 
 ### Added
