@@ -49,9 +49,10 @@ export default class Contact {
         return pn ? jidNormalizedUser(pn) : null;
     }
 
-    /** LID (`@lid`), o null si no es determinable. / LID (`@lid`), or null when undeterminable. */
+    /** LID (`@lid`) sin sufijo de dispositivo, o null si no es determinable. / LID (`@lid`) without device suffix, or null when undeterminable. */
     get lid(): string | null {
-        return this._raw.lid ?? (this._raw.id.endsWith('@lid') ? this._raw.id : null);
+        const lid = this._raw.lid ?? (this._raw.id.endsWith('@lid') ? this._raw.id : null);
+        return lid ? jidNormalizedUser(lid) : null;
     }
 
     /** Teléfono, derivado del JID PN y nunca del LID. / Phone, derived from the PN JID and never from the LID. */
@@ -168,7 +169,7 @@ export function contact(init: Init) {
             };
             await init.engine.set(`/contact/${id}`, serialize(doc));
             if (found.lid) {
-                await init.engine.set(`/lid/${found.lid}`, serialize(id));
+                await init.engine.set(`/lid/${jidNormalizedUser(found.lid)}`, serialize(id));
             }
             return new this(doc);
         }
