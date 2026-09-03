@@ -360,11 +360,19 @@ export default class WhatsApp {
                  * no way to translate it.
                  */
                 const canonical = async (uid: string) => (uid.endsWith('@lid') ? await jid_of(engine, uid, socket).catch(() => null) : null) ?? uid;
-                /** Índice LID↔teléfono, sólo cuando traduce de verdad. / LID↔phone index, only when it actually translates. */
+                /**
+                 * Índice LID↔teléfono, sólo cuando traduce de verdad. Ambos lados se normalizan:
+                 * el LID llega unas veces con sufijo de dispositivo —`…:76@lid`— y quien consulta
+                 * el índice lo hace siempre por el LID sin sufijo.
+                 * LID↔phone index, only when it actually translates. Both sides are normalized:
+                 * the LID sometimes arrives with a device suffix —`…:76@lid`— while whoever
+                 * queries the index always does it by the suffix-less LID.
+                 */
                 const remember = async (lid: string | null | undefined, jid: string) => {
                     if (lid && !jid.endsWith('@lid')) {
-                        await engine.set(`/lid/${lid}`, serialize(jid));
-                        await engine.set(`/lid/${jid}`, serialize(lid));
+                        const [key, value] = [jidNormalizedUser(lid), jidNormalizedUser(jid)];
+                        await engine.set(`/lid/${key}`, serialize(value));
+                        await engine.set(`/lid/${value}`, serialize(key));
                     }
                 };
                 /**
