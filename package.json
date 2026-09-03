@@ -64,7 +64,7 @@
     "prepublishOnly": "yarn build"
   },
   "types": "./build/esm/index.d.ts",
-  "version": "8.2.2",
+  "version": "8.2.3",
   "engines": {
     "node": ">=20"
   },
