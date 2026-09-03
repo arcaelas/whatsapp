@@ -299,9 +299,15 @@ export default class Message {
         return Boolean(this._raw.raw.key?.isViewOnce ?? media?.viewOnce ?? msg?.viewOnceMessage ?? msg?.viewOnceMessageV2 ?? msg?.viewOnceMessageV2Extension);
     }
 
-    /** Contacto autor, desde el engine (ficha mínima si no está persistido). / Author contact, from the engine (minimal card when not persisted). */
+    /**
+     * Contacto autor, desde el engine (ficha mínima si no está persistido). En grupos el autor
+     * llega por LID y la ficha vive bajo el teléfono: se canoniza antes de buscarla.
+     * Author contact, from the engine (minimal card when not persisted). In groups the author
+     * arrives by LID while the card lives under the phone: it is canonicalized before lookup.
+     */
     async author(): Promise<InstanceType<WhatsApp['Contact']>> {
-        return new this._init.wa.Contact(deserialize<Contact['_raw']>(await this._init.engine.get(`/contact/${this._raw.author}`)) ?? { id: this._raw.author });
+        const jid = (await jid_of(this._init.engine, this._raw.author, this._init.socket).catch(() => null)) ?? this._raw.author;
+        return new this._init.wa.Contact(deserialize<Contact['_raw']>(await this._init.engine.get(`/contact/${jid}`)) ?? { id: jid });
     }
 
     /** Chat al que pertenece el mensaje. / Chat the message belongs to. */
