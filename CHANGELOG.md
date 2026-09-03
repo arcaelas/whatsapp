@@ -2,6 +2,13 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.3.0] - 2026-09-03
+
+### Added
+
+- **Menciones en `Message`.** El cuerpo de un texto, una imagen o un video puede mencionar contactos, y ese dato viajaba en el raw sin ninguna forma de leerlo: cada consumidor tenía que abrir `contextInfo` a mano o adivinar por expresión regular. Ahora `mentioned` dice si la cuenta autenticada está mencionada —comparando por JID y por LID, porque se menciona por cualquiera de los dos según el chat— y `mentions()` devuelve los `Contact` mencionados en orden de aparición, con ficha mínima cuando no están persistidos.
+- El `caption` conserva el identificador crudo del protocolo (`@233539534610440`), igual que antes: resolver el nombre es responsabilidad de quien presenta el mensaje.
+
 ## [8.2.0] - 2026-08-09
 
 ### Added
