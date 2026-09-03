@@ -118,6 +118,7 @@ switch (msg.type) {
 | `starred` | `boolean` | `true` si el mensaje está destacado. |
 | `forwarded` | `boolean` | `true` si el mensaje fue reenviado. |
 | `edited` | `boolean` | `true` si el mensaje fue editado. |
+| `mentioned` | `boolean` | `true` si la cuenta autenticada está mencionada en el cuerpo (compara JID y LID). |
 | `once` | `boolean` | `true` si es de una sola lectura (view-once). |
 | `created_at` | `string` | Fecha de creación como **string ISO UTC**. |
 | `expires_at` | `string \| null` | Vencimiento de un mensaje temporal en **ISO UTC**, o `null`. |
@@ -162,6 +163,26 @@ const sender = await msg.author();
 const chat   = await msg.chat();
 
 console.log(sender.name, sender.phone, chat.name);
+```
+
+### `mentions()`
+
+```typescript
+mentions(): Promise<Contact[]>
+```
+
+Los contactos **mencionados** en el cuerpo, en orden de aparición, resueltos desde el motor con una
+instancia mínima cuando no están persistidos. Solo el texto, la imagen y el video llevan menciones.
+
+El `caption` conserva el identificador crudo del protocolo —`@233539534610440`—: sustituirlo por el
+nombre es cosa de quien lo presenta.
+
+```typescript title="mentions.ts"
+if (msg.mentioned) {
+  const people = await msg.mentions();
+  const text = people.reduce((acc, person) => acc.replace(`@${(person.lid ?? person.jid ?? '').split('@')[0]}`, `@${person.name}`), msg.caption);
+  console.log(text);
+}
 ```
 
 ### `message()`
