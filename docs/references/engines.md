@@ -174,10 +174,19 @@ Persists documents as Redis strings and uses one sorted set per parent for order
 | `<prefix>:doc:<path>`        | `string`    | The serialized document body.                                  |
 | `<prefix>:doc:<path>:bin`    | `string`    | The raw binary, when the client supports buffers.               |
 | `<prefix>:idx:<parent>`      | `zset`      | Score = the `score` passed to `set`, member = full child path.  |
+| `<prefix>:dir:<parent>`      | `set`       | The subdirectories of a path (`chat/a/message` under `chat/a`), so `unset` can walk a subtree whose intermediate levels are not documents. |
 
-`list()` is `ZREVRANGE` + `MGET`; `count()` is `ZCARD` (O(1)); `unset()` cascades via `SCAN` + `DEL`.
-Writes group document and index in a pipeline when the client exposes one, so a crash between both
-operations cannot orphan a document from its index.
+`list()` is `ZREVRANGE` + `MGET`; `count()` is `ZCARD` (O(1)); `unset()` walks the subtree through
+the `idx:` and `dir:` sets and deletes it in batches, never with `SCAN`, which would cost the whole
+Redis keyspace on every delete — and baileys issues one delete per Signal pre-key it consumes.
+Writes group document, index and directory entries in a pipeline when the client exposes one, so a
+crash between them cannot orphan a document from its index.
+
+!!! warning "Stores written before 8.4.0"
+    The `dir:` sets did not exist before 8.4.0. Subtrees written by an older version are not
+    reachable by the new cascade: a `chat.delete()` on such a chat removes the chat document and
+    the index but leaves its old message documents behind, invisible to `list` and `count`. Start
+    from a fresh prefix, or call `engine.clear()` and pair again, to leave nothing orphaned.
 
 ```typescript title="Constructor"
 new RedisEngine(client: RedisClient, prefix = 'wa:default')
@@ -201,6 +210,9 @@ interface RedisClient {
     zrem(key: string, members: string | string[]): Promise<unknown>;
     zrevrange(key: string, start: number, stop: number): Promise<string[]>;
     zcard(key: string): Promise<number>;
+    sadd(key: string, ...members: string[]): Promise<unknown>;
+    srem(key: string, ...members: string[]): Promise<unknown>;
+    smembers(key: string): Promise<string[]>;
 
     // optional — enable extra behaviour when present
     getBuffer?(key: string): Promise<Buffer | null>;
@@ -210,6 +222,8 @@ interface RedisClient {
         del(keys: string | string[]): unknown;
         zadd(key: string, score: number, member: string): unknown;
         zrem(key: string, members: string | string[]): unknown;
+        sadd(key: string, ...members: string[]): unknown;
+        srem(key: string, ...members: string[]): unknown;
         exec(): Promise<unknown>;
     };
 }
@@ -218,7 +232,7 @@ interface RedisClient {
 Any client matching this surface works at runtime — `ioredis` and most drop-in replacements do.
 
 !!! note "Why some members are variadic"
-    `del`, `zrem`, `scan` and the buffer members are declared variadic on purpose: `ioredis`
+    `del`, `zrem`, `sadd`, `srem`, `scan` and the buffer members are declared variadic on purpose: `ioredis`
     exposes them with callback overloads that a fixed signature would reject under
     `strictFunctionTypes`. Declaring them this way lets you pass an `ioredis` instance straight
     into the engine, with no cast.

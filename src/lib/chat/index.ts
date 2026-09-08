@@ -4,7 +4,7 @@
  * Chat entity — individual and group conversations.
  */
 
-import type { WASocket } from 'baileys';
+import { jidNormalizedUser, type WASocket } from 'baileys';
 import type Contact from '~/lib/contact';
 import type Message from '~/lib/message';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
@@ -106,13 +106,27 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
      * Group metadata memoized for 15s: `members` and `content` ask for them on every chat of
      * a page, and without a cache that is one round-trip per row.
      */
-    const groups = new Map<string, Promise<{ participants: { id: string }[]; desc?: string | null }>>();
+    const groups = new Map<string, Promise<{ participants: { id: string; phoneNumber?: string; admin?: string | null }[]; desc?: string | null; subject?: string; addressingMode?: string }>>();
     const meta = (jid: string) => {
         if (!groups.has(jid)) {
             groups.set(jid, init.socket.groupMetadata(jid).catch(() => ({ participants: [] })));
             setTimeout(() => groups.delete(jid), 15_000);
         }
         return groups.get(jid)!;
+    };
+
+    /**
+     * JIDs de los participantes tal como los espera baileys, a partir de teléfonos, JIDs, LIDs
+     * o contactos.
+     * Participant JIDs as baileys expects them, from phones, JIDs, LIDs or contacts.
+     */
+    const jids = async (who: (string | number | Contact)[]) => {
+        const rows: string[] = [];
+        for (const entry of who) {
+            const jid = typeof entry === 'object' ? (entry.jid ?? entry.lid) : await jid_of(init.engine, String(entry), init.socket);
+            if (jid) rows.push(jid);
+        }
+        return rows;
     };
 
     class _Chat extends Chat {
@@ -126,11 +140,38 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
          */
         async members(offset = 0, limit = 50): Promise<InstanceType<typeof init.wa.Contact>[]> {
             const ids = this.type === 'group'
-                ? (await meta(this._raw.id)).participants.map((participant) => participant.id)
+                ? (await meta(this._raw.id)).participants.map((participant) => participant.phoneNumber ?? participant.id)
                 : [this._raw.id, init.socket.user?.id].filter((id): id is string => Boolean(id));
-            return Promise.all(ids.slice(offset, offset + limit).map(async (id) =>
-                new init.wa.Contact(deserialize<Contact['_raw']>(await init.engine.get(`/contact/${id}`)) ?? { id })
-            ));
+            return Promise.all(ids.slice(offset, offset + limit).map(async (raw) => {
+                const id = (raw.endsWith('@lid') ? await jid_of(init.engine, raw, init.socket).catch(() => null) : null) ?? jidNormalizedUser(raw);
+                return new init.wa.Contact(deserialize<Contact['_raw']>(await init.engine.get(`/contact/${id}`)) ?? { id, lid: raw.endsWith('@lid') ? raw : null });
+            }));
+        }
+
+        /**
+         * Administradores del grupo; vacío en un 1:1.
+         * Group admins; empty on a 1:1.
+         *
+         * @param offset - Desplazamiento / Offset
+         * @param limit - Tamaño de página / Page size
+         */
+        async admins(offset = 0, limit = 50): Promise<InstanceType<typeof init.wa.Contact>[]> {
+            const ids = this.type === 'group'
+                ? (await meta(this._raw.id)).participants.filter((participant) => participant.admin).map((participant) => participant.phoneNumber ?? participant.id)
+                : [];
+            return Promise.all(ids.slice(offset, offset + limit).map(async (raw) => {
+                const id = (raw.endsWith('@lid') ? await jid_of(init.engine, raw, init.socket).catch(() => null) : null) ?? jidNormalizedUser(raw);
+                return new init.wa.Contact(deserialize<Contact['_raw']>(await init.engine.get(`/contact/${id}`)) ?? { id, lid: raw.endsWith('@lid') ? raw : null });
+            }));
+        }
+
+        /**
+         * true cuando la cuenta administra el grupo; false en un 1:1.
+         * true when the account administers the group; false on a 1:1.
+         */
+        async admin(): Promise<boolean> {
+            const mine = [init.socket.user?.id, init.socket.user?.lid].filter((id): id is string => Boolean(id)).map((id) => jidNormalizedUser(id));
+            return this.type === 'group' && (await meta(this._raw.id)).participants.some((participant) => Boolean(participant.admin) && mine.includes(jidNormalizedUser(participant.phoneNumber ?? participant.id)));
         }
 
         /**
@@ -243,9 +284,180 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
         }
 
         /**
-         * Marca el chat completo como leído en la cuenta.
-         * Marks the whole chat as read on the account.
+         * Cambia el nombre del grupo; WhatsApp lo confirma con `chat:updated`.
+         * Renames the group; WhatsApp confirms with `chat:updated`.
+         *
+         * @param name - Nombre nuevo / New name
+         * @returns false en un 1:1 / false on a 1:1
          */
+        async rename(name: string): Promise<boolean> {
+            if (this.type === 'group') {
+                await init.socket.groupUpdateSubject(this._raw.id, name);
+                this._raw.name = name;
+                await init.engine.set(`/chat/${this._raw.id}`, serialize(this._raw), this._raw.activity ?? (await tail(this._raw.id)).at);
+                groups.delete(this._raw.id);
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Cambia la descripción del grupo; vacío la borra.
+         * Changes the group description; empty removes it.
+         *
+         * @param text - Descripción nueva / New description
+         * @returns false en un 1:1 / false on a 1:1
+         */
+        async describe(text: string): Promise<boolean> {
+            if (this.type === 'group') {
+                await init.socket.groupUpdateDescription(this._raw.id, text || undefined);
+                groups.delete(this._raw.id);
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Cambia la foto del grupo (Buffer o URL); `null` la elimina.
+         * Changes the group picture (Buffer or URL); `null` removes it.
+         *
+         * @param content - Imagen nueva, o null / New picture, or null
+         * @returns false en un 1:1 / false on a 1:1
+         * @throws ERR_PROFILE_PICTURE_LIB si falta `sharp` o `jimp` / when `sharp` or `jimp` is missing
+         */
+        async picture(content: Buffer | string | null): Promise<boolean> {
+            if (this.type === 'group') {
+                if (content === null) await init.socket.removeProfilePicture(this._raw.id);
+                else {
+                    await init.socket.updateProfilePicture(this._raw.id, typeof content === 'string' ? { url: content } : content).catch((error: Error) => {
+                        throw /image processing library/i.test(error.message) ? new Error('ERR_PROFILE_PICTURE_LIB') : error;
+                    });
+                }
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Agrega participantes al grupo. Quien no pudo entrar —privacidad, ya estaba— no
+         * cuenta en el resultado.
+         * Adds participants to the group. Whoever could not join —privacy, already in— is not
+         * counted in the result.
+         *
+         * @param who - Teléfonos, JIDs, LIDs o contactos / Phones, JIDs, LIDs or contacts
+         * @returns Cuántos entraron / How many joined
+         */
+        async add(...who: (string | number | Contact)[]): Promise<number> {
+            return this.#participants('add', who);
+        }
+
+        /**
+         * Expulsa participantes del grupo.
+         * Removes participants from the group.
+         *
+         * @param who - Teléfonos, JIDs, LIDs o contactos / Phones, JIDs, LIDs or contacts
+         * @returns Cuántos salieron / How many left
+         */
+        async remove(...who: (string | number | Contact)[]): Promise<number> {
+            return this.#participants('remove', who);
+        }
+
+        /**
+         * Hace administradores a participantes del grupo.
+         * Makes group participants admins.
+         *
+         * @param who - Teléfonos, JIDs, LIDs o contactos / Phones, JIDs, LIDs or contacts
+         * @returns Cuántos ascendieron / How many were promoted
+         */
+        async promote(...who: (string | number | Contact)[]): Promise<number> {
+            return this.#participants('promote', who);
+        }
+
+        /**
+         * Quita la administración a participantes del grupo.
+         * Strips admin rights from group participants.
+         *
+         * @param who - Teléfonos, JIDs, LIDs o contactos / Phones, JIDs, LIDs or contacts
+         * @returns Cuántos descendieron / How many were demoted
+         */
+        async demote(...who: (string | number | Contact)[]): Promise<number> {
+            return this.#participants('demote', who);
+        }
+
+        async #participants(action: 'add' | 'remove' | 'promote' | 'demote', who: (string | number | Contact)[]): Promise<number> {
+            const targets = this.type === 'group' ? await jids(who) : [];
+            if (targets.length > 0) {
+                const result = await init.socket.groupParticipantsUpdate(this._raw.id, targets, action);
+                groups.delete(this._raw.id);
+                return result.filter((entry) => entry.status === '200').length;
+            }
+            return 0;
+        }
+
+        /**
+         * Enlace de invitación vigente del grupo, o null en un 1:1 o cuando la cuenta no administra el grupo.
+         * The group's current invite link, or null on a 1:1 or when the account does not administer the group.
+         */
+        async invite(): Promise<string | null> {
+            const code = this.type === 'group' ? await init.socket.groupInviteCode(this._raw.id).catch(() => null) : null;
+            return code ? `https://chat.whatsapp.com/${code}` : null;
+        }
+
+        /**
+         * Invalida el enlace de invitación y devuelve el nuevo, o null en un 1:1 o sin administración.
+         * Revokes the invite link and returns the new one, or null on a 1:1 or without admin rights.
+         */
+        async revoke(): Promise<string | null> {
+            const code = this.type === 'group' ? await init.socket.groupRevokeInvite(this._raw.id).catch(() => null) : null;
+            return code ? `https://chat.whatsapp.com/${code}` : null;
+        }
+
+        /**
+         * Solo los administradores envían mensajes (`true`) o todos (`false`).
+         * Only admins send messages (`true`) or everyone does (`false`).
+         *
+         * @param value - true restringe / true restricts
+         * @returns false en un 1:1 / false on a 1:1
+         */
+        async announce(value: boolean): Promise<boolean> {
+            if (this.type === 'group') {
+                await init.socket.groupSettingUpdate(this._raw.id, value ? 'announcement' : 'not_announcement');
+                groups.delete(this._raw.id);
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Solo los administradores editan los datos del grupo (`true`) o todos (`false`).
+         * Only admins edit the group info (`true`) or everyone does (`false`).
+         *
+         * @param value - true restringe / true restricts
+         * @returns false en un 1:1 / false on a 1:1
+         */
+        async restrict(value: boolean): Promise<boolean> {
+            if (this.type === 'group') {
+                await init.socket.groupSettingUpdate(this._raw.id, value ? 'locked' : 'unlocked');
+                groups.delete(this._raw.id);
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Mensajes temporales del chat: segundos hasta que desaparecen, o `false` para
+         * desactivarlos. WhatsApp acepta 86400 (un día), 604800 (una semana) y 7776000 (90 días).
+         * Disappearing messages of the chat: seconds until they vanish, or `false` to turn them
+         * off. WhatsApp accepts 86400 (a day), 604800 (a week) and 7776000 (90 days).
+         *
+         * @param seconds - Duración, o false / Duration, or false
+         */
+        async ephemeral(seconds: 86_400 | 604_800 | 7_776_000 | false): Promise<boolean> {
+            if (this.type === 'group') await init.socket.groupToggleEphemeral(this._raw.id, seconds || 0);
+            else await init.socket.sendMessage(this._raw.id, { disappearingMessagesInChat: seconds });
+            return true;
+        }
+
         /**
          * Supervisa la conversación entera: lo que hace la persona al otro lado —entra, sale,
          * escribe, graba, deja de escribir, deja de grabar— y los mensajes que van llegando.
@@ -337,6 +549,33 @@ export function chat(init: { wa: WhatsApp; engine: Engine; socket: WASocket }) {
         static async get(cid: string | number): Promise<_Chat | null> {
             const id = await jid_of(init.engine, String(cid), init.socket);
             return id ? new this(deserialize<Chat['_raw']>(await init.engine.get(`/chat/${id}`)) ?? { id }) : null;
+        }
+
+        /**
+         * Crea un grupo con los participantes dados y devuelve su chat, ya persistido.
+         * Creates a group with the given participants and returns its chat, already persisted.
+         *
+         * @param name - Nombre del grupo / Group name
+         * @param members - Teléfonos, JIDs, LIDs o contactos / Phones, JIDs, LIDs or contacts
+         * @returns Chat del grupo / Group chat
+         */
+        static async create(name: string, members: (string | number | Contact)[]): Promise<_Chat> {
+            const created = await init.socket.groupCreate(name, await jids(members));
+            const doc: Chat['_raw'] = { ...(deserialize<Chat['_raw']>(await init.engine.get(`/chat/${created.id}`)) ?? { id: created.id }), name: created.subject || name, activity: Date.now() };
+            await init.engine.set(`/chat/${created.id}`, serialize(doc), doc.activity ?? undefined);
+            return new this(doc);
+        }
+
+        /**
+         * Entra a un grupo por su enlace o código de invitación.
+         * Joins a group by its invite link or code.
+         *
+         * @param invite - `https://chat.whatsapp.com/<código>` o el código / `https://chat.whatsapp.com/<code>` or the code
+         * @returns Chat del grupo, o null si WhatsApp no lo admitió / Group chat, or null when WhatsApp did not admit it
+         */
+        static async join(invite: string): Promise<_Chat | null> {
+            const jid = await init.socket.groupAcceptInvite(invite.split('/').pop()?.split('?')[0] ?? invite).catch(() => null);
+            return jid ? new this(deserialize<Chat['_raw']>(await init.engine.get(`/chat/${jid}`)) ?? { id: jid }) : null;
         }
 
         /**

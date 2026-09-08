@@ -162,24 +162,24 @@ wa.on("message:created", async (msg, chat) => {
 });
 ```
 
-`wa.Message` cubre los nueve tipos enviables: `text`, `image`, `video`, `audio`, `document`,
-`location`, `poll`, `vcard` y `event` (los stickers se reciben, no se envían). Ver
-[Messages](references/message.es.md).
+`wa.Message` cubre los diez tipos enviables: `text`, `image`, `video`, `audio`, `sticker`,
+`document`, `location`, `poll`, `vcard` y `event`. Ver [Messages](references/message.es.md).
 
 ---
 
 ## 7. Apagado ordenado
 
-Cancela reconexiones pendientes y cierra el socket limpiamente ante SIGINT:
+Termina el proceso y nada más: el socket muere con él y las credenciales quedan en el motor, así
+que la próxima ejecución reconecta sin volver a emparejar.
 
 ```typescript title="index.ts"
-process.on("SIGINT", async () => {
-    await wa.disconnect();
-    process.exit(0);
-});
+process.on("SIGINT", () => process.exit(0));
 ```
 
-Pasa `{ destroy: true }` para además vaciar el motor al salir — útil en pruebas o al rotar cuentas.
+!!! danger "`disconnect()` no es un apagado"
+    `wa.disconnect()` desvincula el dispositivo del teléfono y descarta las credenciales — el
+    próximo `connect()` pide un PIN o un QR nuevo. Resérvalo para cuando de verdad quieras cerrar la
+    sesión, y pasa `{ destroy: true }` para vaciar también el motor.
 
 ---
 
@@ -200,6 +200,8 @@ Algunas opciones del cliente que vale la pena conocer:
 - **`method`** *(por defecto `'otp'`)* — solo tiene sentido junto con `phone`: cámbialo a `'qr'` para obtener el QR aunque haya un número configurado.
 - **`autoclean`** *(por defecto `true`)* — ante un `loggedOut` remoto, limpia el motor completo para que el próximo `connect()` arranque de cero. Ponlo en `false` para conservar el historial de chats/mensajes y descartar solo las credenciales.
 - **`reconnect`** *(por defecto `true`)* — acepta un booleano, un número de intentos máximos, o `{ max, interval }` (intervalo en segundos, por defecto 60). Los cierres transitorios que dispara el protocolo no consumen presupuesto de reintentos.
-- **`sync`** *(por defecto `true`)* — descarga el historial completo de mensajes al vincular. Ponlo en `false` para un primer sync más liviano; los contactos, las credenciales y los LID mappings se sincronizan igual.
+- **`sync`** *(por defecto `false`)* — ponlo en `true` para descargar el historial completo de mensajes al vincular, media incluida; los contactos, las credenciales y los LID mappings se sincronizan igual.
+- **`device`** *(por defecto `'Chrome'`)* — el nombre con el que esta sesión aparece en *Dispositivos vinculados*; nombra cada sesión cuando una cuenta tiene varias.
+- **`debug`** *(por defecto `'silent'`)* — el nivel del log interno de baileys, hasta `'trace'`, para cuando haya que diagnosticar un cierre remoto.
 
 La lista completa de opciones, el mapa de eventos y las APIs de las entidades viven en [Referencias](references/whatsapp.es.md). Para recetas de punta a punta, revisa el ejemplo [Bot Básico](examples/basic-bot.es.md) o la muestra del [Bot con Decoradores](examples/decorator-bot.es.md).

@@ -2,20 +2,21 @@
 
 `Message` is the root class for every incoming or outgoing WhatsApp message. It owns the whole
 instance API — getters, author/chat resolution, content, reactions, replies, forwarding, editing,
-deletion — and ten specialized subclasses add the payload-specific parts:
+deletion — and eleven specialized subclasses add the payload-specific parts:
 
 | Subclass   | Adds                                                                    |
 | ---------- | ----------------------------------------------------------------------- |
 | `Text`     | `preview()` — the embedded link card.                                   |
 | `Image`    | `width`, `height`, `size`, `thumb()`                                    |
 | `Video`    | `width`, `height`, `duration`, `size`, `thumb()`                        |
-| `Audio`    | `ptt`, `duration`, `size`, `waveform`                                   |
+| `Audio`    | `ptt`, `duration`, `size`, `waveform`, `played`, `play()`               |
 | `Sticker`  | `width`, `height`, `animated`, `size`                                   |
 | `Document` | `name`, `pages`, `size`                                                 |
 | `Location` | `lat`, `lng`, `live`, `link`                                            |
 | `Poll`     | `multiple`, `options`, `votes()`, `select()`                            |
 | `VCard`    | `contacts`                                                              |
-| `Event`    | `name`, `start`, `end`, `canceled`, `link`, `place`                     |
+| `Event`    | `name`, `start`, `end`, `canceled`, `link`, `place`, `going`, `attendees()` |
+| `Product`  | `name`, `description`, `price`, `currency`, `product_id`, `retailer_id`, `url`, `owner`, `thumb()`, `item()` |
 
 The `new Message(init, raw)` factory evaluates the type and returns the right subclass instance. It
 accepts either a persisted document or a raw baileys `WAMessage` — in the latter case the document
@@ -30,7 +31,7 @@ import {
     WhatsApp,
     Message,
     message,
-    Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event,
+    Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event, Product,
 } from '@arcaelas/whatsapp';
 ```
 
@@ -77,6 +78,9 @@ wa.on('message:created', async (msg, chat) => {
     if (msg instanceof Event) {
         console.log('event:', msg.name, '@', msg.start);
     }
+    if (msg instanceof Product) {
+        console.log('product:', msg.name, msg.price, msg.currency, 'from', msg.owner);
+    }
 });
 ```
 
@@ -94,6 +98,7 @@ switch (msg.type) {
     case 'poll':     break;
     case 'vcard':    break;
     case 'event':    break;
+    case 'product':  break;
 }
 ```
 
@@ -108,9 +113,9 @@ switch (msg.type) {
 | `mid`        | `string \| null`                                                  | Identifier of the quoted message, or `null`.                                                     |
 | `from`       | `string`                                                          | Author JID, for synchronous access (no hydration).                                               |
 | `me`         | `boolean`                                                         | `true` when the authenticated account is the author.                                             |
-| `type`       | `'text' \| 'image' \| 'video' \| 'audio' \| 'sticker' \| 'document' \| 'location' \| 'poll' \| 'vcard' \| 'event'` | Message type. |
-| `mime`       | `string`                                                          | `text/plain` for text, `text/json` for poll/location/vcard/event, the real MIME for media.       |
-| `caption`    | `string`                                                          | Message text or media caption (the question in a poll, the description in an event).             |
+| `type`       | `'text' \| 'image' \| 'video' \| 'audio' \| 'sticker' \| 'document' \| 'location' \| 'poll' \| 'vcard' \| 'event' \| 'product'` | Message type. |
+| `mime`       | `string`                                                          | `text/plain` for text, `text/json` for poll/location/vcard/event/product, the real MIME for media. |
+| `caption`    | `string`                                                          | Message text or media caption (the question in a poll, the description in an event or a product card). |
 | `status`     | `'error' \| 'pending' \| 'sent' \| 'delivered' \| 'read' \| 'played'` | Readable delivery state.                                                                    |
 | `read`       | `boolean`                                                         | `true` once the state reached `read` or `played`.                                                |
 | `reason`     | `string \| null`                                                  | Rejection reason when `status` is `error`: `restricted` (WhatsApp limited the account and blocks new chats), `invalid-session`, or the raw server code otherwise. `null` in any other state. |
@@ -118,6 +123,9 @@ switch (msg.type) {
 | `starred`    | `boolean`                                                         | `true` when the message is starred.                                                              |
 | `forwarded`  | `boolean`                                                         | `true` when the message was forwarded.                                                           |
 | `edited`     | `boolean`                                                         | `true` when the message was edited.                                                              |
+| `revoked`    | `boolean`                                                         | `true` when it was deleted for everyone. The document stays so the interface can show *this message was deleted* in its place. |
+| `revoked_at` | `string \| null`                                                  | Revocation date as **ISO UTC**, or `null`.                                                       |
+| `pinned`     | `boolean`                                                         | `true` while the message is pinned in the chat.                                                  |
 | `mentioned`  | `boolean`                                                         | `true` when the authenticated account is mentioned in the body (compares JID and LID).           |
 | `once`       | `boolean`                                                         | `true` when the message is view-once.                                                            |
 | `created_at` | `string`                                                          | Creation date as an **ISO UTC string**.                                                          |
@@ -266,6 +274,38 @@ await msg.star(true);
 await msg.seen();
 ```
 
+### `pin(value, days?)`
+
+```typescript
+pin(value: boolean, days: 1 | 7 | 30 = 7): Promise<boolean>
+```
+
+Pins the message in the chat for 24 hours, 7 days or 30 days, or unpins it. WhatsApp confirms with
+`message:updated` and `pinned` flips on the stored message.
+
+```typescript title="pin.ts"
+await msg.pin(true, 30);
+await msg.pin(false);
+```
+
+### `watch(handler)`
+
+```typescript
+watch(handler: (event: { name: 'read' | 'played' | 'deleted'; payload: Message }) => void): () => void
+```
+
+Watches what happens to this message: that it gets read, that its audio gets played, or that it is
+revoked. Only advances count — a repeated status is not news — and every message type inherits it.
+Returns the function that stops watching.
+
+```typescript title="watch.ts"
+const sent = await wa.Message.audio(cid, buffer);
+const stop = sent!.watch(({ name }) => {
+    console.log(name);   // 'read', then 'played'
+    if (name === 'played') stop();
+});
+```
+
 ### `edit(caption)`
 
 Edits the caption of a message **you** authored (`me === true`) of type `text`, `image` or `video`.
@@ -303,8 +343,9 @@ delete(all = false): Promise<boolean>
 ```
 
 !!! warning "The default deletes for you only"
-    `delete()` removes the message **from this device only** (`deleteForMe`). Pass `true` to revoke
-    it for everyone. Either way the document is removed from the engine.
+    `delete()` removes the message **from this device only** (`deleteForMe`) and drops its document
+    from the engine. Pass `true` to revoke it for everyone: then the document stays, flagged with
+    `revoked` / `revoked_at`, so the interface can show *this message was deleted* where it was.
 
 ```typescript title="delete.ts"
 await msg.delete();       // only for me (default)
@@ -320,10 +361,11 @@ automatically.
 
 | Method                        | Signature                                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
-| `msg.text(caption, extra?)`   | `(string, { once? }) => Promise<Message \| null>`                                           |
-| `msg.image(buf, extra?)`      | `(Buffer, { once?, caption? }) => Promise<Message \| null>`                                 |
-| `msg.video(buf, extra?)`      | `(Buffer, { once?, caption? }) => Promise<Message \| null>`                                 |
+| `msg.text(caption, extra?)`   | `(string, { once?, mentions? }) => Promise<Message \| null>`                                |
+| `msg.image(buf, extra?)`      | `(Buffer, { once?, caption?, mentions? }) => Promise<Message \| null>`                      |
+| `msg.video(buf, extra?)`      | `(Buffer, { once?, caption?, gif?, mentions? }) => Promise<Message \| null>`                |
 | `msg.audio(buf, extra?)`      | `(Buffer, { once?, ptt? }) => Promise<Message \| null>`                                     |
+| `msg.sticker(buf, extra?)`    | `(Buffer, { once? }) => Promise<Message \| null>`                                           |
 | `msg.location(loc, extra?)`   | `({ lat, lng }, { once? }) => Promise<Message \| null>`                                     |
 | `msg.poll(input, extra?)`     | `({ content, options }, { once?, multiple? }) => Promise<Message \| null>`                  |
 | `msg.document(buf, extra)`    | `(Buffer, { file_name, mimetype?, caption?, once? }) => Promise<Message \| null>`           |
@@ -340,41 +382,45 @@ wa.on('message:created', async (msg) => {
 
 ---
 
-## Statics (`Message.*` and `wa.Message.*`)
+## Statics (`wa.Message.*`)
 
-Every static takes the **client as its first argument**. The `wa.Message` delegate exposes the same
-methods with the client already applied, which is what you normally use:
+The statics live on the **bound class** `wa.Message`, with the session already applied; the exported
+`Message` base class carries the instance API and the subclasses, no statics.
 
 ```typescript
-await wa.Message.text(cid, 'hello');   // explicit client
-await wa.Message.text(cid, 'hello');    // same call through the delegate
+await wa.Message.text(cid, 'hello');
+const found = await wa.Message.get(cid, mid);
 ```
 
 ### Read
 
 | Static                      | Signature                                                                  |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `Message.get`               | `(wa, cid, mid) => Promise<Message \| null>`                                |
-| `Message.list`              | `(wa, cid, offset?, limit?) => Promise<Message[]>` (defaults `0, 50`)       |
-| `Message.reactions`         | `(wa, cid, mid) => Promise<{ emoji, count }[]>`                             |
+| `wa.Message.get`            | `(cid, mid) => Promise<Message \| null>`                                    |
+| `wa.Message.list`           | `(cid, offset?, limit?) => Promise<Message[]>` (defaults `0, 50`)           |
+| `wa.Message.reactions`      | `(cid, mid) => Promise<{ emoji, count }[]>`                                 |
 
 ### Act
 
-| Static             | Signature                                                        |
-| ------------------ | ------------------------------------------------------------------ |
-| `Message.react`    | `(wa, cid, mid, emoji) => Promise<boolean>`                       |
-| `Message.star`     | `(wa, cid, mid, value) => Promise<boolean>`                       |
-| `Message.seen`     | `(wa, cid, mid) => Promise<boolean>`                              |
-| `Message.edit`     | `(wa, cid, mid, caption) => Promise<boolean>`                     |
-| `Message.forward`  | `(wa, cid, mid, target) => Promise<boolean>`                      |
-| `Message.delete`   | `(wa, cid, mid, all?) => Promise<boolean>` (default `false`)      |
+| Static                | Signature                                                        |
+| --------------------- | ------------------------------------------------------------------ |
+| `wa.Message.react`    | `(cid, mid, emoji) => Promise<boolean>`                           |
+| `wa.Message.star`     | `(cid, mid, value) => Promise<boolean>`                           |
+| `wa.Message.seen`     | `(cid, mid) => Promise<boolean>`                                  |
+| `wa.Message.edit`     | `(cid, mid, caption) => Promise<boolean>`                         |
+| `wa.Message.forward`  | `(cid, mid, target) => Promise<boolean>`                          |
+| `wa.Message.delete`   | `(cid, mid, all?) => Promise<boolean>` (default `false`)          |
+| `wa.Message.pin`      | `(cid, mid, value, days?) => Promise<boolean>` (default `7`)      |
 
 ### Send
 
 ```typescript title="send.ts"
 await wa.Message.text(cid, 'hello', { once: true });
+await wa.Message.text(cid, '@5491112345678 look at this', { mentions: ['5491112345678'] });
 await wa.Message.image(cid, buffer, { caption: 'look' });
 await wa.Message.video(cid, buffer, { caption: 'demo' });
+await wa.Message.video(cid, buffer, { gif: true });         // plays looped and muted
+await wa.Message.sticker(cid, webp);                        // WebP, static or animated
 await wa.Message.audio(cid, buffer, { ptt: true });          // ptt defaults to true
 await wa.Message.location(cid, { lat: 8.3, lng: -62.7 });
 await wa.Message.poll(cid, {
@@ -393,11 +439,13 @@ there is no session or WhatsApp rejected the payload.
 
 ```typescript title="options.ts"
 interface SendExtra {
-    mid?: string;    // quoted message id — the reply helpers fill it for you
-    once?: boolean;  // view-once
+    mid?: string;                                  // quoted message id — the reply helpers fill it for you
+    once?: boolean;                                // view-once
+    mentions?: (string | number | Contact)[];      // who the `@` in the body refers to
 }
 
-// image / video: SendExtra & { caption?: string }
+// image:         SendExtra & { caption?: string }
+// video:         SendExtra & { caption?: string; gif?: boolean }
 // audio:         SendExtra & { ptt?: boolean }            (default: true)
 // poll:          SendExtra & { multiple?: boolean }       (default: false)
 // document:      SendExtra & { file_name: string; mimetype?: string; caption?: string }
@@ -406,6 +454,13 @@ interface SendExtra {
 !!! info "`file_name` is required for documents"
     `wa.Message.document(cid, buf, { file_name })` is the only send helper with a mandatory option;
     `mimetype` defaults to `application/octet-stream`.
+
+!!! info "Mentions: write the phone, the library translates it"
+    Write `@<phone>` in the text and pass the same people in `mentions` (phone, JID, LID or
+    `Contact`). In a group that addresses its members by LID the mention must travel as a LID and
+    the `@` must show that number, or WhatsApp renders it as plain text: the library resolves each
+    one and rewrites the `@` for you, so the recipient's `mentioned` is `true` and `mentions()`
+    resolves the contacts.
 
 ---
 
@@ -519,6 +574,42 @@ if (msg instanceof Event) {
 }
 ```
 
+`going` counts the confirmed attendees, companions included, and `attendees()` lists every response
+with the contact's name, in arrival order: `{ name, contact, response: 'going' | 'not_going' |
+'maybe', guests }`. Responses arrive encrypted, are decrypted with the event's secret and emit
+`message:updated` on the `Event`.
+
+```typescript title="attendees.ts"
+wa.on('message:updated', async (msg) => {
+    if (msg instanceof Event) {
+        console.log(msg.going, 'going');
+        for (const entry of await msg.attendees()) console.log(entry.name, entry.response, entry.guests);
+    }
+});
+```
+
 !!! tip "Event payloads"
     Listeners for `message:*` receive `(msg, chat, wa)` and `msg` is already an instance of the right
     subclass, so `instanceof` works with no manual discrimination.
+
+---
+
+## Products
+
+A `Product` is the card a Business account shares from its catalog: what WhatsApp shows in the
+bubble, plus who owns it. `content()` returns the card as JSON and `item()` fetches the full product
+from the owner's [`Catalog`](catalog.md), or `null` when it is no longer published.
+
+```typescript title="product.ts"
+if (msg instanceof Product) {
+    console.log(msg.name, msg.price, msg.currency);   // 'Camisa', 15.5, 'USD'
+    console.log(msg.description, msg.caption);        // description; caption is the body text, or the description
+    console.log(msg.product_id, msg.retailer_id, msg.url, msg.owner);
+    const thumb = await msg.thumb();                  // embedded JPEG, or null
+    const item = await msg.item();                    // { id, owner, name, price, images, … } | null
+}
+```
+
+!!! note "Receive only"
+    Sending product cards and editing the catalog are not part of the API: WhatsApp did not answer
+    those requests from a linked device during verification, so they are not shipped.

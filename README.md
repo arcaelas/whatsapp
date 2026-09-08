@@ -77,7 +77,7 @@ await wa.connect((auth) => {
 ## Cliente
 
 ```ts
-new WhatsApp({ engine, phone?, method?, autoclean?, reconnect?, sync? })
+new WhatsApp({ engine, phone?, method?, autoclean?, reconnect?, sync?, device?, debug? })
 ```
 
 | Opción | Descripción |
@@ -87,17 +87,19 @@ new WhatsApp({ engine, phone?, method?, autoclean?, reconnect?, sync? })
 | `method` | `'otp'` (default) o `'qr'`. **Solo aplica cuando hay `phone`**. |
 | `autoclean` | Al recibir `loggedOut`: `true` (default) vacía el motor; `false` borra solo las credenciales. |
 | `reconnect` | `true` (default) reintenta indefinidamente cada 60 s. Acepta `false`, un número de intentos o `{ max, interval }`. |
-| `sync` | Descarga el historial completo al vincular (default `true`). |
+| `sync` | Descarga el historial completo al vincular, media incluida (default `false`). |
+| `device` | Nombre con el que la sesión aparece en *Dispositivos vinculados* (default `'Chrome'`). |
+| `debug` | Nivel del log interno de baileys, de `'silent'` (default) a `'trace'`. |
 
 ### Superficie
 
 ```ts
 wa.engine                     // motor de persistencia
-wa.Contact / wa.Chat / wa.Message   // entidades, publicadas al conectar
+wa.Contact / wa.Chat / wa.Message / wa.Catalog   // entidades, publicadas al conectar
 await wa.account()            // Account de la cuenta autenticada, o null sin usuario
 
 await wa.connect(callback)    // callback recibe el PIN (string) o el QR (Buffer PNG)
-await wa.disconnect({ silent?, destroy? })
+await wa.disconnect({ silent?, destroy? })   // desvincula el dispositivo del teléfono
 
 wa.on(event, handler)         // devuelve la función para desuscribirse
 wa.once(event, handler)
@@ -106,6 +108,8 @@ wa.emit(event, ...args)
 ```
 
 Las entidades y `account()` se publican dentro de `connect`, cuando el socket ya existe: antes de la primera conexión no están definidas. El estado interno (socket, credenciales, reintentos) vive en el closure de `connect` — no hay nada que hurgar en la instancia.
+
+`disconnect()` cierra la sesión de verdad: desvincula el dispositivo del teléfono y borra las credenciales; el próximo `connect()` vuelve a vincular. Para apagar un proceso basta con salir: el socket muere con él y la sesión sobrevive.
 
 ### La cuenta: `Account`
 
@@ -120,6 +124,8 @@ await cuenta.picture(null);               // la elimina
 await cuenta.content();                   // lee la bio
 await cuenta.content('Atendemos 9-18h');  // la actualiza
 await cuenta.online(true);                // presencia online/offline
+await cuenta.business();                  // perfil Business, o null
+await cuenta.catalog();                   // Catalog propio
 
 const post = await cuenta.post({
     caption: '¡Estamos en vivo!',
@@ -147,8 +153,15 @@ if (person) {
     person.jid       // '5491112345678@s.whatsapp.net' | null
     person.lid       // '123456789@lid' | null
     person.photo     // URL de la foto | null
+    person.me        // true si es la propia cuenta
     await person.chat();
+    await person.business();       // perfil Business, o null
+    await person.catalog();        // su Catalog
+    await person.block(true);      // bloquear / desbloquear
+    const stop = await person.watch(({ name }) => console.log(name));   // online, typing, recording…
 }
+
+const blocked = await wa.Contact.blocked();
 ```
 
 `get` lee del motor y, si el contacto no está persistido, lo descubre por red y lo materializa.
@@ -177,9 +190,30 @@ if (chat) {
     await chat.pin(true);          // false si ya hay 3 fijados: WhatsApp descarta el cuarto
     await chat.mute('2026-08-01T10:00:00Z');   // o false para desactivar
     await chat.seen();             // marca el chat completo como leído
+    await chat.ephemeral(604_800); // mensajes temporales: 86400, 604800, 7776000 o false
     await chat.clear();            // vacía los mensajes, conserva el chat
     await chat.delete();           // elimina el chat (sale del grupo si aplica)
+    const stop = await chat.watch(({ name, payload }) => { … });   // presencia del contacto y mensajes nuevos
 }
+```
+
+**Grupos** — la cuenta debe administrar el grupo para moderarlo:
+
+```ts
+const group = await wa.Chat.create('Equipo', ['5491112345678']);
+await wa.Chat.join('https://chat.whatsapp.com/…');
+
+await group.admins();                  // administradores
+await group.admin();                   // true si la cuenta administra
+await group.rename('Equipo Dev');
+await group.describe('Standup a las 9:30');
+await group.picture(buffer);           // necesita sharp o jimp
+await group.add('5491187654321');      // devuelve cuántos entraron
+await group.remove(…); await group.promote(…); await group.demote(…);
+await group.invite();                  // enlace vigente, o null sin administración
+await group.revoke();                  // enlace nuevo
+await group.announce(true);            // solo admins envían
+await group.restrict(true);            // solo admins editan
 ```
 
 ### Message
@@ -201,7 +235,7 @@ const msg = await wa.Message.get(cid, mid);
 | `mime` | `text/plain`, `text/json` en poll/location/vcard/event, el real en media |
 | `caption` | texto del mensaje o pie del media |
 | `status` | `'error'` `'pending'` `'sent'` `'delivered'` `'read'` `'played'` |
-| `read` `starred` `forwarded` `edited` `once` | banderas del mensaje |
+| `read` `starred` `forwarded` `edited` `once` `pinned` `revoked` `mentioned` | banderas del mensaje |
 | `reason` | motivo del rechazo cuando `status` es `'error'` (`restricted`, `invalid-session`, o el código del servidor), si no `null` |
 | `business` | nombre del negocio verificado que firma el mensaje, o `null` |
 | `created_at` `expires_at` | fechas en ISO UTC (`expires_at` solo en mensajes temporales) |
@@ -222,18 +256,23 @@ await msg.seen();
 await msg.edit('texto corregido');       // texto, imagen o video propios
 await msg.forward('584121234567');       // CID, Chat o Contact destino
 await msg.delete();                      // solo en mi dispositivo
-await msg.delete(true);                  // para todos
+await msg.delete(true);                  // para todos: el documento queda marcado con `revoked`
+await msg.pin(true, 7);                  // fija 1, 7 o 30 días; false lo suelta
+await msg.mentions();                    // contactos mencionados
+const stop = msg.watch(({ name }) => { … });   // read, played, deleted
 
 await msg.text('respuesta');             // responder citando este mensaje
 await msg.image(buffer, { caption: '…' });
 ```
 
-**Envío** (los mismos nueve por tipo, en instancia para responder y en el cliente para iniciar):
+**Envío** (los mismos diez por tipo, en instancia para responder y en el cliente para iniciar):
 
 ```ts
 await wa.Message.text(cid, 'hola', { once: true });
-await wa.Message.image(cid, buffer, { caption: 'mirá' });
-await wa.Message.video(cid, buffer);
+await wa.Message.text(cid, '@5491112345678 mira', { mentions: ['5491112345678'] });
+await wa.Message.image(cid, buffer, { caption: 'mira' });
+await wa.Message.video(cid, buffer, { gif: true });
+await wa.Message.sticker(cid, webp);
 await wa.Message.audio(cid, buffer, { ptt: true });
 await wa.Message.location(cid, { lat: 8.3, lng: -62.7 });
 await wa.Message.poll(cid, { content: '¿Qué pedimos?', options: [{ content: 'Pizza' }, { content: 'Sushi' }] });
@@ -254,13 +293,14 @@ if (msg instanceof Poll)  console.log(msg.options, msg.multiple, await msg.votes
 | `Text` | `preview()` → `{ link, name, content, thumb }` del enlace citado |
 | `Image` | `width` `height` `size` `thumb()` |
 | `Video` | `width` `height` `size` `duration` `thumb()` |
-| `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) |
+| `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) `played` `play()` |
 | `Sticker` | `width` `height` `size` `animated` |
 | `Document` | `name` `pages` `size` |
 | `Location` | `lat` `lng` `live` `link` (Google Maps) |
 | `Poll` | `options` `multiple` `votes()` `select(i)` |
 | `VCard` | `contacts` |
-| `Event` | `name` `start` `end` `canceled` `place` `link` |
+| `Event` | `name` `start` `end` `canceled` `place` `link` `going` `attendees()` |
+| `Product` | `name` `description` `price` `currency` `product_id` `retailer_id` `url` `owner` `thumb()` `item()` — solo recepción |
 
 ### Feed
 
@@ -275,6 +315,20 @@ wa.on('feed:created', async (post) => {
 
 Lo que un estado no admite (`react`, `star`, `edit`, `forward`, `delete`, responder) lanza `ERR_FEED_UNSUPPORTED`.
 
+### Catalog
+
+El catálogo de productos de un negocio, el propio o el de cualquier contacto Business, persistido en `/catalog/<jid>` la primera vez. Solo lectura.
+
+```ts
+const catalog = await wa.Catalog.get();                 // propio
+const theirs = await wa.Catalog.get('5491112345678');   // de un negocio
+
+catalog.size; catalog.me; catalog.fetched_at;
+catalog.products(0, 50);      // [{ id, owner, name, description, price, currency, retailer_id, url, hidden, images, … }]
+catalog.product(id);          // por id o retailer_id
+await catalog.sync();         // vuelve a bajarlo
+```
+
 ---
 
 ## Eventos
@@ -286,15 +340,19 @@ off();   // desuscribe
 
 | Evento | Argumentos |
 | --- | --- |
-| `connected` `disconnected` | `(wa)` |
+| `connected` | `(wa)` |
+| `disconnected` | `(wa, farewell)` — `{ code, reason, expired, detail }` |
+| `error` | `(error, wa)` |
 | `contact:created` `contact:updated` | `(contact, chat, wa)` |
-| `chat:created` `chat:deleted` | `(chat, wa)` |
+| `contact:presence` | `(contact, action, wa)` — solo de los contactos vigilados con `watch()` |
+| `chat:created` `chat:updated` `chat:deleted` | `(chat, wa)` |
+| `chat:joined` `chat:left` `chat:promoted` `chat:demoted` | `(chat, contacts, wa)` |
 | `chat:pinned` `chat:unpinned` | `(chat, wa)` |
 | `chat:archived` `chat:unarchived` | `(chat, wa)` |
 | `chat:muted` `chat:unmuted` | `(chat, wa)` |
 | `message:created` `message:updated` `message:deleted` | `(message, chat, wa)` |
 | `message:starred` `message:unstarred` `message:forwarded` `message:seen` | `(message, chat, wa)` |
-| `message:reacted` | `(message, chat, emoji, wa)` |
+| `message:reacted` | `(message, chat, emoji, contact, wa)` |
 | `feed:created` `feed:updated` `feed:deleted` | `(feed, wa)` |
 
 ---
@@ -332,6 +390,8 @@ new S3Engine({ s3: new S3Client({}), bucket: 'sesiones', basedir: 'wa/5491112345
 ```
 
 `SQLiteEngine` es el más eficiente de los integrados. Sobre un chat real de 55.146 mensajes, frente al filesystem: 220 MB → 64 MB en disco, primer `list` 115 ms → 0,6 ms, y dos archivos en total en lugar de ~110.000 inodes.
+
+`RedisEngine` borra en cascada recorriendo sus índices (`idx:` y `dir:`), nunca con `SCAN`: un `unset` cuesta el subárbol, no el keyspace entero. Los almacenes escritos antes de 8.4.0 no tienen `dir:`; arranca con un prefijo nuevo para no dejar huérfanos.
 
 Cada cliente necesita **su propio** motor: nunca compartas una instancia entre dos cuentas.
 
@@ -398,15 +458,15 @@ wa.on('message:created', async (msg, chat) => {
 });
 ```
 
-**Reconectar con límite y cerrar en silencio**
+**Reconectar con límite y desvincular en silencio**
 
 ```ts
 const wa = new WhatsApp({ engine, phone: 5491112345678, reconnect: { max: 5, interval: 30 } });
-await wa.disconnect({ silent: true });   // no emite `disconnected`
+await wa.disconnect({ silent: true });   // desvincula sin emitir `disconnected`
 ```
 
 ---
 
 ## Licencia
 
-ISC — © 2026 [Miguel Alejandro](https://github.com/arcaelas) / Arcaelas Insiders.
+MIT — © 2026 Arcaelas Insiders.

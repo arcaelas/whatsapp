@@ -93,10 +93,7 @@ wa.on('message:created', async (msg, chat) => {
     }
 });
 
-process.on('SIGINT', async () => {
-    await wa.disconnect();
-    process.exit(0);
-});
+process.on('SIGINT', () => process.exit(0));
 
 wa.connect((auth) => {
     if (typeof auth === 'string') {

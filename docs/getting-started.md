@@ -162,24 +162,24 @@ wa.on("message:created", async (msg, chat) => {
 });
 ```
 
-`wa.Message` covers the nine sendable types: `text`, `image`, `video`, `audio`, `document`,
-`location`, `poll`, `vcard` and `event` (stickers can be received, not sent). See
-[Messages](references/message.md).
+`wa.Message` covers the ten sendable types: `text`, `image`, `video`, `audio`, `sticker`,
+`document`, `location`, `poll`, `vcard` and `event`. See [Messages](references/message.md).
 
 ---
 
 ## 7. Graceful shutdown
 
-Cancel pending reconnects and close the socket cleanly on SIGINT:
+Just exit the process: the socket dies with it and the credentials stay in the engine, so the next
+run reconnects without pairing again.
 
 ```typescript title="index.ts"
-process.on("SIGINT", async () => {
-    await wa.disconnect();
-    process.exit(0);
-});
+process.on("SIGINT", () => process.exit(0));
 ```
 
-Pass `{ destroy: true }` to also wipe the engine on the way out — useful in tests or when rotating accounts.
+!!! danger "`disconnect()` is not a shutdown"
+    `wa.disconnect()` unlinks the device from the phone and drops the credentials — the next
+    `connect()` asks for a new PIN or QR. Reserve it for when you really want to close the session,
+    and pass `{ destroy: true }` to wipe the engine along with it.
 
 ---
 
@@ -200,6 +200,8 @@ A few client options worth knowing about:
 - **`method`** *(default `'otp'`)* — only meaningful together with `phone`: switch it to `'qr'` to get the QR even when a number is configured.
 - **`autoclean`** *(default `true`)* — on a remote `loggedOut`, clears the entire engine so the next `connect()` starts from a clean slate. Set to `false` to preserve chat/message history and only drop credentials.
 - **`reconnect`** *(default `true`)* — accepts a boolean, a number of max attempts, or `{ max, interval }` (interval in seconds, default 60). Transient closes triggered by the protocol do not consume retry budget.
-- **`sync`** *(default `true`)* — downloads the full message history on link. Set it to `false` for a lighter first sync; contacts, credentials and LID mappings are synced either way.
+- **`sync`** *(default `false`)* — set it to `true` to download the full message history on link, media included; contacts, credentials and LID mappings are synced either way.
+- **`device`** *(default `'Chrome'`)* — the name this session shows under *Linked devices*; name each session when an account holds several.
+- **`debug`** *(default `'silent'`)* — the level of baileys' internal log, up to `'trace'`, for when a remote close needs diagnosing.
 
 The complete option list, event map and entity APIs live in [References](references/whatsapp.md). For end-to-end recipes browse the [Basic Bot](examples/basic-bot.md) example or the [Decorator Bot](examples/decorator-bot.md) showcase.

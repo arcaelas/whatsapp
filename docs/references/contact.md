@@ -87,11 +87,12 @@ All properties are synchronous getters over the internal `_raw` document.
 | `lid`    | `string \| null` | LID (`@lid`) when definable, `null` otherwise.                                                      |
 | `photo`  | `string \| null` | Profile picture URL; `null` when absent or not an `http` URL (baileys reports `changed` on rotation). |
 
-!!! warning "There is no `id`, `me` or `content` getter"
-    A contact exposes exactly the five properties above plus `chat()`. The persisted document is
-    available as `_raw` (`id`, `lid`, `phone_number`, `name`, `notify`, `verified_name`, `img_url`,
-    `status`), but it is internal: prefer the getters. The bio (`status`) is reachable through
-    [`chat.content()`](chat.md#content) on the 1:1 chat.
+| `me`     | `boolean`        | `true` when the contact is the account itself, compared by JID and by LID. Lives on the bound `wa.Contact`, not on the exported base class. |
+
+!!! warning "There is no `id` or `content` getter"
+    The persisted document is available as `_raw` (`id`, `lid`, `phone_number`, `name`, `notify`,
+    `verified_name`, `img_url`, `status`), but it is internal: prefer the getters. The bio
+    (`status`) is reachable through [`chat.content()`](chat.md#content) on the 1:1 chat.
 
 ```typescript title="properties.ts"
 const person = await wa.Contact.get('5215555555555');
@@ -134,14 +135,83 @@ if (person) {
     `Contact.get` filters out `@g.us` identifiers. To reach a group, call `wa.Chat.get(groupId)`
     and use `chat.members()` to hydrate its participants as contacts.
 
+### `watch(handler)`
+
+```typescript
+watch(handler: (event: { name: ContactWatch; payload: Contact }) => void): Promise<() => void>
+```
+
+Watches what the contact does: `online`, `offline`, `typing`, `recording`, `stopped-typing` and
+`stopped-recording`, one notice per action and already filtered down to this person. It subscribes to
+the presence on WhatsApp (which does not broadcast it on its own) and returns the function that stops
+watching. The same notices reach `wa.on('contact:presence', …)`.
+
+```typescript title="watch.ts"
+const stop = await person.watch(({ name }) => console.log(person.name, 'is', name));
+setTimeout(stop, 60_000);
+```
+
+!!! info "Set it up again after a reconnect"
+    WhatsApp stops sending presence when the socket reconnects, so call `watch()` again on every
+    `connected`.
+
+### `block(value)`
+
+```typescript
+block(value: boolean): Promise<boolean>
+```
+
+Blocks (`true`) or unblocks (`false`) the contact on the account; `wa.Contact.blocked()` reflects it
+right away. Returns `false` when the contact has no resolvable identifier.
+
+```typescript title="block.ts"
+await person.block(true);
+console.log((await wa.Contact.blocked()).map((who) => who.phone));   // includes person
+await person.block(false);
+```
+
+### `business()`
+
+```typescript
+business(): Promise<{ description: string; email: string | null; website: string[]; category: string | null; address: string | null; timezone: string | null; hours: { day: string; mode: string; open: number | null; close: number | null }[] } | null>
+```
+
+The Business profile of the contact, or `null` when the account is not a Business one. `hours` has
+one entry per weekday with `mode` (`open_24h`, `specific_hours`, `appointment_only`, …) and the
+minutes since midnight when the mode uses them.
+
+```typescript title="business.ts"
+const profile = await person.business();
+if (profile) {
+    console.log(profile.category, profile.website, profile.address);
+}
+```
+
+### `catalog()`
+
+```typescript
+catalog(): Promise<Catalog | null>
+```
+
+The contact's product catalog as a [`Catalog`](catalog.md): the persisted one, or downloaded from
+WhatsApp and materialized the first time. A contact without a catalog yields an empty one.
+
+```typescript title="catalog.ts"
+const catalog = await person.catalog();
+for (const item of catalog?.products(0, 10) ?? []) {
+    console.log(item.name, item.price, item.currency);
+}
+```
+
 ---
 
 ## Statics (via `wa.Contact`)
 
-| Static            | Signature                                                     | Notes                                                                                        |
-| ----------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `wa.Contact.get`  | `(uid: string \| number) => Promise<Contact \| null>`         | Engine first; if not persisted, discovers it over the network and materializes the document.  |
-| `wa.Contact.list` | `(offset?: number, limit?: number) => Promise<Contact[]>`     | Paginated persisted contacts, most recent first. Defaults: `0, 50`.                           |
+| Static               | Signature                                                     | Notes                                                                                        |
+| -------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `wa.Contact.get`     | `(uid: string \| number) => Promise<Contact \| null>`         | Engine first; if not persisted, discovers it over the network and materializes the document.  |
+| `wa.Contact.list`    | `(offset?: number, limit?: number) => Promise<Contact[]>`     | Paginated persisted contacts, most recent first. Defaults: `0, 50`.                           |
+| `wa.Contact.blocked` | `() => Promise<Contact[]>`                                    | The contacts the account has blocked, fetched from WhatsApp.                                  |
 
 ### Discovery in `get`
 
@@ -185,6 +255,8 @@ On top of every `Contact` getter it operates on the own profile:
 | `content(text)`       | Updates the bio.                                                          |
 | `online(value)`       | Publishes presence; the socket starts offline (`markOnlineOnConnect: false`). |
 | `post({ caption, buffer, audience })` | Publishes a status; the audience accepts `Contact`, JID, LID or phone. |
+| `business()`          | The own Business profile, or `null` when the account is not Business.    |
+| `catalog()`           | The own [`Catalog`](catalog.md), persisted or downloaded the first time.  |
 
 ---
 
@@ -198,6 +270,7 @@ Contact-related records live under the following keys in the configured engine:
 | `/lid/<lid>`     | Serialized JID string — forward index for LID resolution.    | `Contact.get`, contact upserts, `lid-mapping.update`.                    |
 | `/lid/<pn>`      | Serialized LID string — reverse index.                       | `lid-mapping.update`.                                                    |
 | `/chat/<id>`     | Chat document; `chat()` hydrates from here.                  | `chats.*` events, inbound messages.                                     |
+| `/catalog/<jid>` | The business's catalog document; `catalog()` hydrates from here. | `Catalog.get`, `catalog.sync()`.                                    |
 
 !!! warning "Engine consistency"
     When `autoclean` is `true` (default) and a remote `loggedOut` is received, the entire engine is

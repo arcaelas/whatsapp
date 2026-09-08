@@ -18,6 +18,7 @@ import {
     getKeyAuthor,
     hmacSign,
     jidNormalizedUser,
+    normalizeMessageContent,
     proto,
     sha256,
     updateMessageWithPollUpdate,
@@ -26,8 +27,9 @@ import {
 } from 'baileys';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
+import type Catalog from '~/lib/catalog';
 import Chat from '~/lib/chat';
-import type Contact from '~/lib/contact';
+import Contact from '~/lib/contact';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 import type WhatsApp from '~/lib/whatsapp';
 import type { MessageWatch, WatchEvent } from '~/lib/whatsapp';
@@ -38,12 +40,28 @@ const STATUS = ['error', 'pending', 'sent', 'delivered', 'read', 'played'] as co
 /** Sesión activa que liga la entidad. / Active session binding the entity. */
 type Init = { wa: WhatsApp; engine: Engine; socket: WASocket };
 
-/** Opciones comunes de envío. / Common send options. */
-type Extra = { mid?: string; once?: boolean };
+/**
+ * Opciones comunes de envío. `mentions` nombra a quiénes se menciona en el texto por teléfono,
+ * JID, LID o `Contact`; el `@<número>` escrito en el cuerpo se traduce al identificador con el
+ * que el chat conoce a cada uno.
+ * Common send options. `mentions` names who is mentioned in the text by phone, JID, LID or
+ * `Contact`; the `@<number>` written in the body is translated to the identifier the chat
+ * knows each one by.
+ */
+type Extra = { mid?: string; once?: boolean; mentions?: (string | number | Contact)[] };
 
-/** Desenvuelve los wrappers de contenido (view-once, documento con caption). / Unwraps content wrappers (view-once, captioned document). */
-const unwrap = (msg: NonNullable<WAMessage['message']>) =>
-    msg.viewOnceMessage?.message ?? msg.viewOnceMessageV2?.message ?? msg.viewOnceMessageV2Extension?.message ?? msg.documentWithCaptionMessage?.message ?? msg;
+/** Ficha de un producto del catálogo, tal como la devuelve `Catalog`. / A catalog product card, as `Catalog` returns it. */
+type Item = Catalog['_raw']['products'][number];
+
+/**
+ * Desenvuelve los sobres de contenido —temporal, vista única, documento con caption, edición—
+ * con la misma lista que baileys, así un chat con mensajes temporales no convierte cada
+ * mensaje en un texto vacío.
+ * Unwraps the content envelopes —ephemeral, view-once, captioned document, edit— with the same
+ * list baileys uses, so a chat with disappearing messages does not turn every message into an
+ * empty text.
+ */
+export const unwrap = (msg: NonNullable<WAMessage['message']>): NonNullable<WAMessage['message']> => normalizeMessageContent(msg) ?? msg;
 
 /** Bytes del proto (Uint8Array en runtime, base64 tras el engine) como Buffer. / Proto bytes (runtime Uint8Array, post-engine base64) as a Buffer. */
 const to_buffer = (value: Uint8Array | string | null | undefined): Buffer | null =>
@@ -94,6 +112,27 @@ const send = async (init: Init, cid: string, content: Record<string, unknown>, b
     const jid = await jid_of(init.engine, cid, init.socket);
     if (!jid) return null;
     const quoted = extra.mid ? deserialize<Message['_raw']>(await init.engine.get(`/chat/${jid}/message/${extra.mid}`))?.raw : undefined;
+    if (extra.mentions?.length) {
+        // En un grupo con addressing LID la mención viaja como LID y el `@` del cuerpo debe
+        // decir ese mismo número, o WhatsApp la pinta como texto plano; en el resto va el
+        // teléfono. Se resuelve cada uno al canónico y se traduce al que el chat usa.
+        // In a LID-addressed group the mention travels as a LID and the `@` in the body must
+        // say that same number, or WhatsApp renders it as plain text; elsewhere it is the phone.
+        // Each one is resolved to canonical and translated to the one the chat uses.
+        const lid_mode = jid.endsWith('@g.us') && (await init.socket.groupMetadata(jid).catch(() => null))?.addressingMode === 'lid';
+        const mentioned: string[] = [];
+        for (const who of extra.mentions) {
+            const pn = typeof who === 'object' ? (who.jid ?? who.lid) : await jid_of(init.engine, String(who), init.socket);
+            if (pn) {
+                const lid = lid_mode ? (typeof who === 'object' && who.lid) || deserialize<string>(await init.engine.get(`/lid/${pn}`)) || (await init.socket.signalRepository?.lidMapping?.getLIDForPN(pn).catch(() => null)) : null;
+                const target = lid ? jidNormalizedUser(lid) : pn;
+                mentioned.push(target);
+                if (typeof content.text === 'string' && target !== pn) content.text = content.text.split(`@${pn.split('@')[0]}`).join(`@${target.split('@')[0]}`);
+                if (typeof content.caption === 'string' && target !== pn) content.caption = content.caption.split(`@${pn.split('@')[0]}`).join(`@${target.split('@')[0]}`);
+            }
+        }
+        content.mentions = mentioned;
+    }
     // La vista única viaja como la manda WhatsApp: el media PLANO con `viewOnce` en su propio
     // nodo y el sobre marcado con `isViewOnce`, sin envolverlo en `viewOnceMessage(V2)` —el
     // wrapper que arma baileys con `viewOnce: true` queda en «enviado» y no se entrega.
@@ -161,7 +200,7 @@ export default class Message {
         cid: string;
         mid: string | null;
         me: boolean;
-        type: 'text' | 'image' | 'video' | 'audio' | 'sticker' | 'document' | 'location' | 'poll' | 'vcard' | 'event';
+        type: 'text' | 'image' | 'video' | 'audio' | 'sticker' | 'document' | 'location' | 'poll' | 'vcard' | 'event' | 'product';
         author: string;
         status: number;
         starred: boolean;
@@ -173,6 +212,8 @@ export default class Message {
         edited: boolean;
         /** Momento en que se retiró para todos, o null si sigue vigente / When it was revoked for everyone, or null while it stands */
         revoked_at?: number | null;
+        /** Momento en que se fijó en el chat, o null si no está fijado / When it was pinned in the chat, or null while unpinned */
+        pinned_at?: number | null;
         multiple?: boolean;
         reactions?: { author: string; emoji: string; at: number }[];
         responses?: { author: string; response: 'going' | 'not_going' | 'maybe'; guests: number; at: number }[];
@@ -199,7 +240,7 @@ export default class Message {
                 audioMessage: 'audio', stickerMessage: 'sticker', locationMessage: 'location', liveLocationMessage: 'location',
                 pollCreationMessage: 'poll', pollCreationMessageV2: 'poll', pollCreationMessageV3: 'poll',
                 documentMessage: 'document', documentWithCaptionMessage: 'document', contactMessage: 'vcard',
-                contactsArrayMessage: 'vcard', eventMessage: 'event',
+                contactsArrayMessage: 'vcard', eventMessage: 'event', productMessage: 'product',
             } as Record<string, Message['_raw']['type']>)[kind ?? ''] ?? 'text';
             const content = unwrapped[kind as keyof typeof unwrapped] as Record<string, unknown> | string | undefined;
             const context = (content as { contextInfo?: proto.IContextInfo } | undefined)?.contextInfo;
@@ -221,13 +262,14 @@ export default class Message {
                 mime: typeof content === 'object' && type !== 'text' ? ((content?.mimetype as string) ?? 'application/octet-stream') : 'text/plain',
                 caption: typeof content === 'string' ? content
                     : type === 'event' ? (((content as Record<string, unknown> | undefined)?.description as string) ?? '')
-                        : ((content?.caption as string) ?? (content?.text as string) ?? (content?.name as string) ?? (content?.displayName as string) ?? ''),
+                        : type === 'product' ? (((content as proto.Message.IProductMessage | undefined)?.body ?? (content as proto.Message.IProductMessage | undefined)?.product?.description) ?? '')
+                            : ((content?.caption as string) ?? (content?.text as string) ?? (content?.name as string) ?? (content?.displayName as string) ?? ''),
                 edited: false,
                 raw,
             };
         }
         if (new.target === Message) {
-            const kinds = { text: Text, image: Image, video: Video, audio: Audio, sticker: Sticker, document: Document, location: Location, poll: Poll, vcard: VCard, event: Event } as const;
+            const kinds = { text: Text, image: Image, video: Video, audio: Audio, sticker: Sticker, document: Document, location: Location, poll: Poll, vcard: VCard, event: Event, product: Product } as const;
             return new kinds[doc.type](init, doc);
         }
         this._init = init;
@@ -289,6 +331,8 @@ export default class Message {
     get revoked(): boolean { return this._raw.revoked_at != null; }
     /** Fecha del retiro en ISO UTC, o null. / Revocation date as ISO UTC, or null. */
     get revoked_at(): string | null { return this._raw.revoked_at != null ? new Date(this._raw.revoked_at).toISOString() : null; }
+    /** true si está fijado en el chat. / true when pinned in the chat. */
+    get pinned(): boolean { return this._raw.pinned_at != null; }
     /** Fecha de creación en ISO UTC. / Creation date as ISO UTC. */
     get created_at(): string { return new Date(this._raw.created_at).toISOString(); }
     /** Vencimiento del mensaje temporal en ISO UTC, o null. / Ephemeral expiration as ISO UTC, or null. */
@@ -296,7 +340,7 @@ export default class Message {
     /** MIME: text/plain en texto, text/json en poll/location/vcard/event, real en media. / MIME: text/plain for text, text/json for poll/location/vcard/event, actual for media. */
     get mime(): string {
         const { type } = this._raw;
-        return type === 'text' ? 'text/plain' : ['poll', 'location', 'vcard', 'event'].includes(type) ? 'text/json' : this._raw.mime;
+        return type === 'text' ? 'text/plain' : ['poll', 'location', 'vcard', 'event', 'product'].includes(type) ? 'text/json' : this._raw.mime;
     }
     /** Motivo del rechazo cuando `status` es `error` (`restricted`, `invalid-session`, o el código crudo); null si no. / Rejection reason when `status` is `error` (`restricted`, `invalid-session`, or the raw code); null otherwise. */
     get reason(): string | null {
@@ -404,6 +448,25 @@ export default class Message {
         await this._init.socket.chatModify({ star: { messages: [{ id: doc.id, fromMe: doc.me }], star: value } }, doc.cid);
         doc.starred = value;
         await this._init.engine.set(`/chat/${doc.cid}/message/${doc.id}`, serialize(doc), doc.created_at);
+        return true;
+    }
+
+    /**
+     * Fija el mensaje en el chat o lo suelta. WhatsApp fija por 24 horas, 7 días o 30 días;
+     * por defecto 7, como en el teléfono.
+     * Pins the message in the chat or unpins it. WhatsApp pins for 24 hours, 7 days or 30 days;
+     * 7 by default, as on the phone.
+     *
+     * @param value - true fija, false suelta / true pins, false unpins
+     * @param days - Duración: 1, 7 o 30 / Duration: 1, 7 or 30
+     */
+    async pin(value: boolean, days: 1 | 7 | 30 = 7): Promise<boolean> {
+        const { cid, id, me, author } = this._raw;
+        await this._init.socket.sendMessage(cid, {
+            pin: { remoteJid: cid, id, fromMe: me, ...(cid.endsWith('@g.us') && !me && { participant: author }) },
+            type: value ? proto.PinInChat.Type.PIN_FOR_ALL : proto.PinInChat.Type.UNPIN_FOR_ALL,
+            time: ({ 1: 86_400, 7: 604_800, 30: 2_592_000 } as const)[days],
+        });
         return true;
     }
 
@@ -539,8 +602,10 @@ export default class Message {
     async text(caption: string, extra: Omit<Extra, 'mid'> = {}) { return send(this._init, this._raw.cid, { text: caption }, undefined, { ...extra, mid: this._raw.id }); }
     /** Responde con imagen. / Replies with an image. */
     async image(buf: Buffer, extra: Omit<Extra, 'mid'> & { caption?: string } = {}) { return send(this._init, this._raw.cid, { image: buf, caption: extra.caption }, buf, { ...extra, mid: this._raw.id }); }
-    /** Responde con video. / Replies with a video. */
-    async video(buf: Buffer, extra: Omit<Extra, 'mid'> & { caption?: string } = {}) { return send(this._init, this._raw.cid, { video: buf, caption: extra.caption }, buf, { ...extra, mid: this._raw.id }); }
+    /** Responde con video; `gif` lo reproduce en bucle y sin sonido. / Replies with a video; `gif` plays it looped and muted. */
+    async video(buf: Buffer, extra: Omit<Extra, 'mid'> & { caption?: string; gif?: boolean } = {}) { return send(this._init, this._raw.cid, { video: buf, caption: extra.caption, gifPlayback: extra.gif ?? false }, buf, { ...extra, mid: this._raw.id }); }
+    /** Responde con sticker: WebP, estático o animado. / Replies with a sticker: WebP, static or animated. */
+    async sticker(buf: Buffer, extra: Omit<Extra, 'mid'> = {}) { return send(this._init, this._raw.cid, { sticker: buf }, buf, { ...extra, mid: this._raw.id }); }
     /** Responde con audio. / Replies with audio. */
     async audio(buf: Buffer, extra: Omit<Extra, 'mid'> & { ptt?: boolean } = {}) { return send(this._init, this._raw.cid, { audio: buf, ptt: extra.ptt ?? true }, buf, { ...extra, mid: this._raw.id }); }
     /** Responde con ubicación. / Replies with a location. */
@@ -838,6 +903,41 @@ export class Event extends Message {
 }
 
 /**
+ * Tarjeta de producto de un catálogo Business: la ficha que WhatsApp muestra y de quién es.
+ * Business catalog product card: the card WhatsApp displays and whose it is.
+ */
+export class Product extends Message {
+    /** @internal Bloque del producto en el raw. / Raw product block. */
+    get _product() { return this._raw.raw.message?.productMessage; }
+    /** Nombre del producto. / Product name. */
+    get name(): string { return this._product?.product?.title ?? ''; }
+    /** Descripción de la ficha. / Card description. */
+    get description(): string { return this._product?.product?.description ?? ''; }
+    /** Precio en unidades, como lo muestra WhatsApp. / Price in units, as WhatsApp shows it. */
+    get price(): number { return Number(this._product?.product?.priceAmount1000?.toString() ?? 0) / 1_000; }
+    /** Moneda ISO 4217. / ISO 4217 currency. */
+    get currency(): string { return this._product?.product?.currencyCode ?? ''; }
+    /** Identificador del producto en WhatsApp. / WhatsApp product identifier. */
+    get product_id(): string { return this._product?.product?.productId ?? ''; }
+    /** Identificador del comercio, o null. / Merchant identifier, or null. */
+    get retailer_id(): string | null { return this._product?.product?.retailerId ?? null; }
+    /** Enlace del producto, o null. / Product link, or null. */
+    get url(): string | null { return this._product?.product?.url ?? null; }
+    /** JID del negocio dueño del catálogo. / JID of the business owning the catalog. */
+    get owner(): string { return this._product?.businessOwnerJid ?? this._raw.author; }
+    /** Miniatura JPEG de la portada, o null. / Cover JPEG thumbnail, or null. */
+    async thumb(): Promise<Buffer | null> { return to_buffer(this._product?.product?.productImage?.jpegThumbnail); }
+    /**
+     * Ficha completa desde el catálogo del negocio, o null si ya no está publicada.
+     * Full card from the business catalog, or null when no longer published.
+     */
+    async item(): Promise<Item | null> {
+        const found = await this._init.wa.Catalog.get(this.owner).catch(() => null);
+        return found?.product(this.product_id) ?? null;
+    }
+}
+
+/**
  * Mensaje ligado a la sesión viva: la misma clase con los envíos, las lecturas, las acciones
  * por id y las subclases para `instanceof`.
  * Message bound to the live session: the same class with sends, reads, by-id actions and the
@@ -858,6 +958,7 @@ export function message(init: Init) {
         static readonly Poll = Poll;
         static readonly VCard = VCard;
         static readonly Event = Event;
+        static readonly Product = Product;
 
         /**
          * Mensaje por chat e id.
@@ -894,8 +995,10 @@ export function message(init: Init) {
         static async text(cid: string, caption: string, extra: Extra = {}) { return send(init, cid, { text: caption }, undefined, extra); }
         /** Envía imagen. / Sends an image. */
         static async image(cid: string, buf: Buffer, extra: Extra & { caption?: string } = {}) { return send(init, cid, { image: buf, caption: extra.caption }, buf, extra); }
-        /** Envía video. / Sends a video. */
-        static async video(cid: string, buf: Buffer, extra: Extra & { caption?: string } = {}) { return send(init, cid, { video: buf, caption: extra.caption }, buf, extra); }
+        /** Envía video; `gif` lo reproduce en bucle y sin sonido. / Sends a video; `gif` plays it looped and muted. */
+        static async video(cid: string, buf: Buffer, extra: Extra & { caption?: string; gif?: boolean } = {}) { return send(init, cid, { video: buf, caption: extra.caption, gifPlayback: extra.gif ?? false }, buf, extra); }
+        /** Envía sticker: WebP, estático o animado. / Sends a sticker: WebP, static or animated. */
+        static async sticker(cid: string, buf: Buffer, extra: Extra = {}) { return send(init, cid, { sticker: buf }, buf, extra); }
         /** Envía audio. / Sends audio. */
         static async audio(cid: string, buf: Buffer, extra: Extra & { ptt?: boolean } = {}) { return send(init, cid, { audio: buf, ptt: extra.ptt ?? true }, buf, extra); }
         /** Envía ubicación. / Sends a location. */
@@ -931,6 +1034,8 @@ export function message(init: Init) {
         static async forward(cid: string, mid: string, target: string | Chat | Contact): Promise<boolean> { return (await this.get(cid, mid))?.forward(target) ?? false; }
         /** Elimina un mensaje por id. / Deletes a message by id. */
         static async delete(cid: string, mid: string, all = false): Promise<boolean> { return (await this.get(cid, mid))?.delete(all) ?? false; }
+        /** Fija o suelta un mensaje por id. / Pins or unpins a message by id. */
+        static async pin(cid: string, mid: string, value: boolean, days: 1 | 7 | 30 = 7): Promise<boolean> { return (await this.get(cid, mid))?.pin(value, days) ?? false; }
         /** Reacciones de un mensaje por id. / Reactions of a message by id. */
         static async reactions(cid: string, mid: string): Promise<{ emoji: string; count: number }[]> { return (await this.get(cid, mid))?.reactions() ?? []; }
     };

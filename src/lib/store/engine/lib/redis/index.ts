@@ -29,6 +29,9 @@ export interface RedisClient {
   zrem(...args: unknown[]): Promise<unknown>;
   zrevrange(key: string, start: number, stop: number): Promise<string[]>;
   zcard(key: string): Promise<number>;
+  sadd(...args: unknown[]): Promise<unknown>;
+  srem(...args: unknown[]): Promise<unknown>;
+  smembers(key: string): Promise<string[]>;
   getBuffer?(...args: unknown[]): Promise<Buffer | null>;
   setBuffer?(...args: unknown[]): Promise<unknown>;
   pipeline?(): {
@@ -36,6 +39,8 @@ export interface RedisClient {
     del(...keys: unknown[]): unknown;
     zadd(key: string, score: number, member: string): unknown;
     zrem(...args: unknown[]): unknown;
+    sadd(...args: unknown[]): unknown;
+    srem(...args: unknown[]): unknown;
     exec(): Promise<unknown>;
   };
 }
@@ -46,6 +51,10 @@ export interface RedisClient {
  * Keyspaces:
  * - `<prefix>:doc:<path>` → string del documento.
  * - `<prefix>:idx:<parent>` → sorted set (score explícito o de escritura, member=path completo).
+ * - `<prefix>:dir:<parent>` → set con los subdirectorios: `chat/a/message` no es un documento y
+ *   sin esto `unset('/chat/a')` no sabría que existe.
+ *   / set of subdirectories: `chat/a/message` is not a document and without this
+ *   `unset('/chat/a')` would not know it exists.
  *
  * El índice ordenado vive en Redis: `list` combina ZREVRANGE + MGET (dos round-trips, O(log N + M))
  * y `count` es un ZCARD O(1); las escrituras agrupan documento e índice en un pipeline para que
@@ -75,6 +84,21 @@ export class RedisEngine implements Engine {
     return `${this._prefix}:idx:${normalize_path(parent)}`;
   }
 
+  /** @internal */
+  private _dir_key(parent: string): string {
+    return `${this._prefix}:dir:${normalize_path(parent)}`;
+  }
+
+  /**
+   * @internal
+   * Pares `[directorio, hijo]` de cada nivel entre la raíz y el padre del documento.
+   * `[directory, child]` pairs of every level between the root and the document's parent.
+   */
+  private _ancestors(parent: string): [string, string][] {
+    const parts = parent ? parent.split('/') : [];
+    return parts.map((_, index) => [parts.slice(0, index).join('/'), parts.slice(0, index + 1).join('/')]);
+  }
+
   /**
    * Lee el valor de un documento.
    * Reads a document's value.
@@ -99,34 +123,43 @@ export class RedisEngine implements Engine {
     if (pipeline) {
       pipeline.set(doc_key, value);
       pipeline.zadd(idx_key, rank, full);
+      for (const [dir, child] of this._ancestors(parent)) pipeline.sadd(this._dir_key(dir), child);
       await pipeline.exec();
     } else {
       await this._client.set(doc_key, value);
       await this._client.zadd(idx_key, rank, full);
+      for (const [dir, child] of this._ancestors(parent)) await this._client.sadd(this._dir_key(dir), child);
     }
   }
 
   /**
-   * Elimina el doc, su entrada de índice y todo el sub-árbol.
-   * Deletes the doc, its index entry, and the entire subtree.
+   * Elimina el doc, su entrada de índice y todo el sub-árbol. Los descendientes se recorren por
+   * los índices —cada zset nombra a sus hijos— en vez de con SCAN, que cuesta el keyspace
+   * entero de Redis por cada borrado: baileys hace un `unset` por cada pre-key que consume.
+   * Deletes the doc, its index entry, and the entire subtree. Descendants are walked through
+   * the indexes —each zset names its children— instead of SCAN, which costs the whole Redis
+   * keyspace per delete: baileys issues one `unset` per pre-key it consumes.
    */
   async unset(path: string): Promise<boolean> {
     const { parent } = split_path(path);
     const full = normalize_path(path);
+    const nodes = new Set([full]);
+    for (const node of nodes) {
+      const [docs, dirs] = await Promise.all([this._client.zrevrange(this._idx_key(node), 0, -1), this._client.smembers(this._dir_key(node))]);
+      for (const child of [...docs, ...dirs]) nodes.add(child);
+    }
+    const keys = [...nodes].flatMap((node) => [this._doc_key(node), `${this._doc_key(node)}:bin`, this._idx_key(node), this._dir_key(node)]);
     const pipeline = this._client.pipeline?.();
     if (pipeline) {
-      pipeline.del([this._doc_key(full), `${this._doc_key(full)}:bin`]);
+      for (let i = 0; i < keys.length; i += 500) pipeline.del(keys.slice(i, i + 500));
       pipeline.zrem(this._idx_key(parent), full);
+      pipeline.srem(this._dir_key(parent), full);
       await pipeline.exec();
     } else {
-      await this._client.del([this._doc_key(full), `${this._doc_key(full)}:bin`]);
+      for (let i = 0; i < keys.length; i += 500) await this._client.del(keys.slice(i, i + 500));
       await this._client.zrem(this._idx_key(parent), full);
+      await this._client.srem(this._dir_key(parent), full);
     }
-    await Promise.all([
-      this._delete_pattern(`${this._prefix}:doc:${full}/*`),
-      this._delete_pattern(`${this._prefix}:idx:${full}`),
-      this._delete_pattern(`${this._prefix}:idx:${full}/*`),
-    ]);
     return true;
   }
 
@@ -170,6 +203,7 @@ export class RedisEngine implements Engine {
     const full = normalize_path(path);
     await this._client.setBuffer?.(`${this._doc_key(full)}:bin`, data);
     await this._client.zadd(this._idx_key(parent), score ?? Date.now(), full);
+    for (const [dir, child] of this._ancestors(parent)) await this._client.sadd(this._dir_key(dir), child);
   }
 
   /**

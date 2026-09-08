@@ -176,10 +176,20 @@ ordenados.
 | `<prefix>:doc:<path>`        | `string`    | El cuerpo del documento serializado.                            |
 | `<prefix>:doc:<path>:bin`    | `string`    | El binario crudo, cuando el cliente soporta buffers.            |
 | `<prefix>:idx:<parent>`      | `zset`      | Score = el `score` pasado a `set`, member = ruta completa del hijo. |
+| `<prefix>:dir:<parent>`      | `set`       | Los subdirectorios de una ruta (`chat/a/message` bajo `chat/a`), para que `unset` recorra un subárbol cuyos niveles intermedios no son documentos. |
 
-`list()` es `ZREVRANGE` + `MGET`; `count()` es `ZCARD` (O(1)); `unset()` cae en cascada con `SCAN` +
-`DEL`. Las escrituras agrupan documento e índice en un pipeline cuando el cliente lo expone, de modo
-que una caída entre ambas operaciones no puede dejar un documento huérfano de su índice.
+`list()` es `ZREVRANGE` + `MGET`; `count()` es `ZCARD` (O(1)); `unset()` recorre el subárbol por los
+sets `idx:` y `dir:` y lo borra por lotes, nunca con `SCAN`, que costaría el keyspace entero de Redis
+en cada borrado — y baileys hace un borrado por cada pre-key de Signal que consume. Las escrituras
+agrupan documento, índice y directorios en un pipeline cuando el cliente lo expone, de modo que una
+caída entre ellas no puede dejar un documento huérfano de su índice.
+
+!!! warning "Almacenes escritos antes de 8.4.0"
+    Los sets `dir:` no existían antes de 8.4.0. Los subárboles escritos por una versión anterior no
+    son alcanzables por la nueva cascada: un `chat.delete()` sobre un chat así borra el documento del
+    chat y el índice, pero deja atrás sus documentos de mensajes viejos, invisibles para `list` y
+    `count`. Arranca con un prefijo nuevo, o llama a `engine.clear()` y vuelve a vincular, para no
+    dejar nada huérfano.
 
 ```typescript title="Constructor"
 new RedisEngine(client: RedisClient, prefix = 'wa:default')
@@ -203,6 +213,9 @@ interface RedisClient {
     zrem(key: string, members: string | string[]): Promise<unknown>;
     zrevrange(key: string, start: number, stop: number): Promise<string[]>;
     zcard(key: string): Promise<number>;
+    sadd(key: string, ...members: string[]): Promise<unknown>;
+    srem(key: string, ...members: string[]): Promise<unknown>;
+    smembers(key: string): Promise<string[]>;
 
     // opcionales — habilitan comportamiento extra cuando están
     getBuffer?(key: string): Promise<Buffer | null>;
@@ -212,6 +225,8 @@ interface RedisClient {
         del(keys: string | string[]): unknown;
         zadd(key: string, score: number, member: string): unknown;
         zrem(key: string, members: string | string[]): unknown;
+        sadd(key: string, ...members: string[]): unknown;
+        srem(key: string, ...members: string[]): unknown;
         exec(): Promise<unknown>;
     };
 }
@@ -221,7 +236,7 @@ Cualquier cliente que cumpla esta superficie funciona en runtime — `ioredis` y
 reemplazos lo hacen.
 
 !!! note "Por qué algunos miembros son variádicos"
-    `del`, `zrem`, `scan` y los de buffer se declaran variádicos a propósito: `ioredis` los expone
+    `del`, `zrem`, `sadd`, `srem`, `scan` y los de buffer se declaran variádicos a propósito: `ioredis` los expone
     con sobrecargas de callback que una firma fija rechazaría bajo `strictFunctionTypes`.
     Declararlos así permite pasar una instancia de `ioredis` directo al motor, sin ningún cast.
 

@@ -2,6 +2,31 @@
 
 All notable changes to `@arcaelas/whatsapp` will be documented in this file.
 
+## [8.4.0] - 2026-09-08
+
+### Changed
+
+- **`sync` es `false` por defecto.** Con `true` el primer sync descargaba el historial completo y cada media de ese historial antes del primer `connected`: minutos de descarga y cientos de MB en una cuenta grande, sin que nadie lo hubiera pedido. Ahora el costo lo decide quien lo activa.
+- **`RedisEngine.unset()` ya no usa `SCAN`.** Cada borrado recorría el keyspace entero de Redis tres veces, y baileys hace un borrado por cada pre-key que consume. La cascada ahora recorre los índices (`idx:`) y un set nuevo de subdirectorios (`dir:`) y borra por lotes: cuesta el subárbol, no el keyspace. `RedisClient` exige además `sadd`, `srem` y `smembers` (ioredis los trae). Los almacenes escritos antes de 8.4.0 no tienen `dir:`: un `unset` sobre un subárbol viejo deja atrás sus documentos, invisibles para `list`; arranca con un prefijo nuevo o vacía el engine.
+- **Los sobres de contenido se desenvuelven como lo hace baileys.** Un chat con mensajes temporales envuelve cada mensaje en `ephemeralMessage`, y la librería lo clasificaba como texto vacío; ahora se desenvuelven los mismos sobres que baileys (`ephemeralMessage`, view-once, documento con caption, edición) antes de clasificar.
+- **Los mensajes de sistema dejan de abrir fichas y de reescribirlas.** Un aviso de grupo sin autor caía al JID del grupo y le creaba un contacto; el `pushName` de cada mensaje entrante reescribía la ficha del autor y emitía `contact:updated` aunque nada hubiera cambiado; en grupos el autor por LID no encontraba su ficha y la «descubría» en cada mensaje. Los tres casos quedan: se canoniza el autor, se ignora el JID del grupo y solo se escribe cuando el documento cambia.
+- **Menos lecturas por mensaje.** El chat se lee una vez por mensaje entrante y viaja hasta el evento, en vez de tres lecturas del mismo documento.
+- **Los índices de orden se persisten al salir de la caché.** `FileSystemEngine` y `S3Engine` difieren la escritura del `.order` un segundo; si el directorio salía de la caché LRU antes, esa escritura se perdía y en S3 el último hijo desaparecía de `list` para siempre. Al expulsar se persiste de inmediato.
+- **La cola de escrituras de sesión libera sus entradas.** El mapa de locks crecía una entrada por cada pre-key y sesión Signal escrita y no soltaba ninguna.
+
+### Added
+
+- **Grupos.** `wa.Chat.create(name, members)` y `wa.Chat.join(invite)`; en la instancia `admins()`, `admin()`, `rename()`, `describe()`, `picture()`, `add()`, `remove()`, `promote()`, `demote()`, `invite()`, `revoke()`, `announce()`, `restrict()` y `ephemeral()`. Los cambios llegan como `chat:updated`, `chat:joined`, `chat:left`, `chat:promoted` y `chat:demoted`, con los contactos afectados en el segundo argumento.
+- **Envíos.** `sticker()` (WebP estático o animado), `video(…, { gif: true })`, y `mentions` en texto, imagen y video: se escribe `@<teléfono>` y la librería lo traduce al identificador que usa el chat —el LID en los grupos migrados—, así el receptor ve la mención y su `mentioned` es `true`.
+- **`Message.pin(value, days?)`** fija o suelta un mensaje por 1, 7 o 30 días; el pin llega como `message:updated` con el nuevo getter `pinned`, en vez de aparecer como un texto vacío.
+- **`Product`**, la tarjeta de producto que comparte una cuenta Business: `name`, `description`, `price`, `currency`, `product_id`, `retailer_id`, `url`, `owner`, `thumb()` e `item()`; `type: 'product'`. Solo recepción.
+- **`Catalog`**, el catálogo de productos del negocio propio o de cualquier contacto Business: `wa.Catalog.get(uid?)`, `products()`, `product(id)`, `sync()`, `me`; persistido bajo `/catalog/<jid>`. Solo lectura: WhatsApp no respondió la creación de productos desde un dispositivo vinculado.
+- **`Contact.business()`**, el perfil Business con descripción, correo, sitios, categoría, dirección y horario; **`Contact.catalog()`**; **`Contact.block(value)`** y **`wa.Contact.blocked()`**. `Account` hereda `business()` y `catalog()`.
+
+### Docs
+
+- La documentación decía cosas que la librería no hacía: `disconnect()` como apagado ordenado (desvincula el dispositivo desde 7.x), `message:reacted` sin el contacto, `Contact` sin `me`, estáticos de `Message` con el cliente como primer argumento, `delete(true)` borrando el documento, `feed:updated` por reacciones, `sync` por defecto en `true`, licencia ISC en el README. Todo eso quedó como es, y `watch()`, `mentioned`, `mentions()`, `Farewell`, `error`, `contact:presence`, `device`, `debug`, `Audio.play()` y `Event.attendees()` aparecen por primera vez en la referencia.
+
 ## [8.3.1] - 2026-09-03
 
 ### Fixed

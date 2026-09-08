@@ -6,7 +6,8 @@ unread count) and mutating methods that propagate changes to WhatsApp and to loc
 through the configured engine.
 
 Every instance is bound to a `WhatsApp` context through the internal `chat(wa)` factory, which also
-exposes the statics `wa.Chat.get(cid)` and `wa.Chat.list(offset, limit)`.
+exposes the statics `wa.Chat.get(cid)`, `wa.Chat.list(offset, limit)`, `wa.Chat.create(name, members)`
+and `wa.Chat.join(invite)`.
 
 ---
 
@@ -41,6 +42,8 @@ and the statics.
 
 - `wa.Chat.get(cid)` — load by phone, JID, LID or group id.
 - `wa.Chat.list(offset, limit)` — paginated read of persisted chats.
+- `wa.Chat.create(name, members)` — a group you just created.
+- `wa.Chat.join(invite)` — a group you just entered by invite link.
 - `contact.chat()` — the 1:1 chat of a `Contact`.
 - `msg.chat()` — the chat a message belongs to.
 - Event payloads (`message:*`, `chat:*`, `contact:*`) — the `Chat` travels with them.
@@ -101,8 +104,9 @@ whether everything was read.
 
 ## Methods
 
-Mutating methods write to the socket first and then persist the new snapshot to the engine. They
-return `false` when there is no live socket.
+Mutating methods write to the socket first and then persist the new snapshot to the engine. The
+group-only ones (`rename`, `describe`, `picture`, `add`, `remove`, `promote`, `demote`, `invite`,
+`revoke`, `announce`, `restrict`) return `false`, `null` or `0` on a 1:1 chat and do nothing.
 
 ### `content()`
 
@@ -142,6 +146,23 @@ if (chat?.type === 'group') {
         }
         offset += batch.length;
     }
+}
+```
+
+### `admins(offset?, limit?)` / `admin()`
+
+```typescript
+admins(offset = 0, limit = 50): Promise<Contact[]>
+admin(): Promise<boolean>
+```
+
+`admins()` returns the group administrators as `Contact` instances (empty on a 1:1); `admin()` says
+whether the **account itself** administers the group. Every group operation below needs it, so check
+first when the outcome matters.
+
+```typescript title="admins.ts"
+if (await chat.admin()) {
+    console.log('I can moderate', (await chat.admins()).map((who) => who.name));
 }
 ```
 
@@ -194,8 +215,7 @@ const ok = await chat.pin(true);
 
 !!! warning "WhatsApp allows 3 pinned chats"
     A fourth pin is silently dropped by WhatsApp, so the limit is checked **before** sending:
-    `pin(true)` returns `false` when three other chats are already pinned (or when the socket is
-    down) and nothing is sent.
+    `pin(true)` returns `false` when three other chats are already pinned and nothing is sent.
 
 ### `mute(until)`
 
@@ -218,6 +238,117 @@ Marks the whole chat as read on the account and resets `count` to `0`.
 
 ```typescript title="seen.ts"
 await chat.seen();
+```
+
+### `ephemeral(seconds)`
+
+```typescript
+ephemeral(seconds: 86_400 | 604_800 | 7_776_000 | false): Promise<boolean>
+```
+
+Disappearing messages for the chat: one day, one week, 90 days, or `false` to turn them off. On a
+group it needs admin rights; on a 1:1 it applies to both sides.
+
+```typescript title="ephemeral.ts"
+await chat.ephemeral(604_800);   // a week
+await chat.ephemeral(false);     // off
+```
+
+### `watch(handler)`
+
+```typescript
+watch(handler: (event: { name: ChatWatch; payload: Contact | Message }) => void): Promise<() => void>
+```
+
+Supervises the whole conversation: what the person on the other end does (`online`, `offline`,
+`typing`, `recording`, `stopped-typing`, `stopped-recording`, with the `Contact` as payload) and every
+new `message` (with the `Message` as payload). On a group there is no single person to follow, so
+only the messages arrive. It returns the function that stops watching.
+
+```typescript title="watch.ts"
+const stop = await chat.watch(({ name, payload }) => {
+    if (name === 'message') console.log('new:', (payload as Message).caption);
+    else console.log(chat.name, 'is', name);
+});
+
+stop();
+```
+
+!!! info "Presence is per session"
+    WhatsApp does not broadcast presence on its own and stops sending it on reconnect, so the watch
+    is set up again on every new session.
+
+### `rename(name)` / `describe(text)` / `picture(content)`
+
+```typescript
+rename(name: string): Promise<boolean>
+describe(text: string): Promise<boolean>
+picture(content: Buffer | string | null): Promise<boolean>
+```
+
+Change the group's subject, description (empty text removes it) and picture (`Buffer`, `https` URL,
+or `null` to remove). WhatsApp confirms the first two with `chat:updated`. `picture()` needs `sharp`
+or `jimp` installed and throws `ERR_PROFILE_PICTURE_LIB` otherwise.
+
+```typescript title="edit-group.ts"
+await chat.rename('Dev Team');
+await chat.describe('Daily standup at 9:30');
+await chat.picture(await readFile('./team.jpg'));
+```
+
+### `add(...who)` / `remove(...who)` / `promote(...who)` / `demote(...who)`
+
+```typescript
+add(...who: (string | number | Contact)[]): Promise<number>
+remove(...who: (string | number | Contact)[]): Promise<number>
+promote(...who: (string | number | Contact)[]): Promise<number>
+demote(...who: (string | number | Contact)[]): Promise<number>
+```
+
+Manage the participants by phone, JID, LID or `Contact`. Each call returns **how many** WhatsApp
+accepted: a person whose privacy forbids being added, or who is not in the group, does not count.
+The changes travel back as `chat:joined`, `chat:left`, `chat:promoted` and `chat:demoted`.
+
+```typescript title="participants.ts"
+const added = await chat.add('5491112345678', '5491187654321');   // 2 when both entered
+await chat.promote('5491112345678');
+await chat.demote('5491112345678');
+await chat.remove('5491187654321');
+```
+
+!!! warning "WhatsApp decides who can be added"
+    A person whose *Groups* privacy is set to *My contacts* cannot be added by an account they do
+    not have saved, and someone removed from a group cannot be added back right away. In both cases
+    `add()` returns `0`: hand them the invite link instead.
+
+### `invite()` / `revoke()`
+
+```typescript
+invite(): Promise<string | null>
+revoke(): Promise<string | null>
+```
+
+The current invite link (`https://chat.whatsapp.com/<code>`), or a fresh one after invalidating the
+previous. Both return `null` on a 1:1 and when the account does not administer the group.
+
+```typescript title="invite.ts"
+const link = await chat.invite();
+const fresh = await chat.revoke();   // the old link stops working
+```
+
+### `announce(value)` / `restrict(value)`
+
+```typescript
+announce(value: boolean): Promise<boolean>
+restrict(value: boolean): Promise<boolean>
+```
+
+`announce(true)` lets only admins send messages; `restrict(true)` lets only admins edit the group
+info. `false` opens each one to everyone again.
+
+```typescript title="settings.ts"
+await chat.announce(true);    // read-only for members
+await chat.restrict(true);    // members cannot rename or describe
 ```
 
 ### `clear()`
@@ -246,10 +377,12 @@ await chat.delete();
 
 ## Statics (via `wa.Chat`)
 
-| Static         | Signature                                                  | Notes                                                                          |
-| -------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `wa.Chat.get`  | `(cid: string \| number) => Promise<Chat \| null>`         | Resolves phone / JID / LID / group id. `null` only when it cannot be resolved.   |
-| `wa.Chat.list` | `(offset?: number, limit?: number) => Promise<Chat[]>`     | Paginates persisted chats, most recent first. Defaults: `0, 50`.                 |
+| Static           | Signature                                                  | Notes                                                                          |
+| ---------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `wa.Chat.get`    | `(cid: string \| number) => Promise<Chat \| null>`         | Resolves phone / JID / LID / group id. `null` only when it cannot be resolved.   |
+| `wa.Chat.list`   | `(offset?: number, limit?: number) => Promise<Chat[]>`     | Paginates persisted chats, most recent first. Defaults: `0, 50`.                 |
+| `wa.Chat.create` | `(name: string, members: (string \| number \| Contact)[]) => Promise<Chat>` | Creates a group with the account as admin and persists its chat. Members WhatsApp could not add are simply absent. |
+| `wa.Chat.join`   | `(invite: string) => Promise<Chat \| null>`                 | Joins a group by its invite link or bare code. `null` when WhatsApp did not admit the account. |
 
 There are no per-action statics (`wa.Chat.pin`, `wa.Chat.mute`, …): fetch the chat once and call the
 method on the instance.
@@ -266,6 +399,11 @@ if (chat) {
 
 const chats = await wa.Chat.list(0, 100);
 console.log(`Tracking ${chats.length} chats.`);
+
+const team = await wa.Chat.create('Dev Team', ['5491112345678', '5491187654321']);
+console.log(team._raw.id, await team.invite());
+
+const joined = await wa.Chat.join('https://chat.whatsapp.com/AbCdEfGhIjK');
 ```
 
 ---
@@ -287,5 +425,12 @@ wa.on('message:created', async (msg, chat) => {
 | ------------------------- | ------------------------------------------ |
 | The subject / description | `await chat.content()`                     |
 | The participants          | `await chat.members(0, 500)`               |
+| The admins, or whether you are one | `await chat.admins()`, `await chat.admin()` |
+| To create or join one     | `await wa.Chat.create(name, members)`, `await wa.Chat.join(link)` |
+| To rename or describe it  | `await chat.rename('…')`, `await chat.describe('…')` |
+| To manage participants    | `await chat.add(…)`, `remove(…)`, `promote(…)`, `demote(…)` |
+| The invite link           | `await chat.invite()`, `await chat.revoke()` |
+| Admin-only mode           | `await chat.announce(true)`, `await chat.restrict(true)` |
+| To mention someone        | `await wa.Message.text(chat._raw.id, '@5491112345678 hi', { mentions: ['5491112345678'] })` |
 | To leave the group        | `await chat.delete()`                      |
 | To send to the group      | `await wa.Message.text(chat._raw.id, '…')` |

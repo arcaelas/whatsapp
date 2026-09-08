@@ -1,7 +1,7 @@
 # Media
 
-Envía y recibe imágenes, videos, audio (incluyendo notas de voz), documentos y ubicaciones, lee los
-stickers que te llegan, y reenvía medios existentes entre chats.
+Envía y recibe imágenes, videos (incluidos clips tipo GIF), audio (incluyendo notas de voz),
+stickers, documentos y ubicaciones, y reenvía medios existentes entre chats.
 
 Todos los medios se envían como un `Buffer` — la librería no lee desde disco por ti, por lo que
 tú controlas cómo llegan los bytes (filesystem, HTTP, S3, pipe FFmpeg, etc.).
@@ -18,8 +18,8 @@ tú controlas cómo llegan los bytes (filesystem, HTTP, S3, pipe FFmpeg, etc.).
     antes de enviar.
 
 !!! info "Enviables vs. recibibles"
-    Puedes enviar `text`, `image`, `video`, `audio`, `document`, `location`, `poll`, `vcard` y
-    `event`. **Los stickers solo se reciben** — no existe `wa.Message.sticker`.
+    Puedes enviar `text`, `image`, `video`, `audio`, `sticker`, `document`, `location`, `poll`,
+    `vcard` y `event`. Las tarjetas de producto (`product`) solo se reciben.
 
 ---
 
@@ -100,6 +100,9 @@ const clip = await readFile('./assets/demo.mp4');
 await wa.Message.video('14155557777', clip, {
     caption: 'Demo rápida del nuevo flujo',
 });
+
+// Un clip tipo GIF: WhatsApp lo reproduce en bucle y sin sonido.
+await wa.Message.video('14155557777', clip, { gif: true });
 ```
 
 ```typescript title="receive-video.ts"
@@ -188,7 +191,14 @@ wa.on('message:created', async (msg) => {
 
 ## Stickers
 
-Solo de recepción, con dimensiones y una bandera `animated`:
+Envía un WebP — estático o animado — y recíbelos con dimensiones y una bandera `animated`:
+
+```typescript title="send-sticker.ts"
+import { readFile } from 'node:fs/promises';
+import { wa } from './client';
+
+await wa.Message.sticker('14155557777', await readFile('./assets/party.webp'));
+```
 
 ```typescript title="receive-sticker.ts"
 import { writeFile } from 'node:fs/promises';

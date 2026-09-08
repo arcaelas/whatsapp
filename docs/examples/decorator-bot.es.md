@@ -140,10 +140,7 @@ const bot = new DecoratorBot({
 
 await bot.connect(); // emparejamiento manejado por @pair
 
-process.on("SIGINT", async () => {
-  await bot.disconnect();
-  process.exit(0);
-});
+process.on("SIGINT", () => process.exit(0));   // salir conserva la vinculación
 ```
 
 ---

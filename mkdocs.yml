@@ -86,6 +86,7 @@ plugins:
             Messages: Mensajes
             Status Feed: Estados
             Engines: Engines
+            Catalog: Catálogo
             Events: Eventos
             Decorators: Decoradores
             Data Schemas: Schemas de Datos
@@ -119,6 +120,7 @@ nav:
     - Messages: references/message.md
     - Status Feed: references/feed.md
     - Engines: references/engines.md
+    - Catalog: references/catalog.md
     - Events: references/events.md
     - Decorators: references/decorators.md
     - Data Schemas: schema.md

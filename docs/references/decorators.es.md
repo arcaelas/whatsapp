@@ -169,8 +169,9 @@ Los nombres de eventos válidos están documentados en [References / Events](eve
 `connected`, `disconnected`, `message:created`, `message:updated`, `message:deleted`,
 `message:reacted`, `message:starred`, `message:unstarred`, `message:forwarded`, `message:seen`,
 `contact:created`, `contact:updated`, `chat:created`, `chat:deleted`, `chat:pinned`,
-`chat:unpinned`, `chat:archived`, `chat:unarchived`, `chat:muted`, `chat:unmuted`, `feed:created`,
-`feed:updated`, `feed:deleted`.
+`chat:unpinned`, `chat:archived`, `chat:unarchived`, `chat:muted`, `chat:unmuted`, `chat:updated`,
+`chat:joined`, `chat:left`, `chat:promoted`, `chat:demoted`, `contact:presence`, `error`,
+`feed:created`, `feed:updated`, `feed:deleted`.
 
 !!! tip "Payload del listener"
     Los argumentos del handler reflejan el payload del emisor. En eventos de mensaje la firma es
