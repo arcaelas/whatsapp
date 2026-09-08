@@ -33,7 +33,9 @@ The `engine` option is **required**. Every other field is optional.
 | `method`    | `'qr' \| 'otp'`                                            | `'otp'` | Picks the linking channel **only when `phone` is set**. Without `phone` it is ignored, since a PIN cannot be requested without a number. |
 | `autoclean` | `boolean`                                                  | `true`  | On a remote `loggedOut`, clears the entire engine. With `false` only `/session/creds` is removed (history is kept).             |
 | `reconnect` | `boolean \| number \| { max?: number; interval?: number }` | `true`  | Auto-reconnect policy for non-`loggedOut` closes. `interval` is in seconds. `true` retries forever every 60s.                    |
-| `sync`      | `boolean`                                                  | `true`  | Downloads the **message history** on link. Contacts, credentials, LID mappings and tctokens always sync regardless of this flag. |
+| `sync`      | `boolean`                                                  | `false` | Downloads the **message history** on link. Contacts, credentials, LID mappings and tctokens always sync regardless of this flag. |
+| `device`    | `string`                                                   | `'Chrome'` | Name this session shows under the phone's *Linked devices*. With several sessions on one account it is the only thing telling them apart. |
+| `debug`     | `'silent' \| 'fatal' \| 'error' \| 'warn' \| 'info' \| 'debug' \| 'trace'` | `'silent'` | Level of baileys' internal log. `Farewell` gives the close code; the exchange that led to it only shows up at `debug` or `trace`. |
 
 !!! info "Reconnect shortcuts"
     - `true` — retry forever every 60 seconds.
@@ -57,7 +59,9 @@ The `engine` option is **required**. Every other field is optional.
 
 !!! warning "`sync` only gates the message history"
     Non-FULL syncs carry the LID mappings and the trusted-contact tokens that baileys requires in
-    order to *send*; they are always processed. `sync: false` skips the FULL history download only.
+    order to *send*; they are always processed. `sync: true` adds the FULL history download, and
+    with it every media of that history: on a large account that is minutes of download before the
+    first `connected`, so it stays off unless you ask for it.
 
 ---
 
@@ -66,10 +70,11 @@ The `engine` option is **required**. Every other field is optional.
 ```typescript
 wa.engine                            // the storage engine you passed in
 wa.Contact / wa.Chat / wa.Message    // entities, published on connect
+wa.Catalog                           // product catalogs, published on connect
 await wa.account()                   // Account of the authenticated user, or null while pairing
 
 await wa.connect(callback)           // callback receives the PIN (string) or the QR (PNG Buffer)
-await wa.disconnect({ silent?, destroy? })
+await wa.disconnect({ silent?, destroy? })   // unlinks the device from the phone
 
 wa.on(event, handler)                // returns the unsubscribe function
 wa.once(event, handler)              // returns the unsubscribe function
@@ -135,24 +140,34 @@ await wa.connect((auth) => {
 disconnect(options?: { silent?: boolean; destroy?: boolean }): Promise<void>
 ```
 
-Closes the socket cleanly and cancels any pending reconnect timer.
+Closes the session **for real**: it unlinks the device from the phone (`logout`), ends the socket,
+cancels any pending reconnect and drops `/session` from the engine. The promise settles once the
+phone acknowledged the unlink. It is a deliberate, final operation: the next `connect()` pairs
+again.
 
-| Option    | Type      | Default | Description                                                              |
-| --------- | --------- | ------- | ------------------------------------------------------------------------ |
-| `silent`  | `boolean` | `false` | Suppresses the `disconnected` event **for this close only**.             |
-| `destroy` | `boolean` | `false` | Calls `engine.clear()` after closing — wipes the entire store.           |
+| Option    | Type      | Default | Description                                                                          |
+| --------- | --------- | ------- | ------------------------------------------------------------------------------------ |
+| `silent`  | `boolean` | `false` | Suppresses the `disconnected` event **for this close only**.                         |
+| `destroy` | `boolean` | `false` | Calls `engine.clear()` instead of `unset('/session')` — chats, messages and contacts go too. |
 
-Internally the socket is ended with a Boom-like error carrying
-`output.statusCode = 428` (`connectionClosed`), so the close handler sees an explicit signal
-rather than `undefined`.
+Neither flag decides whether the session dies; they only modulate side effects. Credentials are
+removed in both cases: the device no longer exists on the phone, so reconnecting with them would
+only return a `loggedOut`.
 
-```typescript title="Graceful shutdown"
-process.on('SIGTERM', async () => {
-    await wa.disconnect();
-});
+!!! danger "Do not call it to shut a process down"
+    A restart or a deploy should just exit the process: the socket dies with it and the credentials
+    survive for the next `connect()`. Calling `disconnect()` there unlinks the line on every
+    restart and burns one of the four linked-device slots each time you pair again.
+
+    ```typescript title="Graceful shutdown"
+    process.on('SIGTERM', () => process.exit(0));   // no disconnect(): the session survives
+    ```
+
+```typescript title="Unlink and keep the history for later study"
+await wa.disconnect();
 ```
 
-```typescript title="Silent close + wipe"
+```typescript title="Unlink silently and wipe everything"
 await wa.disconnect({ silent: true, destroy: true });
 ```
 
@@ -227,9 +242,10 @@ The instance carries the three entities bound to the current session, published 
 
 | Property     | What it is                                                                                          |
 | ------------ | --------------------------------------------------------------------------------------------------- |
-| `wa.Contact` | `Contact` subclass bound to the session: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`. |
-| `wa.Chat`    | `Chat` subclass bound to the session: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`.             |
+| `wa.Contact` | `Contact` subclass bound to the session: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`, `wa.Contact.blocked`. |
+| `wa.Chat`    | `Chat` subclass bound to the session: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`, `wa.Chat.create`, `wa.Chat.join`. |
 | `wa.Message` | `Message` subclass bound to the session: reads, sends, by-id actions and the subclasses.             |
+| `wa.Catalog` | `Catalog` subclass bound to the session: `wa.Catalog.get()` for the own catalog, `wa.Catalog.get(uid)` for a business's. See [Catalog](catalog.md). |
 | `wa.engine`  | Direct access to the storage engine.                                                                 |
 | `wa.account()` | The authenticated user as an [`Account`](contact.md#account), or `null` while pairing.             |
 
@@ -248,9 +264,9 @@ The bound class carries every read, send and by-id action with the session alrea
 | Group  | Members                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------ |
 | Read   | `get(cid, mid)`, `list(cid, offset?, limit?)`, `reactions(cid, mid)`                             |
-| Send   | `text`, `image`, `video`, `audio`, `location`, `poll`, `document`, `vcard`, `event`              |
-| Act    | `react(cid, mid, emoji)`, `star(cid, mid, value)`, `seen(cid, mid)`, `edit(cid, mid, caption)`, `forward(cid, mid, target)`, `delete(cid, mid, all?)` |
-| Classes | `Text`, `Image`, `Video`, `Audio`, `Sticker`, `Document`, `Location`, `Poll`, `VCard`, `Event`   |
+| Send   | `text`, `image`, `video`, `audio`, `sticker`, `location`, `poll`, `document`, `vcard`, `event`   |
+| Act    | `react(cid, mid, emoji)`, `star(cid, mid, value)`, `seen(cid, mid)`, `edit(cid, mid, caption)`, `forward(cid, mid, target)`, `delete(cid, mid, all?)`, `pin(cid, mid, value, days?)` |
+| Classes | `Text`, `Image`, `Video`, `Audio`, `Sticker`, `Document`, `Location`, `Poll`, `VCard`, `Event`, `Product` |
 
 The classes exposed there are the very same ones exported by the package, so
 `msg instanceof wa.Message.Poll` and `msg instanceof Poll` are equivalent.
@@ -272,10 +288,12 @@ The classes exposed there are the very same ones exported by the package, so
 
     The promise returned by `connect()` rejects with `Error('Logged out')`.
 
-!!! info "Manual disconnect (`statusCode = 428`)"
-    `disconnect()` ends the socket with a Boom-like error carrying
-    `output.statusCode = 428`. This makes manual closes distinguishable from network-level
-    errors when you inspect `lastDisconnect.error` in custom tooling.
+!!! info "`disconnected` says why"
+    The event carries a second argument, `Farewell`: `code` (baileys status code or `null`),
+    `reason` (`loggedOut`, `connectionReplaced`, `badSession`, … or `unknown`), `expired` (`true`
+    when the phone unlinked the session: no retry, credentials are dead) and `detail` (the
+    underlying error message). `wa.on('error', …)` reports failures that do not drop the
+    connection, such as `ERR_OTP_EXPIRED` when the pairing code budget runs out.
 
 ---
 
@@ -293,7 +311,7 @@ const wa = new WhatsApp({
 });
 
 wa.on('connected',    () => console.log('online'));
-wa.on('disconnected', () => console.log('offline'));
+wa.on('disconnected', (_, farewell) => console.log('offline:', farewell.reason, farewell.code));
 
 wa.on('message:created', async (msg, chat) => {
     if (!msg.me && msg.caption === '/ping') {

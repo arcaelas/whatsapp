@@ -80,10 +80,24 @@ export class SortedIndex {
   }
 
   /**
-   * Cancela la persistencia pendiente; se usa al descartar el índice de la caché.
-   * Cancels the pending persistence; used when dropping the index from the cache.
+   * Suelta el índice persistiendo lo pendiente de inmediato: al salir de la caché por LRU, la
+   * escritura diferida que aún no corrió se perdería y el `.order` quedaría sin el último hijo.
+   * Releases the index persisting whatever is pending right away: when evicted by LRU, the
+   * deferred write that has not run yet would be lost and `.order` would miss the last child.
    */
   dispose(): void {
+    this.discard();
+    if (this._dirty) {
+      this._dirty = false;
+      void this._flush(this.entries).catch(() => { });
+    }
+  }
+
+  /**
+   * Cancela la persistencia pendiente sin escribir; para un índice cuyo directorio ya no existe.
+   * Cancels the pending persistence without writing; for an index whose directory is gone.
+   */
+  discard(): void {
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
@@ -182,16 +196,16 @@ export class IndexCache {
   drop(key: string): void {
     for (const cached of [...this._cache.keys()]) {
       if (cached === key || cached.startsWith(`${key}/`)) {
-        this._cache.get(cached)?.dispose();
+        this._cache.get(cached)?.discard();
         this._cache.delete(cached);
       }
     }
   }
 
-  /** Vacía la caché completa. / Clears the whole cache. */
+  /** Vacía la caché completa sin persistir nada: el almacén ya no existe. / Clears the whole cache without persisting: the store is gone. */
   clear(): void {
     for (const index of this._cache.values()) {
-      index.dispose();
+      index.discard();
     }
     this._cache.clear();
   }

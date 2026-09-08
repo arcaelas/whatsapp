@@ -37,9 +37,8 @@ wa.on('message:created', async (msg, chat, wa) => {
     }
 });
 
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
     console.log('\n[wa] shutting down...');
-    await wa.disconnect();
     process.exit(0);
 });
 
@@ -119,13 +118,10 @@ await msg.text('pong');
 ### 6. Apagado limpio
 
 ```typescript
-process.on('SIGINT', async () => {
-    await wa.disconnect();
-    process.exit(0);
-});
+process.on('SIGINT', () => process.exit(0));
 ```
 
-`disconnect()` cierra el socket limpiamente y cancela cualquier timer de reconexión pendiente. Pasa `{ destroy: true }` si quieres borrar el motor al salir (útil para tests).
+Basta con salir: el socket muere con el proceso y las credenciales quedan en el motor para la próxima ejecución. `wa.disconnect()` es otra cosa — desvincula el dispositivo del teléfono, así que el próximo `connect()` vuelve a emparejar; pásale `{ destroy: true }` para vaciar también el motor (útil para tests).
 
 ---
 

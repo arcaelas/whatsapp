@@ -15,6 +15,30 @@ import type { ContactWatch, WatchEvent } from '~/lib/whatsapp';
 type Init = { wa: WhatsApp; engine: Engine; socket: WASocket };
 
 /**
+ * Perfil de negocio de un JID en el vocabulario propio, o null si no es una cuenta Business.
+ * A JID's business profile in the own vocabulary, or null when it is not a Business account.
+ */
+const business_of = async (socket: WASocket, jid: string | null) => {
+    const profile = jid ? await socket.getBusinessProfile(jid).catch(() => null) : null;
+    return profile
+        ? {
+            description: profile.description ?? '',
+            email: profile.email ?? null,
+            website: profile.website ?? [],
+            category: profile.category ?? null,
+            address: profile.address ?? null,
+            timezone: profile.business_hours?.timezone ?? null,
+            hours: (profile.business_hours?.business_config ?? profile.business_hours?.config ?? []).map((entry) => ({
+                day: entry.day_of_week,
+                mode: entry.mode,
+                open: entry.open_time != null ? Number(entry.open_time) : null,
+                close: entry.close_time != null ? Number(entry.close_time) : null,
+            })),
+        }
+        : null;
+};
+
+/**
  * Contacto: recibe el raw de baileys y deriva todo con getters.
  * Contact: receives the baileys raw and derives everything via getters.
  */
@@ -130,6 +154,55 @@ export function contact(init: Init) {
                     handler({ name, payload: who as _Contact });
                 }
             });
+        }
+
+        /**
+         * Bloquea o desbloquea al contacto en la cuenta; `Contact.blocked()` lo refleja.
+         * Blocks or unblocks the contact on the account; `Contact.blocked()` reflects it.
+         *
+         * @param value - true bloquea, false desbloquea / true blocks, false unblocks
+         * @returns false cuando el contacto no tiene JID resoluble / false when the contact has no resolvable JID
+         */
+        async block(value: boolean): Promise<boolean> {
+            const jid = this.jid ?? this.lid;
+            if (jid) {
+                await init.socket.updateBlockStatus(jid, value ? 'block' : 'unblock');
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Perfil de negocio del contacto, o null si no es una cuenta Business.
+         * The contact's business profile, or null when it is not a Business account.
+         *
+         * @returns Descripción, correo, sitios, categoría, dirección y horario / Description, email, websites, category, address and hours
+         */
+        async business(): Promise<Awaited<ReturnType<typeof business_of>>> {
+            return business_of(init.socket, this.jid ?? this.lid);
+        }
+
+        /**
+         * Catálogo de productos del contacto: el persistido o el que se baja la primera vez.
+         * Vacío cuando el contacto no es un negocio.
+         * The contact's product catalog: the persisted one or the one downloaded the first time.
+         * Empty when the contact is not a business.
+         */
+        async catalog(): Promise<InstanceType<typeof init.wa.Catalog> | null> {
+            return init.wa.Catalog.get(this);
+        }
+
+        /**
+         * Contactos bloqueados por la cuenta.
+         * Contacts blocked by the account.
+         */
+        static async blocked(): Promise<_Contact[]> {
+            const rows: _Contact[] = [];
+            for (const raw of await init.socket.fetchBlocklist().catch(() => [] as (string | undefined)[])) {
+                const jid = raw ? await jid_of(init.engine, raw, init.socket).catch(() => null) : null;
+                if (jid) rows.push(new this(deserialize<Contact['_raw']>(await init.engine.get(`/contact/${jid}`)) ?? { id: jid }));
+            }
+            return rows;
         }
 
         /**
@@ -251,6 +324,22 @@ export class Account extends Contact {
         }
         await this._init.socket.updateProfileStatus(text);
         return true;
+    }
+
+    /**
+     * Perfil de negocio de la cuenta, o null si no es Business.
+     * The account's business profile, or null when it is not Business.
+     */
+    async business(): Promise<Awaited<ReturnType<typeof business_of>>> {
+        return business_of(this._init.socket, this.jid);
+    }
+
+    /**
+     * Catálogo propio: el persistido o el que se baja la primera vez.
+     * The own catalog: the persisted one or the one downloaded the first time.
+     */
+    async catalog(): Promise<InstanceType<WhatsApp['Catalog']> | null> {
+        return this._init.wa.Catalog.get();
     }
 
     /**

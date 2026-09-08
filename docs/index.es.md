@@ -8,12 +8,14 @@ Una librería de TypeScript para automatización de WhatsApp construida sobre [b
 
 ## Características
 
-- **API basada en clases**: un único orquestador `WhatsApp` con las entidades `Contact`, `Chat` y `Message` ligadas a la sesión. El socket y las credenciales quedan privados: interactúas por métodos y eventos.
+- **API basada en clases**: un único orquestador `WhatsApp` con las entidades `Contact`, `Chat`, `Message` y `Catalog` ligadas a la sesión. El socket y las credenciales quedan privados: interactúas por métodos y eventos.
 - **Motores intercambiables**: `SQLiteEngine` (el más rápido de los integrados), `FileSystemEngine` para desarrollo local, `RedisEngine` y `S3Engine` para despliegues distribuidos, o implementa tu propio `Engine`.
-- **Diez tipos de mensaje**: texto, imagen, video, audio, sticker, documento, ubicación, encuesta, vCard y evento de calendario — cada uno una subclase con sus propios getters (`width`, `duration`, `waveform`, `options`, …).
+- **Once tipos de mensaje**: texto, imagen, video, audio, sticker, documento, ubicación, encuesta, vCard, evento de calendario y tarjeta de producto — cada uno una subclase con sus propios getters (`width`, `duration`, `waveform`, `options`, …). Las menciones, los clips GIF, los stickers y el fijado forman parte de la API de envío.
+- **Grupos**: crear, entrar por enlace, renombrar, describir, agregar, expulsar, ascender y descender miembros, enlaces de invitación y modos solo administradores, con los eventos `chat:joined`, `chat:left`, `chat:promoted` y `chat:demoted`.
+- **Business**: el perfil de cualquier contacto Business y su catálogo de productos, persistido como todo lo demás.
 - **Estados**: publica y consume estados a través de la entidad `Feed` y los eventos `feed:*`.
 - **DSL de decoradores**: sub-entrada opcional `@arcaelas/whatsapp/decorators` con `@Bot`, `@on`, `@once`, `@guard`, `@from`, `@command`, `@pipe`, `@every`, `@delay`, `@pair`.
-- **Sistema de eventos completo**: `connected`, `disconnected`, `message:*`, `chat:*`, `contact:*`, `feed:*` — cada listener recibe el artefacto primero y el cliente al final.
+- **Sistema de eventos completo**: `connected`, `disconnected`, `error`, `message:*`, `chat:*`, `contact:*`, `feed:*` — cada listener recibe el artefacto primero y el cliente al final — más `watch()` en contactos, chats y mensajes.
 - **Resolución de identificadores**: normalización transparente entre números de teléfono, JID (`@s.whatsapp.net`) y LID (`@lid`).
 - **Aislamiento multicuenta**: cada instancia `WhatsApp` posee su propio espacio de nombres en el motor, por lo que múltiples sesiones pueden coexistir en el mismo proceso.
 

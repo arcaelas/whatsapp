@@ -20,6 +20,7 @@ The orchestrator writes to a small, fixed set of branches:
 | `/chat/`     | Chat metadata + per-chat message documents (with their content sub-documents).  |
 | `/status/`   | Status broadcasts (`Feed`) and their content.                                   |
 | `/lid/`      | Bidirectional LID ↔ JID lookup index.                                           |
+| `/catalog/`  | Product catalogs (`Catalog`), one document per business.                        |
 
 Paths use `/` as separator and **never start or end with a slash** once normalized — every driver
 collapses `//` and trims both ends.
@@ -41,6 +42,7 @@ collapses `//` and trims both ends.
 | `/lid/<lid>`                            | Forward map: LID → JID (serialized string).                                  |
 | `/lid/<pn>`                             | Reverse map: JID → LID (serialized string).                                  |
 | `/lid/<digits>_reverse`                 | Legacy fallback read by the JID resolver; written by older versions only.    |
+| `/catalog/<jid>`                        | The business's catalog document with its products.                           |
 
 !!! note "Session keys"
     The exact set of `/session/<category>/<id>` paths depends on what baileys persists. The library
@@ -57,6 +59,7 @@ collapses `//` and trims both ends.
 | --------------------------------- | ---------------------------------------------------------------- |
 | `/chat/<cid>/message/<mid>`       | The message `created_at` (epoch ms).                            |
 | `/status/<id>` (published by you) | The publication timestamp.                                      |
+| `/catalog/<jid>`                  | The download timestamp (`fetched_at`).                          |
 | Everything else                   | None — the driver falls back to write time.                     |
 
 That is why re-syncing history does not reorder your chats: rewriting an old message keeps its
@@ -160,7 +163,7 @@ interface MessageRaw {
     mid: string | null;          // contextInfo.stanzaId (quoted message)
     me: boolean;                 // key.fromMe
     type: 'text' | 'image' | 'video' | 'audio' | 'sticker'
-        | 'document' | 'location' | 'poll' | 'vcard' | 'event';
+        | 'document' | 'location' | 'poll' | 'vcard' | 'event' | 'product';
     author: string;              // resolved JID of the sender
     status: number;              // 0..5, see the table below
     starred: boolean;
@@ -170,8 +173,11 @@ interface MessageRaw {
     mime: string;                // media mimetype, or text/plain
     caption: string;             // text body, caption, poll question or event description
     edited: boolean;
+    revoked_at?: number | null;  // epoch ms when it was deleted for everyone; the document stays
+    pinned_at?: number | null;   // epoch ms when it was pinned in the chat; null once unpinned
     multiple?: boolean;          // polls: multi-select, preserved across re-syncs
     reactions?: { author: string; emoji: string; at: number }[];
+    responses?: { author: string; response: 'going' | 'not_going' | 'maybe'; guests: number; at: number }[];   // events: one per attendee
     raw: WAMessage;              // full baileys raw, used for forward / re-download
 }
 ```
@@ -215,6 +221,7 @@ The payload depends on `type`:
 | `poll`                                               | UTF-8 JSON `{ "content": string, "options": [{ "content": string }] }`. |
 | `vcard`                                              | The raw vCards, newline-joined.                                    |
 | `event`                                              | UTF-8 JSON of the baileys `eventMessage`.                          |
+| `product`                                            | UTF-8 JSON `{ id, owner, name, description, price, currency, retailer_id, url }`. |
 | `image` / `video` / `audio` / `sticker` / `document` | Decrypted bytes downloaded via `downloadMediaMessage`.             |
 
 !!! info "Content is optional and written once"
@@ -245,6 +252,34 @@ interface FeedRaw {
 
 Its content lives at `/status/<id>/content` with the same envelope rules as a message. See
 [Feed](references/feed.md).
+
+---
+
+### Catalog — `/catalog/<jid>`
+
+```ts
+interface CatalogRaw {
+    id: string;              // the business JID
+    fetched_at: number;      // epoch ms of the last download
+    products: {
+        id: string;          // WhatsApp product id
+        owner: string;       // the business JID
+        name: string;
+        description: string;
+        price: number;       // in units, as WhatsApp displays it
+        currency: string;    // ISO 4217
+        retailer_id: string | null;
+        url: string | null;
+        hidden: boolean;
+        images: string[];    // CDN URLs
+        availability: string | null;
+        status: string | null;   // review status
+    }[];
+}
+```
+
+Written by `wa.Catalog.get` the first time and by `catalog.sync()` afterwards. See
+[Catalog](references/catalog.md).
 
 ---
 
@@ -304,6 +339,7 @@ CREATE INDEX documents_order ON documents (parent, score DESC);
 <prefix>:doc:<path>          -> string value (the serialized document)
 <prefix>:doc:<path>:bin      -> raw binary (when the client supports buffers)
 <prefix>:idx:<parent_path>   -> sorted set; score = the score passed to set, member = full child path
+<prefix>:dir:<parent_path>   -> set; the subdirectories of the path (levels that are not documents)
 ```
 
 A write to `/chat/120363@g.us/message/ABC` performs:
@@ -311,13 +347,16 @@ A write to `/chat/120363@g.us/message/ABC` performs:
 ```
 SET   wa:default:doc:chat/120363@g.us/message/ABC  "<json>"
 ZADD  wa:default:idx:chat/120363@g.us/message      <score>  "chat/120363@g.us/message/ABC"
+SADD  wa:default:dir:chat/120363@g.us              "chat/120363@g.us/message"
+SADD  wa:default:dir:chat                          "chat/120363@g.us"
+SADD  wa:default:dir:                              "chat"
 ```
 
 | Operation         | Redis primitives                                                           |
 | ----------------- | ---------------------------------------------------------------------------- |
 | `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
-| `set(path,v,s)`   | `SET` + `ZADD` in one pipeline when the client exposes it                  |
-| `unset(path)`     | `DEL` doc + `ZREM` from parent index + cascade `SCAN`/`DEL`                |
+| `set(path,v,s)`   | `SET` + `ZADD` + `SADD` per ancestor, in one pipeline when the client exposes it |
+| `unset(path)`     | Walks `ZREVRANGE idx:` + `SMEMBERS dir:` down the subtree, then `DEL` in batches of 500 + `ZREM`/`SREM` from the parent |
 | `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET`                                   |
 | `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
 | `clear()`         | `SCAN`/`DEL` on `<prefix>:*`                                               |

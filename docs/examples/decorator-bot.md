@@ -139,10 +139,7 @@ const bot = new DecoratorBot({
 
 await bot.connect(); // pairing handled by @pair
 
-process.on("SIGINT", async () => {
-  await bot.disconnect();
-  process.exit(0);
-});
+process.on("SIGINT", () => process.exit(0));   // exiting keeps the session linked
 ```
 
 ---

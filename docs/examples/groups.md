@@ -2,7 +2,9 @@
 
 Group chats use the same API as 1:1 conversations — the only difference is that the
 identifier ends with `@g.us`. The `Chat` instance exposes the group-specific helpers
-`members()` and `content()`, and every action method works the same.
+(`members()`, `admins()`, `admin()`, `content()`, `rename()`, `describe()`, `add()`,
+`remove()`, `promote()`, `demote()`, `invite()`, `revoke()`, `announce()`, `restrict()`),
+and every other action method works the same.
 
 !!! info "Detection"
     Use `chat.type === 'group'` to branch on group vs. contact chats. The check is
@@ -73,8 +75,8 @@ if (chat && chat.type === 'group') {
 ```
 
 !!! info "Contacts have no `id` getter"
-    A `Contact` exposes `name`, `phone`, `jid`, `lid` and `photo`. In groups addressed by LID,
-    `phone` may be `null` — fall back to `lid` as in the snippet above.
+    A `Contact` exposes `name`, `phone`, `jid`, `lid`, `photo` and `me`. In groups addressed by
+    LID, `phone` may be `null` — fall back to `lid` as in the snippet above.
 
 ---
 
@@ -94,111 +96,103 @@ const banner = await readFile('./assets/standup.png');
 await wa.Message.image(GROUP_CID, banner, { caption: 'See you there!' });
 ```
 
-!!! warning "Mentioning users"
-    The send API does not expose a parameter for `contextInfo.mentionedJid`, so `@user` mentions
-    cannot be attached to outgoing messages. The mention list of an **incoming** message is
-    reachable through the raw document if you need to react to it:
+### Mentioning users
 
-    ```typescript
-    const mentioned = msg._raw.raw.message?.extendedTextMessage?.contextInfo?.mentionedJid ?? [];
-    ```
+Write `@<phone>` in the text and name the same people in `mentions`. The library resolves each one
+to the identifier the group uses — a LID in groups migrated to the new addressing — and rewrites the
+`@` accordingly, so the recipient sees a real mention:
+
+```typescript title="mention.ts"
+await wa.Message.text(GROUP_CID, '@14155557777 can you review the PR?', { mentions: ['14155557777'] });
+
+wa.on('message:created', async (msg) => {
+    if (msg.mentioned) {
+        console.log('mentioned me, along with', (await msg.mentions()).map((who) => who.name));
+    }
+});
+```
 
 ---
 
 ## Admin-only commands
 
-There is no built-in role check — match `msg.from` against your own whitelist. The
-following bot listens for `!purge` and only acts if the sender is in the admin set.
+`chat.admins()` returns the group administrators, so a command can check the author's role against
+the group itself instead of a hand-kept whitelist. The following bot listens for `!purge` and only
+acts when the sender administers the group.
 
 ```typescript title="admin-commands.ts"
 import { Text } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
-const ADMINS = new Set([
-    '14155550001@s.whatsapp.net',
-    '14155550002@s.whatsapp.net',
-]);
-
 wa.on('message:created', async (msg, chat) => {
-    if (chat.type !== 'group') {
-        return;
+    if (chat.type === 'group' && msg instanceof Text && msg.caption.trim() === '!purge') {
+        const author = await msg.author();
+        const admins = await chat.admins();
+        if (admins.some((who) => who.phone === author.phone)) {
+            await chat.clear();
+            await msg.text('History cleared.');
+        } else await msg.text('Only admins can run that command.');
     }
-    if (!(msg instanceof Text)) {
-        return;
-    }
-    if (msg.caption.trim() !== '!purge') {
-        return;
-    }
-    if (!ADMINS.has(msg.from)) {
-        await msg.text('Only admins can run that command.');
-        return;
-    }
-    await chat.clear();
-    await msg.text('History cleared.');
 });
 ```
 
-!!! warning "Whitelists and LID addressing"
+!!! warning "Compare resolved contacts, not `msg.from`"
     `msg.from` is the author identifier as stored: a `@s.whatsapp.net` JID in most groups, but a
-    `@lid` in groups migrated to the new addressing. Store both forms, or compare against
-    `(await msg.author()).phone`.
+    `@lid` in groups migrated to the new addressing. `msg.author()` canonicalizes it, so compare
+    `phone` (or `lid`) between contacts as above.
 
 !!! tip "Decorator alternative"
-    For larger bots prefer the `@from` decorator from `@arcaelas/whatsapp/decorators` — it resolves
-    phones, JIDs and LIDs for you and works with arrays.
+    For a fixed list of operators prefer the `@from` decorator from `@arcaelas/whatsapp/decorators`
+    — it resolves phones, JIDs and LIDs for you and works with arrays.
 
 ---
 
 ## Membership changes
 
-The event map has no dedicated `group:join` / `group:leave` events. Baileys delivers membership
-changes as system messages, which arrive as `message:created` with an empty caption and a
-`messageStubType` in the raw document:
+Membership travels as events: `chat:joined`, `chat:left`, `chat:promoted` and `chat:demoted`
+carry the chat and the affected contacts, and `chat:updated` fires when the group is renamed or
+described.
 
 ```typescript title="membership.ts"
 import { wa } from './client';
 
-wa.on('message:created', (msg, chat) => {
-    const stub = msg._raw.raw.messageStubType;
-    if (chat.type === 'group' && stub) {
-        console.log('[group event]', chat.name, stub, msg._raw.raw.messageStubParameters);
-    }
-});
+wa.on('chat:joined',   (chat, people) => console.log(`${people.map((who) => who.name)} joined ${chat.name}`));
+wa.on('chat:left',     (chat, people) => console.log(`${people.map((who) => who.name)} left ${chat.name}`));
+wa.on('chat:promoted', (chat, people) => console.log(`${people.map((who) => who.name)} now admin in ${chat.name}`));
+wa.on('chat:demoted',  (chat, people) => console.log(`${people.map((who) => who.name)} no longer admin in ${chat.name}`));
+wa.on('chat:updated',  (chat) => console.log(`${chat.name} was renamed or described`));
 ```
 
-The alternative, which does not depend on the raw shape, is diffing the member list:
+The system notice WhatsApp shows for each change still arrives as a `message:created` with an
+empty caption and a `messageStubType` in the raw document; the events above are the way to react to
+it.
 
-```typescript title="membership-poll.ts"
+---
+
+## Creating, joining and moderating
+
+`wa.Chat.create` opens a group with the account as admin and `wa.Chat.join` enters one by invite
+link. Every moderation action lives on the instance and needs admin rights.
+
+```typescript title="moderate.ts"
 import { wa } from './client';
 
-const GROUP_CID = '120363025912345678@g.us';
-const known = new Set<string>();
+const group = await wa.Chat.create('Release crew', ['14155557777', '14155558888']);
+console.log(await group.invite());                   // https://chat.whatsapp.com/…
 
-setInterval(async () => {
-    const chat = await wa.Chat.get(GROUP_CID);
-    if (!chat || chat.type !== 'group') {
-        return;
-    }
-    const current = new Set(
-        (await chat.members(0, 500)).map((member) => member.jid ?? member.lid ?? member.name),
-    );
+await group.describe('Coordination for the 2.0 release');
+await group.promote('14155557777');
+await group.announce(true);                          // only admins send
+await group.remove('14155558888');                   // 1 when WhatsApp accepted it
 
-    for (const id of current) {
-        if (!known.has(id)) {
-            console.log(`Joined: ${id}`);
-        }
-    }
-    for (const id of known) {
-        if (!current.has(id)) {
-            console.log(`Left: ${id}`);
-        }
-    }
-    known.clear();
-    for (const id of current) {
-        known.add(id);
-    }
-}, 30_000);
+const joined = await wa.Chat.join('https://chat.whatsapp.com/AbCdEfGhIjK');
+console.log(joined?.name, await joined?.admin());   // admin(): whether the account moderates it
 ```
+
+!!! warning "WhatsApp decides who can be added"
+    `add()` returns how many entered: a person whose *Groups* privacy is *My contacts* cannot be
+    added by an account they have not saved, and someone removed cannot be added back right away.
+    Share `invite()` with them instead.
 
 ---
 

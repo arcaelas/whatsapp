@@ -50,8 +50,8 @@ await cuenta.post({
 
 | Error | Se lanza cuando |
 | ----- | --------------- |
-| `ERR_FEED_EMPTY` | No se pasó ni `content` ni `caption`. |
-| `ERR_FEED_MEDIA` | `content` no es JPEG/PNG/WebP ni MP4. |
+| `ERR_FEED_EMPTY` | No se pasó ni `buffer` ni `caption`. |
+| `ERR_FEED_MEDIA` | `buffer` no es JPEG/PNG/WebP ni MP4. |
 
 ---
 
@@ -94,8 +94,7 @@ view(): Promise<boolean>
 ```
 
 Marca el estado como visto: envía el read receipt, persiste `viewed` y emite `feed:updated`.
-Llamarlo dos veces es seguro — el receipt solo se envía la primera vez. Devuelve `false` cuando no
-hay socket vivo.
+Llamarlo dos veces es seguro — el receipt solo se envía la primera vez.
 
 ```typescript title="view.ts"
 wa.on("feed:created", async (post) => {
@@ -113,7 +112,7 @@ wa.on("feed:created", async (post) => {
 | `chat()` | Un `Chat` mínimo para `status@broadcast` (los estados no son una conversación real). |
 | `content()` | El texto como UTF-8, o el binario del media descargado. |
 | `stream()` | El contenido como `Readable`. |
-| `reactions()` | Reacciones agrupadas por emoji; una reacción a un estado llega como `feed:updated`. |
+| `reactions()` | Siempre vacío: las reacciones a los estados no se registran. |
 
 ### No soportados
 
@@ -140,7 +139,7 @@ try {
 | Evento | Firma | Se dispara cuando… |
 | ------ | ----- | ------------------ |
 | `feed:created` | `[feed, wa]` | Llega un estado de un contacto, o publicas uno con `account.post()`. |
-| `feed:updated` | `[feed, wa]` | El estado se marca como visto, o alguien reacciona a él. |
+| `feed:updated` | `[feed, wa]` | El estado se marca como visto, por `view()` o por un read receipt. |
 | `feed:deleted` | `[feed, wa]` | El autor revoca el estado. |
 
 A diferencia de `message:*`, el payload **no lleva argumento de chat**: los estados no pertenecen a

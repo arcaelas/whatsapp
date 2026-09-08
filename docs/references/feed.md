@@ -44,14 +44,14 @@ await account.post({
 });
 ```
 
-!!! warning "`contacts` is the audience, and it is mandatory"
+!!! warning "`audience` is mandatory"
     WhatsApp does not deliver a status to anyone outside the list you pass. There is no "all my
     contacts" shortcut: build the list yourself, for instance from `wa.Contact.list()`.
 
 | Error              | Thrown when                                       |
 | ------------------ | ------------------------------------------------- |
-| `ERR_FEED_EMPTY`   | Neither `content` nor `caption` was given.        |
-| `ERR_FEED_MEDIA`   | `content` is neither a JPEG/PNG/WebP nor an MP4.  |
+| `ERR_FEED_EMPTY`   | Neither `buffer` nor `caption` was given.         |
+| `ERR_FEED_MEDIA`   | `buffer` is neither a JPEG/PNG/WebP nor an MP4.   |
 
 ---
 
@@ -94,8 +94,7 @@ view(): Promise<boolean>
 ```
 
 Marks the status as seen: sends the read receipt, persists `viewed` and emits `feed:updated`.
-Calling it twice is safe — the receipt is only sent the first time. Returns `false` when there is
-no live socket.
+Calling it twice is safe — the receipt is only sent the first time.
 
 ```typescript title="view.ts"
 wa.on('feed:created', async (post) => {
@@ -113,7 +112,7 @@ wa.on('feed:created', async (post) => {
 | `chat()`      | A minimal `Chat` for `status@broadcast` (statuses are not a real conversation).     |
 | `content()`   | The text as UTF-8, or the downloaded media binary.                                 |
 | `stream()`    | The content as a `Readable`.                                                       |
-| `reactions()` | Reactions grouped by emoji; a reaction on a status arrives as `feed:updated`.       |
+| `reactions()` | Always empty: reactions to statuses are not tracked.                               |
 
 ### Unsupported
 
@@ -140,7 +139,7 @@ try {
 | Event          | Signature      | Fires when…                                                                 |
 | -------------- | -------------- | ----------------------------------------------------------------------------- |
 | `feed:created` | `[feed, wa]`   | A status arrives from a contact, or you publish one with `account.post()`.        |
-| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, or someone reacts to it.                     |
+| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, by `view()` or by a read receipt.            |
 | `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                               |
 
 Unlike `message:*`, the payload has **no chat argument**: statuses do not belong to a conversation.

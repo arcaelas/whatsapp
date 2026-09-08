@@ -20,7 +20,8 @@ import pino from 'pino';
 import * as QRCode from 'qrcode';
 import Chat, { chat } from '~/lib/chat';
 import Contact, { Account, contact } from '~/lib/contact';
-import Message, { message } from '~/lib/message';
+import { catalog } from '~/lib/catalog';
+import Message, { message, Product, unwrap } from '~/lib/message';
 import { Feed, TTL_MS as FEED_TTL_MS } from '~/lib/status';
 import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
 
@@ -48,7 +49,13 @@ import { deserialize, jid_of, serialize, type Engine } from '~/lib/store';
  */
 const queued = (locks: Map<string, Promise<unknown>>, path: string, work: () => Promise<unknown>) => {
     const next = (locks.get(path) ?? Promise.resolve()).then(work, work);
-    locks.set(path, next.catch(() => { }));
+    const settled = next.catch(() => { });
+    locks.set(path, settled);
+    // El mapa crece una entrada por ruta escrita y una sesión escribe miles de pre-keys y
+    // sesiones Signal: la entrada se suelta cuando nadie más quedó encolado detrás.
+    // The map grows one entry per written path and a session writes thousands of pre-keys
+    // and Signal sessions: the entry is released once nobody else queued behind it.
+    void settled.then(() => { if (locks.get(path) === settled) locks.delete(path); });
     return next;
 };
 
@@ -117,7 +124,7 @@ interface Options {
     autoclean?: boolean;
     /** Reintentos tras cierres no-loggedOut: `true` infinitos, un número como máximo, o el control explícito (`interval` en segundos). / Retries after non-loggedOut closes: `true` for endless, a number as the cap, or explicit control (`interval` in seconds). */
     reconnect?: boolean | number | { max?: number; interval?: number };
-    /** Descargar el historial de mensajes al vincular; contactos, credenciales, LID mappings y tctokens se sincronizan siempre. / Download the message history on link; contacts, credentials, LID mappings and tctokens always sync. */
+    /** Descargar el historial de mensajes al vincular, `false` por defecto: contactos, credenciales, LID mappings y tctokens se sincronizan siempre. / Download the message history on link, `false` by default: contacts, credentials, LID mappings and tctokens always sync. */
     sync?: boolean;
     /**
      * Nombre con el que esta sesión aparece en «Dispositivos vinculados» del teléfono; por
@@ -177,6 +184,13 @@ interface EventMap {
     'chat:unarchived': [ChatInstance, WhatsApp];
     'chat:muted': [ChatInstance, WhatsApp];
     'chat:unmuted': [ChatInstance, WhatsApp];
+    /** El grupo cambió de nombre o de descripción. / The group changed its name or description. */
+    'chat:updated': [ChatInstance, WhatsApp];
+    /** Entraron al grupo; el segundo argumento trae a quiénes. / Joined the group; the second argument says who. */
+    'chat:joined': [ChatInstance, ContactInstance[], WhatsApp];
+    'chat:left': [ChatInstance, ContactInstance[], WhatsApp];
+    'chat:promoted': [ChatInstance, ContactInstance[], WhatsApp];
+    'chat:demoted': [ChatInstance, ContactInstance[], WhatsApp];
     'message:created': [Message, ChatInstance, WhatsApp];
     'message:updated': [Message, ChatInstance, WhatsApp];
     'message:deleted': [Message, ChatInstance, WhatsApp];
@@ -207,6 +221,8 @@ export default class WhatsApp {
     Chat!: ReturnType<typeof chat>;
     /** Entidad `Message`, publicada al conectar. / `Message` entity, published on connect. */
     Message!: ReturnType<typeof message>;
+    /** Entidad `Catalog`, publicada al conectar: el catálogo propio y el de cualquier negocio. / `Catalog` entity, published on connect: the own catalog and any business's. */
+    Catalog!: ReturnType<typeof catalog>;
     /** Cuenta autenticada, publicada al conectar; null mientras no hay usuario. / Authenticated account, published on connect; null while there is no user. */
     account!: () => Promise<Account | null>;
 
@@ -236,7 +252,7 @@ export default class WhatsApp {
 
     async connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void> {
         const { engine } = this;
-        const { phone, method, autoclean = true, sync = true, reconnect = true, device, debug } = this.#options;
+        const { phone, method, autoclean = true, sync = false, reconnect = true, device, debug } = this.#options;
         const digits = phone !== undefined ? String(phone).replace(/\D+/g, '') : '';
         const budget = reconnect === false ? 0 : reconnect === true ? null : typeof reconnect === 'number' ? reconnect : reconnect.max ?? null;
         const wait = typeof reconnect === 'object' ? (reconnect.interval ?? 60) * 1_000 : 60_000;
@@ -308,6 +324,7 @@ export default class WhatsApp {
                 this.Contact = contact(init);
                 this.Chat = chat(init);
                 this.Message = message(init);
+                this.Catalog = catalog(init);
                 this.account = async () => {
                     const user = socket.user;
                     if (!user) return null;
@@ -532,7 +549,12 @@ export default class WhatsApp {
                             if (row.id) {
                                 const id = await canonical(row.id);
                                 const current = deserialize<ContactRaw>(await engine.get(`/contact/${id}`));
+                                // La ficha guardada conserva sus campos y su orden: si la fila no
+                                // trae nada nuevo, el documento queda idéntico y no se reescribe.
+                                // The stored card keeps its fields and their order: when the row
+                                // brings nothing new, the document stays identical and is not rewritten.
                                 const doc: ContactRaw = {
+                                    ...current,
                                     id,
                                     lid: row.lid ?? (row.id.endsWith('@lid') ? row.id : null) ?? current?.lid ?? null,
                                     name: row.name ?? current?.name ?? null,
@@ -565,8 +587,12 @@ export default class WhatsApp {
                                 ...(row.status && { status: row.status }),
                                 ...((row.lid ?? (row.id?.endsWith('@lid') ? row.id : null)) && { lid: row.lid ?? row.id }),
                             };
-                            if (current && Object.keys(patch).length > 0) {
-                                const doc = { ...current, ...patch };
+                            // Cada mensaje entrante trae el pushName y baileys lo reporta como
+                            // actualización: sólo cuenta cuando algo cambió de verdad.
+                            // Every inbound message carries the pushName and baileys reports it
+                            // as an update: it only counts when something actually changed.
+                            const doc: ContactRaw | null = current && { ...current, ...patch };
+                            if (doc && JSON.stringify(current) !== JSON.stringify(doc)) {
                                 await engine.set(`/contact/${id}`, serialize(doc));
                                 await remember(patch.lid, id);
                                 const person = new this.Contact(doc);
@@ -609,6 +635,51 @@ export default class WhatsApp {
                         // was unresolvable now joins its phone, or the contact stays split into
                         // two cards and two chats that never meet again.
                         await absorb(lid, pn);
+                    }).catch(() => { });
+                });
+                /** Ficha de cada participante, canónica y desde el engine. / Each participant's card, canonical and from the engine. */
+                const people = async (ids: (string | null | undefined)[]) => {
+                    const rows: ContactInstance[] = [];
+                    for (const raw of ids) {
+                        if (raw) {
+                            const id = await canonical(raw);
+                            rows.push(new this.Contact(deserialize<ContactRaw>(await engine.get(`/contact/${id}`)) ?? { id, lid: raw.endsWith('@lid') ? raw : null, name: null, notify: null, verified_name: null, img_url: null, status: null }));
+                        }
+                    }
+                    return rows;
+                };
+                socket.ev.on('groups.upsert', (rows) => {
+                    chain = chain.then(async () => {
+                        for (const row of rows) {
+                            const current = deserialize<ChatRaw>(await engine.get(`/chat/${row.id}`));
+                            const doc: ChatRaw = { ...(current ?? { id: row.id }), name: row.subject || current?.name || null };
+                            await engine.set(`/chat/${row.id}`, serialize(doc), doc.activity ?? undefined);
+                            this.emit(current ? 'chat:updated' : 'chat:created', new this.Chat(doc), this);
+                        }
+                    }).catch(() => { });
+                });
+                socket.ev.on('groups.update', (rows) => {
+                    chain = chain.then(async () => {
+                        for (const row of rows) {
+                            // Renombrar y describir llegan por aquí y no por `chats.update`: sin
+                            // esto el nombre del grupo se queda con el de la vinculación.
+                            // Renames and descriptions arrive here and not through `chats.update`:
+                            // without this the group keeps the name it had when linked.
+                            if (row.id && (row.subject !== undefined || row.desc !== undefined)) {
+                                const doc: ChatRaw = { ...(deserialize<ChatRaw>(await engine.get(`/chat/${row.id}`)) ?? { id: row.id }), ...(row.subject && { name: row.subject }) };
+                                await engine.set(`/chat/${row.id}`, serialize(doc), doc.activity ?? undefined);
+                                this.emit('chat:updated', new this.Chat(doc), this);
+                            }
+                        }
+                    }).catch(() => { });
+                });
+                socket.ev.on('group-participants.update', ({ id, participants, action }) => {
+                    chain = chain.then(async () => {
+                        const event = ({ add: 'chat:joined', remove: 'chat:left', promote: 'chat:promoted', demote: 'chat:demoted' } as const)[action as 'add' | 'remove' | 'promote' | 'demote'];
+                        if (event) {
+                            const who = await people(participants.map((participant) => participant.phoneNumber ?? participant.id));
+                            this.emit(event, new this.Chat(deserialize<ChatRaw>(await engine.get(`/chat/${id}`)) ?? { id }), who, this);
+                        }
                     }).catch(() => { });
                 });
                 socket.ev.on('chats.upsert', (rows) => {
@@ -695,9 +766,10 @@ export default class WhatsApp {
                             if (!cid || !mid) {
                                 continue;
                             }
-                            const kind = getContentType(msg.message ?? {});
+                            const content = unwrap(msg.message ?? {});
+                            const kind = getContentType(content);
                             if (kind === 'reactionMessage') {
-                                const target = msg.message?.reactionMessage;
+                                const target = content.reactionMessage;
                                 const found = target?.key?.id && target.key.remoteJid ? await locate(target.key.remoteJid, target.key.id) : null;
                                 if (found && target) {
                                     const author = jidNormalizedUser((msg.key.fromMe ? socket.user?.id : msg.key.participant ?? cid) ?? cid);
@@ -720,9 +792,24 @@ export default class WhatsApp {
                                 }
                                 continue;
                             }
+                            if (kind === 'pinInChatMessage') {
+                                // Fijar no es un mensaje nuevo: es un cambio sobre el mensaje
+                                // fijado, y así se propaga, o cada pin aparece como un texto vacío.
+                                // Pinning is not a new message: it is a change on the pinned
+                                // message, and travels as such, or every pin shows up as an empty text.
+                                const pin = content.pinInChatMessage;
+                                const found = pin?.key?.id ? (await locate(pin.key.remoteJid ?? cid, pin.key.id)) ?? (await locate(cid, pin.key.id)) : null;
+                                if (found) {
+                                    found.doc.pinned_at = pin?.type === proto.Message.PinInChatMessage.Type.PIN_FOR_ALL ? Number(pin.senderTimestampMs) || Date.now() : null;
+                                    await engine.set(found.path, serialize(found.doc), found.doc.created_at);
+                                    const instance = new Message(init, found.doc);
+                                    this.emit('message:updated', instance, await instance.chat(), this);
+                                }
+                                continue;
+                            }
                             if (msg.key.remoteJid === 'status@broadcast') {
-                                const revoked = kind === 'protocolMessage' && msg.message?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
-                                    ? msg.message.protocolMessage.key?.id
+                                const revoked = kind === 'protocolMessage' && content.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
+                                    ? content.protocolMessage.key?.id
                                     : null;
                                 if (revoked) {
                                     const gone = deserialize<FeedRaw>(await engine.get(`/status/${revoked}`));
@@ -748,7 +835,7 @@ export default class WhatsApp {
                                 if (!type || !author) {
                                     continue;
                                 }
-                                const body = msg.message?.[kind as keyof typeof msg.message] as Record<string, unknown> | string | undefined;
+                                const body = content[kind as keyof typeof content] as Record<string, unknown> | string | undefined;
                                 const caption = typeof body === 'string' ? body : ((body?.caption as string) ?? (body?.text as string) ?? '');
                                 const created_at = (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1_000)) * 1_000;
                                 const doc: FeedRaw = {
@@ -773,7 +860,7 @@ export default class WhatsApp {
                                 continue;
                             }
                             if (kind === 'encEventResponseMessage') {
-                                const enc = msg.message?.encEventResponseMessage;
+                                const enc = content.encEventResponseMessage;
                                 const key = enc?.eventCreationMessageKey;
                                 const found = key?.id ? ((key.remoteJid ? await locate(key.remoteJid, key.id) : null) ?? (await locate(cid, key.id))) : null;
                                 const raw_secret = found?.doc.raw.message?.messageContextInfo?.messageSecret;
@@ -811,8 +898,8 @@ export default class WhatsApp {
                                 continue;
                             }
                             if (kind === 'pollUpdateMessage') {
-                                const key = msg.message?.pollUpdateMessage?.pollCreationMessageKey;
-                                const vote = msg.message?.pollUpdateMessage?.vote;
+                                const key = content.pollUpdateMessage?.pollCreationMessageKey;
+                                const vote = content.pollUpdateMessage?.vote;
                                 const found = key?.id ? ((key.remoteJid ? await locate(key.remoteJid, key.id) : null) ?? (await locate(cid, key.id))) : null;
                                 const raw_secret = found?.doc.raw.message?.messageContextInfo?.messageSecret;
                                 const secret = typeof raw_secret === 'string' ? Buffer.from(raw_secret, 'base64') : raw_secret;
@@ -845,7 +932,7 @@ export default class WhatsApp {
                                 continue;
                             }
                             if (kind === 'protocolMessage') {
-                                const protocol = msg.message?.protocolMessage;
+                                const protocol = content.protocolMessage;
                                 // El aviso puede venir direccionado por LID y el documento estar bajo el JID
                                 // (o al revés): se busca por el chat que nombra el protocolo y por el del sobre.
                                 // The notice may be LID-addressed while the document lives under the JID (or the
@@ -878,6 +965,7 @@ export default class WhatsApp {
                                 doc.multiple = typeof stored.multiple === 'boolean' ? stored.multiple : doc.multiple;
                                 doc.reactions = stored.reactions ?? doc.reactions;
                                 doc.revoked_at = stored.revoked_at ?? doc.revoked_at;
+                                doc.pinned_at = stored.pinned_at ?? doc.pinned_at;
                                 const advanced = doc.status > stored.status;
                                 doc.status = Math.max(stored.status, doc.status);
                                 if (!advanced && stored.caption === doc.caption && stored.edited === doc.edited && stored.starred === doc.starred) {
@@ -899,39 +987,56 @@ export default class WhatsApp {
                                     socket.ev.emit('contacts.upsert', [{ id: own, lid: socket.user.lid, notify: readable(msg.pushName) ?? undefined }]);
                                 }
                             }
+                            // El chat se lee una sola vez y acompaña al mensaje hasta el evento:
+                            // cada lectura de más es un round-trip por mensaje en el engine.
+                            // The chat is read once and travels with the message up to the event:
+                            // every extra read is one engine round-trip per message.
+                            let owner = deserialize<ChatRaw>(await engine.get(`/chat/${cid}`));
                             if (!stored && !doc.me) {
-                                const known = deserialize<ContactRaw>(await engine.get(`/contact/${doc.author}`));
-                                if (doc.author && !(known?.name ?? known?.notify ?? known?.verified_name)) {
+                                // En grupos el autor llega por LID y la ficha vive bajo el
+                                // teléfono: sin canonizar, cada mensaje volvía a «descubrir» al
+                                // contacto y reescribía su ficha.
+                                // In groups the author arrives by LID while the card lives under
+                                // the phone: without canonicalizing, every message "discovered" the
+                                // contact again and rewrote its card.
+                                // Un aviso de sistema del grupo no trae autor y cae al JID del
+                                // grupo: no es un contacto y no se le abre ficha.
+                                // A group system notice carries no author and falls back to the
+                                // group JID: it is not a contact and gets no card.
+                                const author = doc.author && !doc.author.endsWith('@g.us') ? doc.author : '';
+                                const known = author ? deserialize<ContactRaw>(await engine.get(`/contact/${await canonical(author)}`)) : null;
+                                if (author && !(known?.name ?? known?.notify ?? known?.verified_name)) {
                                     socket.ev.emit('contacts.upsert', [{
-                                        id: doc.author,
+                                        id: author,
                                         lid: msg.key.remoteJid?.endsWith('@lid') ? msg.key.remoteJid : undefined,
                                         notify: readable(msg.pushName) ?? undefined,
                                         verifiedName: msg.verifiedBizName ?? undefined,
                                     }]);
                                 }
-                                if (!(await engine.get(`/chat/${cid}`))) {
-                                    const owner: ChatRaw = { id: cid, name: cid.endsWith('@g.us') ? null : readable(msg.pushName), activity: doc.created_at };
+                                if (!owner) {
+                                    owner = { id: cid, name: cid.endsWith('@g.us') ? null : readable(msg.pushName), activity: doc.created_at };
                                     await engine.set(`/chat/${cid}`, serialize(owner), doc.created_at);
                                     this.emit('chat:created', new this.Chat(owner), this);
                                 }
                             }
                             await engine.set(`/chat/${cid}/message/${mid}`, serialize(doc), doc.created_at);
-                            const owner = deserialize<ChatRaw>(await engine.get(`/chat/${cid}`));
                             if (owner && doc.created_at > (owner.activity ?? 0)) {
                                 owner.activity = doc.created_at;
                                 await engine.set(`/chat/${cid}`, serialize(owner), doc.created_at);
                             }
+                            const instance = new Message(init, doc);
                             if (!stored) {
-                                const place = msg.message?.locationMessage ?? msg.message?.liveLocationMessage;
-                                const poll = msg.message?.pollCreationMessage ?? msg.message?.pollCreationMessageV2 ?? msg.message?.pollCreationMessageV3;
-                                const cards = msg.message?.contactsArrayMessage?.contacts ?? (msg.message?.contactMessage ? [msg.message.contactMessage] : []);
+                                const place = content.locationMessage ?? content.liveLocationMessage;
+                                const poll = content.pollCreationMessage ?? content.pollCreationMessageV2 ?? content.pollCreationMessageV3;
+                                const cards = content.contactsArrayMessage?.contacts ?? (content.contactMessage ? [content.contactMessage] : []);
                                 const body =
                                     doc.type === 'text' ? doc.caption
                                         : doc.type === 'location' ? JSON.stringify({ lat: place?.degreesLatitude, lng: place?.degreesLongitude })
                                             : doc.type === 'poll' ? JSON.stringify({ content: poll?.name ?? '', options: poll?.options?.map((option) => ({ content: option.optionName })) ?? [] })
                                                 : doc.type === 'vcard' ? cards.map((card) => card.vcard ?? '').join('\n')
-                                                    : doc.type === 'event' ? JSON.stringify(msg.message?.eventMessage ?? {})
-                                                        : null;
+                                                    : doc.type === 'event' ? JSON.stringify(content.eventMessage ?? {})
+                                                        : instance instanceof Product ? JSON.stringify({ id: instance.product_id, owner: instance.owner, name: instance.name, description: instance.description, price: instance.price, currency: instance.currency, retailer_id: instance.retailer_id, url: instance.url })
+                                                            : null;
                                 const binary = body !== null
                                     ? Buffer.from(body, 'utf-8')
                                     : ['image', 'video', 'audio', 'document'].includes(doc.type)
@@ -941,8 +1046,7 @@ export default class WhatsApp {
                                     await (engine.set_buffer?.(`/chat/${cid}/message/${mid}/content`, binary) ?? engine.set(`/chat/${cid}/message/${mid}/content`, serialize({ data: binary.toString('base64') })));
                                 }
                             }
-                            const instance = new Message(init, doc);
-                            const owner_chat = await instance.chat();
+                            const owner_chat = new this.Chat(owner ?? { id: cid });
                             this.emit('message:created', instance, owner_chat, this);
                             if (doc.forwarded) {
                                 this.emit('message:forwarded', instance, owner_chat, this);

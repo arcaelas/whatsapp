@@ -37,9 +37,8 @@ wa.on('message:created', async (msg, chat, wa) => {
     }
 });
 
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
     console.log('\n[wa] shutting down...');
-    await wa.disconnect();
     process.exit(0);
 });
 
@@ -119,13 +118,10 @@ await msg.text('pong');
 ### 6. Graceful shutdown
 
 ```typescript
-process.on('SIGINT', async () => {
-    await wa.disconnect();
-    process.exit(0);
-});
+process.on('SIGINT', () => process.exit(0));
 ```
 
-`disconnect()` closes the socket cleanly and cancels any pending reconnect timer. Pass `{ destroy: true }` if you want to wipe the engine on exit (useful for tests).
+Exiting is enough: the socket dies with the process and the credentials stay in the engine for the next run. `wa.disconnect()` is something else — it unlinks the device from the phone, so the next `connect()` pairs again; pass it `{ destroy: true }` to wipe the engine too (useful for tests).
 
 ---
 

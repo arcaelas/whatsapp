@@ -18,5 +18,6 @@ export type { Engine, RedisClient, SQLiteDatabase } from '~/lib/store';
 
 export { default as Contact, contact, Account } from '~/lib/contact';
 export { default as Chat, chat } from '~/lib/chat';
-export { default as Message, message, Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event } from '~/lib/message';
+export { default as Message, message, Text, Image, Video, Audio, Sticker, Document, Location, Poll, VCard, Event, Product } from '~/lib/message';
 export { Feed, TTL_MS as FEED_TTL_MS } from '~/lib/status';
+export { default as Catalog, catalog } from '~/lib/catalog';

@@ -20,6 +20,7 @@ El orquestador escribe en un conjunto pequeño y fijo de ramas:
 | `/chat/`     | Metadatos de chats + documentos de mensajes por chat (con sus subdocumentos de contenido). |
 | `/status/`   | Estados (`Feed`) y su contenido.                                                   |
 | `/lid/`      | Índice bidireccional de búsqueda LID ↔ JID.                                        |
+| `/catalog/`  | Catálogos de productos (`Catalog`), un documento por negocio.                      |
 
 Las rutas usan `/` como separador y **nunca empiezan ni terminan con barra** una vez normalizadas —
 todos los drivers colapsan `//` y recortan los extremos.
@@ -41,6 +42,7 @@ todos los drivers colapsan `//` y recortan los extremos.
 | `/lid/<lid>`                            | Mapa directo: LID → JID (string serializado).                                  |
 | `/lid/<pn>`                             | Mapa inverso: JID → LID (string serializado).                                  |
 | `/lid/<digits>_reverse`                 | Fallback legado que lee el resolver de JIDs; solo lo escribían versiones antiguas. |
+| `/catalog/<jid>`                        | El documento del catálogo del negocio con sus productos.                       |
 
 !!! note "Claves de sesión"
     El conjunto exacto de rutas `/session/<category>/<id>` depende de lo que baileys persista. La
@@ -57,6 +59,7 @@ todos los drivers colapsan `//` y recortan los extremos.
 | ---------------------------------- | ---------------------------------------------------------------- |
 | `/chat/<cid>/message/<mid>`        | El `created_at` del mensaje (epoch ms).                         |
 | `/status/<id>` (publicado por ti)  | La marca de tiempo de la publicación.                           |
+| `/catalog/<jid>`                  | La marca de tiempo de la descarga (`fetched_at`).               |
 | Todo lo demás                      | Ninguno — el driver cae en la hora de escritura.                |
 
 Por eso resincronizar el historial no reordena tus chats: reescribir un mensaje viejo conserva su
@@ -161,7 +164,7 @@ interface MessageRaw {
     mid: string | null;          // contextInfo.stanzaId (mensaje citado)
     me: boolean;                 // key.fromMe
     type: 'text' | 'image' | 'video' | 'audio' | 'sticker'
-        | 'document' | 'location' | 'poll' | 'vcard' | 'event';
+        | 'document' | 'location' | 'poll' | 'vcard' | 'event' | 'product';
     author: string;              // JID resuelto del remitente
     status: number;              // 0..5, ver la tabla de abajo
     starred: boolean;
@@ -171,8 +174,11 @@ interface MessageRaw {
     mime: string;                // mimetype del media, o text/plain
     caption: string;             // cuerpo del texto, pie, pregunta de encuesta o descripción del evento
     edited: boolean;
+    revoked_at?: number | null;  // epoch ms en que se eliminó para todos; el documento se conserva
+    pinned_at?: number | null;   // epoch ms en que se fijó en el chat; null al soltarlo
     multiple?: boolean;          // encuestas: selección múltiple, preservada entre re-syncs
     reactions?: { author: string; emoji: string; at: number }[];
+    responses?: { author: string; response: 'going' | 'not_going' | 'maybe'; guests: number; at: number }[];   // eventos: una por asistente
     raw: WAMessage;              // crudo completo de baileys, usado para reenviar / redescargar
 }
 ```
@@ -216,6 +222,7 @@ El contenido depende de `type`:
 | `poll`                                               | JSON UTF-8 `{ "content": string, "options": [{ "content": string }] }`. |
 | `vcard`                                              | Las vCards crudas, unidas por saltos de línea.                       |
 | `event`                                              | JSON UTF-8 del `eventMessage` de baileys.                            |
+| `product`                                            | JSON UTF-8 `{ id, owner, name, description, price, currency, retailer_id, url }`. |
 | `image` / `video` / `audio` / `sticker` / `document` | Bytes descifrados descargados con `downloadMediaMessage`.            |
 
 !!! info "El contenido es opcional y se escribe una sola vez"
@@ -246,6 +253,34 @@ interface FeedRaw {
 
 Su contenido vive en `/status/<id>/content` con las mismas reglas de envoltorio que un mensaje. Ver
 [Feed](references/feed.es.md).
+
+---
+
+### Catálogo — `/catalog/<jid>`
+
+```ts
+interface CatalogRaw {
+    id: string;              // el JID del negocio
+    fetched_at: number;      // epoch ms de la última descarga
+    products: {
+        id: string;          // id del producto en WhatsApp
+        owner: string;       // el JID del negocio
+        name: string;
+        description: string;
+        price: number;       // en unidades, como lo muestra WhatsApp
+        currency: string;    // ISO 4217
+        retailer_id: string | null;
+        url: string | null;
+        hidden: boolean;
+        images: string[];    // URLs del CDN
+        availability: string | null;
+        status: string | null;   // estado de revisión
+    }[];
+}
+```
+
+Lo escribe `wa.Catalog.get` la primera vez y `catalog.sync()` después. Ver
+[Catalog](references/catalog.es.md).
 
 ---
 
@@ -305,6 +340,7 @@ CREATE INDEX documents_order ON documents (parent, score DESC);
 <prefix>:doc:<path>          -> valor string (el documento serializado)
 <prefix>:doc:<path>:bin      -> binario crudo (cuando el cliente soporta buffers)
 <prefix>:idx:<parent_path>   -> sorted set; score = el score pasado a set, member = ruta completa del hijo
+<prefix>:dir:<parent_path>   -> set; los subdirectorios de la ruta (niveles que no son documentos)
 ```
 
 Una escritura en `/chat/120363@g.us/message/ABC` ejecuta:
@@ -312,13 +348,16 @@ Una escritura en `/chat/120363@g.us/message/ABC` ejecuta:
 ```
 SET   wa:default:doc:chat/120363@g.us/message/ABC  "<json>"
 ZADD  wa:default:idx:chat/120363@g.us/message      <score>  "chat/120363@g.us/message/ABC"
+SADD  wa:default:dir:chat/120363@g.us              "chat/120363@g.us/message"
+SADD  wa:default:dir:chat                          "chat/120363@g.us"
+SADD  wa:default:dir:                              "chat"
 ```
 
 | Operación         | Primitivas de Redis                                                        |
 | ----------------- | ---------------------------------------------------------------------------- |
 | `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
-| `set(path,v,s)`   | `SET` + `ZADD` en un solo pipeline cuando el cliente lo expone             |
-| `unset(path)`     | `DEL` del doc + `ZREM` del índice padre + cascada `SCAN`/`DEL`             |
+| `set(path,v,s)`   | `SET` + `ZADD` + un `SADD` por ancestro, en un solo pipeline cuando el cliente lo expone |
+| `unset(path)`     | Recorre `ZREVRANGE idx:` + `SMEMBERS dir:` por el subárbol y luego `DEL` en lotes de 500 + `ZREM`/`SREM` del padre |
 | `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET`                                   |
 | `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
 | `clear()`         | `SCAN`/`DEL` sobre `<prefix>:*`                                            |

@@ -170,7 +170,8 @@ Valid event names are documented in [References / Events](events.md): `connected
 `message:created`, `message:updated`, `message:deleted`, `message:reacted`, `message:starred`,
 `message:unstarred`, `message:forwarded`, `message:seen`, `contact:created`, `contact:updated`,
 `chat:created`, `chat:deleted`, `chat:pinned`, `chat:unpinned`, `chat:archived`, `chat:unarchived`,
-`chat:muted`, `chat:unmuted`, `feed:created`, `feed:updated`, `feed:deleted`.
+`chat:muted`, `chat:unmuted`, `chat:updated`, `chat:joined`, `chat:left`, `chat:promoted`,
+`chat:demoted`, `contact:presence`, `error`, `feed:created`, `feed:updated`, `feed:deleted`.
 
 !!! tip "Listener payload"
     Handler arguments mirror the emitter payload. For message events the signature is
