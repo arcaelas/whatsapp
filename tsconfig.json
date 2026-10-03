@@ -10,6 +10,7 @@
     },
     "outDir": "./build",
     "declaration": true,
+    "stripInternal": true,
     "sourceMap": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
