@@ -8,14 +8,15 @@ A TypeScript library for WhatsApp automation built on top of [baileys v7](https:
 
 ## Features
 
-- **Class-based API**: a single `WhatsApp` orchestrator with the `Contact`, `Chat`, `Message` and `Catalog` entities bound to the session. The socket and the credentials stay private — you interact through methods and events.
+- **Class-based API**: a single `WhatsApp` orchestrator with the `Contact`, `Chat`, `Message`, `Feed`, `Catalog` and `Product` entities bound to the session, plus `account()` for the authenticated account. The socket and the credentials stay private — you interact through methods and events.
+- **Raw storage**: every engine document is the raw WhatsApp delivers — contacts and chats as they arrive, messages, statuses and catalog collections as timelines of the raws exactly as baileys emits them — and every entity carries `metadata()` for your own values, stored next to it in the engine.
 - **Pluggable engines**: `SQLiteEngine` (the fastest built-in), `FileSystemEngine` for local development, `RedisEngine` and `S3Engine` for distributed deployments, or implement your own `Engine`.
 - **Eleven message types**: text, image, video, audio, sticker, document, location, poll, vCard, calendar event and product card — each one a subclass with its own getters (`width`, `duration`, `waveform`, `options`, …). Mentions, GIF clips, stickers and pinning are part of the send API.
 - **Groups**: create, join by link, rename, describe, add, remove, promote and demote members, invite links and admin-only modes, with `chat:joined`, `chat:left`, `chat:promoted` and `chat:demoted` events.
-- **Business**: the profile of any Business contact and its product catalog, persisted like everything else.
+- **Business**: the product catalog of any Business contact through `contact.catalog()`, one `Catalog` per collection, stored in the engine and refreshed in the background once it is older than 24 hours.
 - **Status broadcasts**: publish and consume statuses through the `Feed` entity and the `feed:*` events.
 - **Decorator DSL**: optional `@arcaelas/whatsapp/decorators` sub-entry with `@Bot`, `@on`, `@once`, `@guard`, `@from`, `@command`, `@pipe`, `@every`, `@delay`, `@pair`.
-- **Full event system**: `connected`, `disconnected`, `error`, `message:*`, `chat:*`, `contact:*`, `feed:*` — every listener receives the artifact first and the client last — plus `watch()` on contacts, chats and messages.
+- **Full event system**: `connected`, `disconnected`, `error`, `message:*`, `chat:*`, `contact:*`, `feed:*`, `catalog:updated` — every listener receives the artifact first and the client last, except `disconnected`, which receives `(wa, farewell)` — plus `sub()` on contacts, chats, messages and catalogs.
 - **Identifier resolution**: transparent normalization between phone numbers, JID (`@s.whatsapp.net`) and LID (`@lid`).
 - **Multi-account isolation**: each `WhatsApp` instance owns its engine namespace, so multiple sessions can coexist in the same process.
 
@@ -28,14 +29,14 @@ import WhatsApp, { FileSystemEngine } from "@arcaelas/whatsapp";
 import { writeFileSync } from "node:fs";
 
 const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + "/.session"),
+    engine: new FileSystemEngine(".session"),
     phone: 5491112345678,
 });
 
 wa.on("connected", () => console.log("session ready"));
 
 wa.on("message:created", async (msg, chat) => {
-    if (!msg.me && msg.caption === "ping") {
+    if (!msg.me && msg.caption() === "ping") {
         await msg.text("pong 🏓");
     }
 });

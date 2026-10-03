@@ -7,8 +7,8 @@ can decrypt the tally. The library handles key derivation and decryption transpa
 
 !!! info "Encryption is automatic"
     The library derives the per-poll HMAC key, decrypts incoming `pollUpdateMessage` payloads,
-    merges them into the stored poll and emits `message:updated`. You never need to touch raw bytes
-    or vote signatures.
+    appends them to the poll's timeline and emits `message:updated`. You never need to touch raw
+    bytes or vote signatures.
 
 ---
 
@@ -18,7 +18,7 @@ can decrypt the tally. The library handles key derivation and decryption transpa
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 export const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + '/.session'),
+    engine: new FileSystemEngine('.session'),
     phone: 14155551234,
 });
 
@@ -63,16 +63,15 @@ await wa.Message.poll(GROUP_CID, {
 ## Receiving votes
 
 Vote tallies arrive as `message:updated` events on the original poll. Detect with
-`instanceof Poll`, then read `options` — each entry is `{ name, count }` — and the
+`instanceof wa.Message.Poll`, then read `options` — each entry is `{ name, count }` — and the
 `multiple` flag.
 
 ```typescript title="watch-poll.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', (msg, chat) => {
-    if (msg instanceof Poll) {
-        console.log(`[${chat.name}] ${msg.caption}`);
+    if (msg instanceof wa.Message.Poll) {
+        console.log(`[${chat.name()}] ${msg.caption()}`);
         console.log(`Mode: ${msg.multiple ? 'multi-select' : 'single-select'}`);
         for (const option of msg.options) {
             console.log(`  ${option.name}: ${option.count}`);
@@ -82,12 +81,12 @@ wa.on('message:updated', (msg, chat) => {
 ```
 
 !!! tip "Filtering a single poll"
-    There is no per-message subscription helper. Keep the id you care about and compare it inside
-    the listener:
+    `msg.sub()` reports `updated`, `deleted`, `reacted`, `seen` and `played`. For the votes, keep the id you care
+    about and compare it inside the listener:
 
     ```typescript
     const off = wa.on('message:updated', (msg) => {
-        if (msg instanceof Poll && msg.id === poll_id) {
+        if (msg instanceof wa.Message.Poll && msg.id === poll_id) {
             console.log(msg.options);
         }
     });
@@ -103,11 +102,10 @@ wa.on('message:updated', (msg, chat) => {
 chosen option and `contact` is the voter's phone.
 
 ```typescript title="votes.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', async (msg) => {
-    if (msg instanceof Poll) {
+    if (msg instanceof wa.Message.Poll) {
         for (const vote of await msg.votes()) {
             console.log(`${vote.contact} voted for ${vote.name}`);
         }
@@ -123,7 +121,6 @@ Call `poll.select(index)` to cast a single-choice vote, or `poll.select([i, j])`
 multi-select polls. Indices map to the order of `options`.
 
 ```typescript title="vote.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 const POLL_CID = '120363025912345678@g.us';
@@ -131,7 +128,7 @@ const POLL_MID = '3EB0C7689C2E0F5A4F4E';
 
 const poll = await wa.Message.get(POLL_CID, POLL_MID);
 
-if (poll instanceof Poll) {
+if (poll instanceof wa.Message.Poll) {
     if (poll.multiple) {
         await poll.select([0, 2]); // first and third option
     } else {
@@ -144,7 +141,7 @@ if (poll instanceof Poll) {
     The vote is encrypted and relayed correctly, but WhatsApp does **not** propagate a vote emitted
     from a linked (companion) device — which is what this library is. Incoming votes decrypt fine;
     your own vote may not appear on other devices. `select()` returns `false` when the poll has no
-    encryption key, there is no socket, or no valid index was given.
+    encryption key or no valid index was given.
 
 ---
 
@@ -155,13 +152,12 @@ picks a random valid option and votes. Demonstrates create + receive + vote in a
 single example.
 
 ```typescript title="auto-vote-bot.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 const TEST_GROUP = '120363025912345678@g.us';
 
 wa.on('message:created', async (msg) => {
-    if (!(msg instanceof Poll)) {
+    if (!(msg instanceof wa.Message.Poll)) {
         return;
     }
     if (msg.cid !== TEST_GROUP || msg.me) {
@@ -189,7 +185,7 @@ wa.on('message:created', async (msg) => {
         await msg.select(Math.floor(Math.random() * total_options));
     }
 
-    console.log(`Auto-voted on "${msg.caption}"`);
+    console.log(`Auto-voted on "${msg.caption()}"`);
 });
 ```
 
@@ -201,11 +197,10 @@ Like every `Message` subclass, `Poll` inherits `text()`, `image()`, etc. — rep
 to a poll quotes it automatically.
 
 ```typescript title="reply-to-poll.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', async (msg) => {
-    if (!(msg instanceof Poll)) {
+    if (!(msg instanceof wa.Message.Poll)) {
         return;
     }
     const total = msg.options.reduce((sum, option) => sum + option.count, 0);

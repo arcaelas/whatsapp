@@ -1,7 +1,8 @@
 # WhatsApp
 
 La clase `WhatsApp` es el orquestador del cliente. Posee el motor de almacenamiento, expone las
-entidades `Contact`, `Chat` y `Message` ligadas a la sesión, y emite el mapa completo de eventos.
+entidades `Contact`, `Chat`, `Message`, `Feed`, `Catalog` y `Product` ligadas a la sesión, devuelve
+el contacto propio con `me()` y emite el mapa completo de eventos.
 Instanciar la clase **no** abre una conexión; debes llamar a `connect(callback)` explícitamente.
 
 ---
@@ -33,7 +34,7 @@ La opción `engine` es **obligatoria**. Todos los demás campos son opcionales.
 | `autoclean` | `boolean`                                                  | `true`      | En un `loggedOut` remoto, limpia todo el motor. Con `false` solo se elimina `/session/creds` (se conserva el historial).             |
 | `reconnect` | `boolean \| number \| { max?: number; interval?: number }` | `true`      | Política de autoreconexión para cierres no-`loggedOut`. `interval` está en segundos. `true` reintenta por siempre cada 60s.          |
 | `sync`      | `boolean`                                                  | `false`     | Descarga el **historial de mensajes** al vincular. Contactos, credenciales, LID mappings y tctokens se sincronizan siempre, sin importar esta bandera. |
-| `device`    | `string`                                                   | `'Chrome'`  | Nombre con el que esta sesión aparece en *Dispositivos vinculados* del teléfono. Con varias sesiones en una cuenta es lo único que permite distinguirlas. |
+| `device`    | `string`                                                   | `'Chrome'`  | Nombre con el que esta sesión aparece en *Dispositivos vinculados* del teléfono. Con varias sesiones en una cuenta es lo único que permite distinguirlas. Evita `'Desktop'` junto con `sync: true`: baileys 7.0.0-rc14 anuncia entonces la plataforma `WIN32`, ya retirada, y WhatsApp cierra el handshake con 428 antes del QR. |
 | `debug`     | `'silent' \| 'fatal' \| 'error' \| 'warn' \| 'info' \| 'debug' \| 'trace'` | `'silent'` | Nivel del log interno de baileys. `Farewell` da el código del cierre; el intercambio que llevó hasta él solo aparece en `debug` o `trace`. |
 
 !!! info "Atajos de reconnect"
@@ -69,8 +70,8 @@ La opción `engine` es **obligatoria**. Todos los demás campos son opcionales.
 ```typescript
 wa.engine                            // el motor de persistencia que pasaste
 wa.Contact / wa.Chat / wa.Message    // entidades, publicadas al conectar
-wa.Catalog                           // catálogos de productos, publicado al conectar
-await wa.account()                   // Account del usuario autenticado, o null durante el pairing
+wa.Feed / wa.Catalog / wa.Product    // estados, catálogos y productos, publicados al conectar
+await wa.me()                        // el Contact propio, o null durante el pairing
 
 await wa.connect(callback)           // el callback recibe el PIN (string) o el QR (Buffer PNG)
 await wa.disconnect({ silent?, destroy? })   // desvincula el dispositivo del teléfono
@@ -84,8 +85,8 @@ wa.emit(event, ...args)              // true si había listeners
 !!! danger "No hay estado privado que alcanzar"
     El socket de baileys, las credenciales y el estado de reintentos viven en el closure de
     `connect`, no en la instancia. `wa._socket` y compañía **no existen**: todo pasa por los
-    métodos de arriba. Las entidades y `account()` se publican dentro de `connect`, cuando el
-    socket ya existe — antes de la primera conexión no están definidas.
+    métodos de arriba. Las entidades se publican en el primer `connect`, cuando el socket ya existe
+    —antes no están definidas— y conservan su identidad entre reconexiones.
 
 ---
 
@@ -97,11 +98,16 @@ wa.emit(event, ...args)              // true si había listeners
 connect(callback: (auth: string | Buffer) => void | Promise<void>): Promise<void>
 ```
 
-Abre la conexión. El callback se invoca cada vez que baileys produce un artefacto de autenticación
-nuevo (se refresca cada ~20 segundos hasta que el dispositivo queda vinculado):
+Abre la conexión. El callback se invoca cada vez que hay un artefacto de autenticación nuevo, hasta
+que el dispositivo queda vinculado:
 
-- Con `phone` y `method` en `'otp'` → el callback recibe el **PIN** (string).
-- Con `phone` y `method: 'qr'`, o sin `phone` → el callback recibe un **`Buffer` PNG** con el QR.
+- Con `phone` y `method` en `'otp'` → el callback recibe el **PIN** (string). Cada tres refrescos del
+  QR (unos 100 segundos) la solicitud se renueva, reusando el mismo código.
+- Con `phone` y `method: 'qr'`, o sin `phone` → el callback recibe un **`Buffer` PNG** con el QR, que
+  se refresca cada ~20 segundos.
+
+Mientras el dispositivo no está vinculado, la serie de QR que se agota abre otra al instante, y el PIN
+conserva el mismo código, incluso si el proceso se reinicia.
 
 La promesa resuelve cuando la sesión sincroniza y `connection === 'open'`. Rechaza con
 `Error('Logged out')` ante `loggedOut`, o con `Error('Reconnect attempts exhausted (N)')` cuando se
@@ -128,7 +134,7 @@ const wa = new WhatsApp({
 });
 
 await wa.connect((auth) => {
-    console.log('Empareja este código en tu teléfono:', auth);
+    console.log('Pair this code on your phone:', auth);
 });
 ```
 
@@ -187,74 +193,66 @@ mapa completo.
 
 ```typescript title="Suscribir y desuscribir" hl_lines="5"
 const off = wa.on('message:created', (msg, chat) => {
-    console.log(`[${chat.id}] ${msg.caption}`);
+    console.log(`[${chat.id}] ${msg.caption()}`);
 });
 
 off(); // desengancha más tarde
 ```
 
 !!! tip "`emit` es público a propósito"
-    Las entidades de la librería lo usan para propagar los cambios que provocan (`Feed.view()`
+    Las entidades de la librería lo usan para propagar los cambios que provocan (`Feed.seen(true)`
     emite `feed:updated`, `Poll.select()` emite `message:updated`). Puedes emitir tus propios
     payloads para ejercitar handlers en pruebas sin un socket vivo.
 
 ---
 
-## La cuenta
+## El contacto propio
 
 ```typescript
-account(): Promise<Account | null>
+me(): Promise<Contact | null>
 ```
 
-Devuelve la cuenta autenticada como un [`Account`](contact.es.md#account) — subclase de
-`Contact` ligada a la sesión — o `null` mientras no hay usuario (durante el pairing). La ficha
-llega con la foto de perfil ya resuelta.
+Devuelve la propia cuenta como un [`Contact`](contact.es.md) —`me` es `true`— con el nombre público
+de la sesión, o `null` mientras no hay usuario (durante el pairing). El perfil se cambia sobre él:
+`rename()`, `content(value)`, `photo(value)` y `online()` sólo funcionan en el contacto propio y
+rechazan con `ERR_NOT_ALLOWED` en cualquier otro.
 
-```typescript title="account.ts"
-const cuenta = await wa.account();
+```typescript title="me.ts"
+const me = await wa.me();
 
-await cuenta.rename('Ventas');              // nombre público
-await cuenta.picture(buffer);               // Buffer o URL https; null la elimina
-await cuenta.content();                     // lee la bio
-await cuenta.content('Atendemos 9-18h');    // la actualiza
-await cuenta.online(true);                  // presencia: el socket arranca offline
-
-const post = await cuenta.post({
-    caption: '¡Estamos en vivo!',
-    audience: [contacto, 5491112345678, '584121234567@s.whatsapp.net'],
-});
+await me?.rename('Ventas');                 // nombre público
+await me?.photo(buffer);                    // cambia la foto; null la elimina
+await me?.content('Abierto 9-18h');         // escribe la biografía
+await me?.online(true);                     // presencia: el socket arranca offline
+await wa.Feed.create({ caption: '¡Estamos en vivo!' });   // los estados se publican con Feed
 ```
-
-`post` publica un estado y devuelve el [`Feed`](feed.es.md) creado; la audiencia es obligatoria
-y acepta instancias de `Contact`, JIDs, LIDs o teléfonos.
-
-| Error                     | Cuándo                                              |
-| ------------------------- | --------------------------------------------------- |
-| `ERR_FEED_EMPTY`          | No llegó ni `buffer` ni `caption`.                  |
-| `ERR_FEED_MEDIA`          | `buffer` no es JPEG/PNG/WebP ni MP4.                |
-| `ERR_PROFILE_PICTURE_LIB` | `picture()` sin `sharp` ni `jimp` instalados.       |
 
 ---
 
 ## Entidades
 
-La instancia lleva las tres entidades ligadas a la sesión actual, publicadas al conectar:
+La instancia lleva las entidades ligadas a la sesión actual, publicadas al conectar. Cada clase la
+construye su factory (`contact`, `chat`, `message`, `feed`, `catalog`, `product`) en la primera
+conexión; el paquete exporta esas factories, y los nombres `Contact`, `Chat`, `Message`, `Feed`,
+`Catalog` y `Product` solo como tipos.
 
 | Propiedad    | Qué es                                                                                                |
 | ------------ | ----------------------------------------------------------------------------------------------------- |
-| `wa.Contact` | Subclase de `Contact` ligada a la sesión: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`, `wa.Contact.blocked`. |
-| `wa.Chat`    | Subclase de `Chat` ligada a la sesión: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`, `wa.Chat.create`, `wa.Chat.join`. |
-| `wa.Message` | Subclase de `Message` ligada a la sesión: lecturas, envíos, acciones por id y las subclases.            |
-| `wa.Catalog` | Subclase de `Catalog` ligada a la sesión: `wa.Catalog.get()` para el catálogo propio, `wa.Catalog.get(uid)` para el de un negocio. Ver [Catalog](catalog.es.md). |
+| `wa.Contact` | Clase `Contact` ligada a la sesión: `new wa.Contact(raw)`, `wa.Contact.get`, `wa.Contact.list`. Ver [Contact](contact.es.md). |
+| `wa.Chat`    | Clase `Chat` ligada a la sesión: `new wa.Chat(raw)`, `wa.Chat.get`, `wa.Chat.list`, `wa.Chat.create`, `wa.Chat.join`. Ver [Chat](chat.es.md). |
+| `wa.Message` | Clase `Message` ligada a la sesión: `new wa.Message(timeline)` devuelve la subclase de su tipo; lecturas, envíos, acciones por id y las subclases. |
+| `wa.Feed`    | Clase `Feed` ligada a la sesión: `new wa.Feed(timeline)`, `wa.Feed.get`, `wa.Feed.list`, `wa.Feed.create`. Ver [Feed](feed.es.md). |
+| `wa.Catalog` | Clase `Catalog` ligada a la sesión, una instancia por colección de un negocio: `new wa.Catalog(timeline, jid, updated_at)`, `wa.Catalog.product(uid, pid)`. Los catálogos se leen con `contact.catalog()`. Ver [Catalog](catalog.es.md). |
+| `wa.Product` | Clase `Product` del catálogo ligada a la sesión: `new wa.Product(timeline, jid)`. `instanceof wa.Product` también reconoce las tarjetas de producto que llegan a los chats. |
 | `wa.engine`  | Acceso directo al motor de almacenamiento.                                                             |
-| `wa.account()` | El usuario autenticado como [`Account`](contact.es.md#account), o `null` durante el pairing.         |
+| `wa.me()`    | El `Contact` propio, o `null` durante el pairing.                                                     |
 
 ```typescript title="Usando las entidades"
 const chats  = await wa.Chat.list(0, 20);
 const person = await wa.Contact.get('5491112345678');
-await wa.Message.text('5491112345678', 'Hola');
+await wa.Message.text('5491112345678', 'Hello');
 
-console.log((await wa.account())?.name);
+console.log((await wa.me())?.name);
 ```
 
 ### La clase `wa.Message`
@@ -268,8 +266,8 @@ La clase ligada lleva cada lectura, envío y acción por id con la sesión ya ap
 | Acción  | `react(cid, mid, emoji)`, `star(cid, mid, value)`, `seen(cid, mid)`, `edit(cid, mid, caption)`, `forward(cid, mid, target)`, `delete(cid, mid, all?)`, `pin(cid, mid, value, days?)` |
 | Clases  | `Text`, `Image`, `Video`, `Audio`, `Sticker`, `Document`, `Location`, `Poll`, `VCard`, `Event`, `Product` |
 
-Las clases expuestas ahí son exactamente las que exporta el paquete, así que
-`msg instanceof wa.Message.Poll` y `msg instanceof Poll` son equivalentes.
+Esas clases existen solo ahí: el paquete exporta `Text`, `Poll` y el resto como tipos, así que
+`instanceof` pasa por la clase ligada, como en `msg instanceof wa.Message.Poll`.
 
 ---
 
@@ -313,8 +311,8 @@ wa.on('connected',    () => console.log('online'));
 wa.on('disconnected', (_, farewell) => console.log('offline:', farewell.reason, farewell.code));
 
 wa.on('message:created', async (msg, chat) => {
-    if (!msg.me && msg.caption === '/ping') {
-        await msg.text(`pong desde ${chat.name}`);
+    if (!msg.me && msg.caption() === '/ping') {
+        await msg.text(`pong from ${chat.name()}`);
     }
 });
 

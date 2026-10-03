@@ -26,7 +26,7 @@ export interface Engine {
 }
 ```
 
-Six required methods, all path-based, all string in / string out. The library handles JSON serialization above the engine — your job is purely key-value persistence.
+Six required methods, all path-based, all string in / string out. The library handles JSON serialization above the engine — your job is purely key-value persistence. Each value is a serialized raw from WhatsApp (a contact, a chat) or a timeline, the array of raws baileys emitted in arrival order (a message, a status, a catalog collection).
 
 Rules to honor:
 
@@ -218,13 +218,12 @@ export class LoggingEngine implements Engine {
 Wire it around any other engine — the bot doesn't know the difference:
 
 ```typescript title="index.ts"
-import { join } from 'node:path';
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 import { LoggingEngine } from './logging-engine';
 
 const wa = new WhatsApp({
     engine: new LoggingEngine(
-        new FileSystemEngine(join(__dirname, 'session')),
+        new FileSystemEngine('session'),
         'fs',
     ),
     phone: 5491112345678,
@@ -235,9 +234,9 @@ Now every read/write goes through the console:
 
 ```text
 [fs] get /session/creds HIT (1842b)
-[fs] set /chat/5491112345678@s.whatsapp.net 73b score=now
-[fs] set /chat/5491112345678@s.whatsapp.net/message/ABC 4211b score=1767371367857
+[fs] set /chat/5491112345678@s.whatsapp.net/message/ABC 4211b score=1767371367000
 [fs] set_buffer /chat/5491112345678@s.whatsapp.net/message/ABC/content 51204b
+[fs] set /chat/5491112345678@s.whatsapp.net 73b score=1767371367000
 [fs] list /chat offset=0 limit=50 -> 12 items
 [fs] count /chat/5491112345678@s.whatsapp.net/message -> 47
 ```

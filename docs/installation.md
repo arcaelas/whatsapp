@@ -46,7 +46,7 @@ when you use the matching feature:
 | Package                | Needed for                                              |
 | ---------------------- | -------------------------------------------------------- |
 | `@aws-sdk/client-s3`   | `S3Engine`                                              |
-| `sharp` **or** `jimp`  | `account.picture(…)` — baileys resizes the picture   |
+| `sharp` **or** `jimp`  | `(await wa.me()).photo(buffer)`, `chat.photo(…)` — baileys resizes the picture   |
 | `ioredis`              | The client you hand to `RedisEngine`                    |
 | `better-sqlite3`       | The database you hand to `SQLiteEngine` on Node < 22    |
 
@@ -85,9 +85,11 @@ import { WhatsAppBot, Bot, on, guard, command, pair } from "@arcaelas/whatsapp/d
 
 Both entries ship ESM and CJS builds — your bundler or Node loader will pick the right one automatically.
 
+The entity names (`Contact`, `Chat`, `Message`, `Text`, `Image`, `Poll`, `Feed`, `Catalog`, `Product`, …) are exported as types: import them with `import type`. The classes are bound to each session and live on the client — `wa.Message.Image`, `wa.Contact` — which is what `instanceof` needs.
+
 !!! warning "Engines are not in the decorators entry"
-    `@arcaelas/whatsapp/decorators` exports only the decorator API. Entities and engines always come
-    from `@arcaelas/whatsapp`.
+    `@arcaelas/whatsapp/decorators` exports only the decorator API. Entity types and engines always
+    come from `@arcaelas/whatsapp`.
 
 ---
 

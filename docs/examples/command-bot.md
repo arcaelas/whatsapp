@@ -9,19 +9,14 @@ This pattern is ideal when you want explicit control over routing, or when decor
 ## Full example
 
 ```typescript title="index.ts"
-import { join } from 'node:path';
-import { WhatsApp, FileSystemEngine, type Message } from '@arcaelas/whatsapp';
+import { WhatsApp, FileSystemEngine, type Chat, type Message } from '@arcaelas/whatsapp';
 
 const PREFIX = '/';
 
-// The chat that travels in the events is the session-bound subclass, the one with
-// members()/messages()/content(). The exported `Chat` class only carries the getters.
-type Conversation = InstanceType<WhatsApp['Chat']>;
-
-type CommandHandler = (args: string, msg: Message, chat: Conversation) => Promise<void>;
+type CommandHandler = (args: string, msg: Message, chat: Chat) => Promise<void>;
 
 const wa = new WhatsApp({
-    engine: new FileSystemEngine(join(__dirname, 'session')),
+    engine: new FileSystemEngine('session'),
     phone: 5491112345678,
 });
 
@@ -47,11 +42,11 @@ commands.set('info', async (_args, msg, chat) => {
     const stored = await chat.messages(0, 100);
     await msg.text(
         [
-            `chat:    ${chat.name}`,
+            `chat:    ${chat.name()}`,
             `id:      ${chat.id}`,
             `type:    ${chat.type}`,
             `unread:  ${chat.count}`,
-            `muted:   ${chat.muted ?? 'no'}`,
+            `muted:   ${chat.muted() ?? 'no'}`,
             `stored:  ${stored.length} recent messages`,
         ].join('\n'),
     );
@@ -70,7 +65,7 @@ wa.on('message:created', async (msg, chat) => {
         return;
     }
 
-    const text = msg.caption.trim();
+    const text = msg.caption().trim();
     if (!text.startsWith(PREFIX)) {
         return;
     }
@@ -122,7 +117,7 @@ A `Map` is enough — keys are command names, values are async handlers. Adding 
 ### 2. Parsing
 
 ```typescript
-const text = msg.caption.trim();
+const text = msg.caption().trim();
 if (!text.startsWith(PREFIX)) {
     return;
 }
@@ -173,7 +168,7 @@ await wa.Message.text(chat.id, 'standalone message — no quote');
 
 ## What if I want less boilerplate?
 
-If you're writing many commands and want a more declarative style, the library ships with an optional `@command` decorator that handles parsing, dispatch and error wrapping for you.
+If you're writing many commands and want a more declarative style, the library ships with an optional `@command` decorator that handles parsing and dispatch for you.
 
 !!! tip "Check out the decorator example"
     See [`examples/decorator-bot.md`](./decorator-bot.md) for the same bot rewritten with `@command('/help')`, `@command('/echo')`, etc. The pattern is matched with `startsWith`, so the prefix belongs in the pattern. The dispatch logic disappears entirely — you only declare the methods.

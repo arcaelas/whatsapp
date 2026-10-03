@@ -30,7 +30,8 @@ import {
 
 !!! warning "Los motores viven en la entrada principal"
     `@arcaelas/whatsapp/decorators` exporta **solo** la API de decoradores. `FileSystemEngine`,
-    `SQLiteEngine`, `RedisEngine`, `S3Engine` y todas las entidades vienen de `@arcaelas/whatsapp`.
+    `SQLiteEngine`, `RedisEngine`, `S3Engine` y los tipos de las entidades (`Message`, `Chat`, …)
+    vienen de `@arcaelas/whatsapp`.
 
 ---
 
@@ -83,7 +84,7 @@ await bot.connect((auth) => console.log(auth));
 ```
 
 Aquí `connect(callback?)` recibe un callback **opcional**: cuando la clase declara métodos `@pair`,
-son ellos los que reciben el PIN/QR.
+ellos reciben el PIN/QR, y el callback, si se pasa, corre después de ellos.
 
 !!! info "Los handlers se cablean una sola vez"
     El cableado ocurre en el primer `connect()` y está protegido contra repeticiones, así que una
@@ -171,12 +172,12 @@ Los nombres de eventos válidos están documentados en [References / Events](eve
 `contact:created`, `contact:updated`, `chat:created`, `chat:deleted`, `chat:pinned`,
 `chat:unpinned`, `chat:archived`, `chat:unarchived`, `chat:muted`, `chat:unmuted`, `chat:updated`,
 `chat:joined`, `chat:left`, `chat:promoted`, `chat:demoted`, `contact:presence`, `error`,
-`feed:created`, `feed:updated`, `feed:deleted`.
+`feed:created`, `feed:updated`, `feed:deleted`, `catalog:updated`.
 
 !!! tip "Payload del listener"
     Los argumentos del handler reflejan el payload del emisor. En eventos de mensaje la firma es
-    `(msg, chat, wa)`; en eventos de contacto `(contact, chat, wa)`; en eventos de chat y de estado
-    `(entidad, wa)`.
+    `(msg, chat, wa)`; en eventos de contacto `(contact, chat, wa)`; en eventos de chat, de estado y
+    de catálogo `(entidad, wa)`.
 
 ---
 
@@ -303,7 +304,7 @@ async poll_queue() {
 
 Marca el método como callback de emparejamiento. Cuando baileys entrega un PIN o un QR, todos los
 métodos `@pair` se invocan en paralelo con `Promise.all`. Un argumento de `connect(callback?)` — si
-se pasa — corre junto a ellos.
+se pasa — corre después de ellos.
 
 ```typescript
 @pair()
@@ -352,9 +353,10 @@ personal_only(msg: Message) {
 automáticamente a `message:created`.
 
 !!! info "Compara contra `msg.from`"
-    `from` es el JID del autor tal como está almacenado. Un número se normaliza a
-    `<dígitos>@s.whatsapp.net`; si el chat direcciona al contacto por LID, pasa el LID (o un
-    predicado) en su lugar.
+    `from` es el JID del autor: el JID de teléfono cuando la llave del mensaje lo trae, el LID si no.
+    Cada string que recibe `@from` se convierte en un JID de teléfono —un LID a través del índice
+    `/lid` del motor, y se descarta cuando el índice no lo conoce—, así que un autor que solo llega
+    por LID necesita un predicado.
 
 ---
 
@@ -363,7 +365,7 @@ automáticamente a `message:created`.
 Atajo para un comando textual sobre `message:created`. Internamente aplica:
 
 1. `@on('message:created')`.
-2. Un guard que compara `pattern` contra `msg.caption`:
+2. Un guard que compara `pattern` contra `msg.caption()`:
    - patrón `string` → `startsWith`.
    - patrón `RegExp` → `test`.
 3. Un transform que reescribe los argumentos a `(msg, chat, args)`:
@@ -388,8 +390,9 @@ echo(msg: Message, chat: Chat, args: string[]) {
     sigue accesible vía `this` — el bot **es** el cliente.
 
 !!! warning "También coincide con tus propios mensajes"
-    El guard solo mira el texto, así que un mensaje saliente que empiece con el prefijo dispara el
-    comando. Añade `@guard((msg) => !(msg as Message).me)` cuando eso importe.
+    El guard solo mira el texto, así que un mensaje que la cuenta escribe desde el teléfono u otro
+    dispositivo vinculado y que empiece con el prefijo dispara el comando (lo que envía la librería
+    no emite `message:created`). Añade `@guard((msg) => !(msg as Message).me)` cuando eso importe.
 
 ---
 
@@ -403,12 +406,12 @@ sobre esos objetos se propagan a los pasos siguientes.
 ```typescript
 @pipe("inbound", 0)
 async step_1(msg: Message) {
-  (msg as any).tags = ["fresh"];
+  (msg as Message & { tags?: string[] }).tags = ["fresh"];
 }
 
 @pipe("inbound", 1)
 async step_2(msg: Message) {
-  (msg as any).tags.push("audited");
+  (msg as Message & { tags: string[] }).tags.push("audited");
 }
 ```
 
@@ -472,7 +475,7 @@ Los handlers de `@every(ms)` y `@delay(ms)` arrancan con el evento `connected` y
 ### Emparejamiento
 
 Los callbacks `@pair` se recolectan en `connect()` y se invocan en paralelo con `Promise.all`. Si el
-consumidor pasa un callback a `connect(callback)`, corre en paralelo junto a ellos.
+consumidor pasa un callback a `connect(callback)`, corre cuando ellos terminan.
 
 ### Workflows
 
@@ -539,8 +542,8 @@ comportamiento idéntico a los `@guard` / `@from` integrados.
 !!! info "Primitivas expuestas"
     La subentrada exporta `decorator()`, el símbolo `HANDLERS` y los tipos `HandlerMeta`,
     `BotSchema` y `WorkflowStep`. Leer el schema de una clase decorada es cuestión de
-    `(MyBot as any)[Symbol.metadata]?.[HANDLERS]`. Todo lo demás (`resolve`,
-    `register_workflow_step`, `ensure_schema`) es interno.
+    `(MyBot as { [Symbol.metadata]?: Record<symbol, unknown> })[Symbol.metadata]?.[HANDLERS]`. Todo lo demás (`resolve`,
+    `register_workflow_step`) es interno.
 
 ---
 

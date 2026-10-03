@@ -46,7 +46,7 @@ cuando usas la función correspondiente:
 | Paquete                | Necesario para                                            |
 | ---------------------- | ----------------------------------------------------------- |
 | `@aws-sdk/client-s3`   | `S3Engine`                                                 |
-| `sharp` **o** `jimp`   | `account.picture(…)` — baileys redimensiona la foto     |
+| `sharp` **o** `jimp`   | `(await wa.me()).photo(buffer)`, `chat.photo(…)` — baileys redimensiona la foto     |
 | `ioredis`              | El cliente que le pasas a `RedisEngine`                    |
 | `better-sqlite3`       | La base que le pasas a `SQLiteEngine` en Node < 22         |
 
@@ -85,9 +85,11 @@ import { WhatsAppBot, Bot, on, guard, command, pair } from "@arcaelas/whatsapp/d
 
 Ambas entradas incluyen compilaciones ESM y CJS — tu bundler o el loader de Node elegirá la correcta automáticamente.
 
+Los nombres de las entidades (`Contact`, `Chat`, `Message`, `Text`, `Image`, `Poll`, `Feed`, `Catalog`, `Product`, …) se exportan como tipos: impórtalos con `import type`. Las clases están ligadas a cada sesión y viven en el cliente —`wa.Message.Image`, `wa.Contact`—, que es lo que necesita `instanceof`.
+
 !!! warning "Los motores no están en la entrada de decoradores"
-    `@arcaelas/whatsapp/decorators` exporta solo la API de decoradores. Las entidades y los motores
-    siempre vienen de `@arcaelas/whatsapp`.
+    `@arcaelas/whatsapp/decorators` exporta solo la API de decoradores. Los tipos de las entidades y
+    los motores siempre vienen de `@arcaelas/whatsapp`.
 
 ---
 

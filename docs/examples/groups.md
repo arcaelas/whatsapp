@@ -2,8 +2,8 @@
 
 Group chats use the same API as 1:1 conversations — the only difference is that the
 identifier ends with `@g.us`. The `Chat` instance exposes the group-specific helpers
-(`members()`, `admins()`, `admin()`, `content()`, `rename()`, `describe()`, `add()`,
-`remove()`, `promote()`, `demote()`, `invite()`, `revoke()`, `announce()`, `restrict()`),
+(`members()`, `admins()`, `admin()`, `name()`, `content()`, `photo()`, `add()`, `remove()`,
+`invite()`, `revoke()`, `announce()`, `restrict()`),
 and every other action method works the same.
 
 !!! info "Detection"
@@ -18,7 +18,7 @@ and every other action method works the same.
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 export const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + '/.session'),
+    engine: new FileSystemEngine('.session'),
     phone: 14155551234,
 });
 
@@ -39,7 +39,7 @@ import { wa } from './client';
 wa.on('message:created', async (msg, chat) => {
     if (chat.type === 'group') {
         const author = await msg.author();
-        console.log(`[${chat.name}] ${author.name}: ${msg.caption}`);
+        console.log(`[${chat.name()}] ${author.name}: ${msg.caption()}`);
     }
 });
 ```
@@ -64,19 +64,20 @@ const GROUP_CID = '120363025912345678@g.us';
 const chat = await wa.Chat.get(GROUP_CID);
 
 if (chat && chat.type === 'group') {
-    console.log(chat.name, '—', await chat.content());
+    console.log(chat.name(), '—', await chat.content());
 
     const members = await chat.members(0, 500);
     console.log(`${members.length} members:`);
     for (const member of members) {
-        console.log(`- ${member.name} (${member.phone ?? member.lid})`);
+        console.log(`- ${member.name} (${member.phone ?? member.id})`);
     }
 }
 ```
 
-!!! info "Contacts have no `id` getter"
-    A `Contact` exposes `name`, `phone`, `jid`, `lid`, `photo` and `me`. In groups addressed by
-    LID, `phone` may be `null` — fall back to `lid` as in the snippet above.
+!!! info "A contact's `id` is its LID when known"
+    A `Contact` exposes `id` (the LID when it is known, the JID otherwise), `name`, `phone`, `me`,
+    `photo()` and `content()`. In groups addressed by LID, `phone` may be `null` — fall back to `id` as in
+    the snippet above.
 
 ---
 
@@ -121,14 +122,13 @@ the group itself instead of a hand-kept whitelist. The following bot listens for
 acts when the sender administers the group.
 
 ```typescript title="admin-commands.ts"
-import { Text } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg, chat) => {
-    if (chat.type === 'group' && msg instanceof Text && msg.caption.trim() === '!purge') {
+    if (chat.type === 'group' && msg instanceof wa.Message.Text && msg.caption().trim() === '!purge') {
         const author = await msg.author();
         const admins = await chat.admins();
-        if (admins.some((who) => who.phone === author.phone)) {
+        if (admins.some((who) => who.id === author.id || (who.phone !== null && who.phone === author.phone))) {
             await chat.clear();
             await msg.text('History cleared.');
         } else await msg.text('Only admins can run that command.');
@@ -137,9 +137,9 @@ wa.on('message:created', async (msg, chat) => {
 ```
 
 !!! warning "Compare resolved contacts, not `msg.from`"
-    `msg.from` is the author identifier as stored: a `@s.whatsapp.net` JID in most groups, but a
-    `@lid` in groups migrated to the new addressing. `msg.author()` canonicalizes it, so compare
-    `phone` (or `lid`) between contacts as above.
+    `msg.from` is the author's phone JID when the message key carries it, and the `@lid` otherwise,
+    which happens in groups migrated to the new addressing. `msg.author()` canonicalizes it, so
+    compare `id` and `phone` between contacts as above.
 
 !!! tip "Decorator alternative"
     For a fixed list of operators prefer the `@from` decorator from `@arcaelas/whatsapp/decorators`
@@ -156,16 +156,16 @@ described.
 ```typescript title="membership.ts"
 import { wa } from './client';
 
-wa.on('chat:joined',   (chat, people) => console.log(`${people.map((who) => who.name)} joined ${chat.name}`));
-wa.on('chat:left',     (chat, people) => console.log(`${people.map((who) => who.name)} left ${chat.name}`));
-wa.on('chat:promoted', (chat, people) => console.log(`${people.map((who) => who.name)} now admin in ${chat.name}`));
-wa.on('chat:demoted',  (chat, people) => console.log(`${people.map((who) => who.name)} no longer admin in ${chat.name}`));
-wa.on('chat:updated',  (chat) => console.log(`${chat.name} was renamed or described`));
+wa.on('chat:joined',   (chat, people) => console.log(`${people.map((who) => who.name)} joined ${chat.name()}`));
+wa.on('chat:left',     (chat, people) => console.log(`${people.map((who) => who.name)} left ${chat.name()}`));
+wa.on('chat:promoted', (chat, people) => console.log(`${people.map((who) => who.name)} now admin in ${chat.name()}`));
+wa.on('chat:demoted',  (chat, people) => console.log(`${people.map((who) => who.name)} no longer admin in ${chat.name()}`));
+wa.on('chat:updated',  (chat) => console.log(`${chat.name()} was renamed or described`));
 ```
 
 The system notice WhatsApp shows for each change still arrives as a `message:created` with an
-empty caption and a `messageStubType` in the raw document; the events above are the way to react to
-it.
+empty caption and a `messageStubType` in the raw message that opens its timeline; the events above
+are the way to react to it.
 
 ---
 
@@ -180,8 +180,8 @@ import { wa } from './client';
 const group = await wa.Chat.create('Release crew', ['14155557777', '14155558888']);
 console.log(await group.invite());                   // https://chat.whatsapp.com/…
 
-await group.describe('Coordination for the 2.0 release');
-await group.promote('14155557777');
+await group.content('Coordination for the 2.0 release');
+await group.admin(true, '14155557777');
 await group.announce(true);                          // only admins send
 await group.remove('14155558888');                   // 1 when WhatsApp accepted it
 
@@ -208,13 +208,13 @@ const GROUP_CID = '120363025912345678@g.us';
 const chat = await wa.Chat.get(GROUP_CID);
 
 if (chat) {
-    await chat.archive(true);
-    await chat.pin(true);                              // false when 3 chats are already pinned
-    await chat.mute('2026-08-01T10:00:00Z');           // ISO date, epoch ms or Date
+    await chat.archived(true);
+    await chat.pinned(true);                              // false when 3 chats are already pinned
+    await chat.muted('2026-08-01T10:00:00Z');           // ISO date, epoch ms or Date
 
     // Reverse them later
-    await chat.mute(false);
-    await chat.archive(false);
+    await chat.muted(false);
+    await chat.archived(false);
 
     // Leaving the group is `delete()`
     // await chat.delete();

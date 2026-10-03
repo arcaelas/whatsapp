@@ -2,8 +2,8 @@
 
 Los chats grupales usan la misma API que las conversaciones 1:1 — la única diferencia es que el
 identificador termina con `@g.us`. La instancia `Chat` expone los helpers específicos de grupo
-(`members()`, `admins()`, `admin()`, `content()`, `rename()`, `describe()`, `add()`, `remove()`,
-`promote()`, `demote()`, `invite()`, `revoke()`, `announce()`, `restrict()`), y todos los demás
+(`members()`, `admins()`, `admin()`, `name()`, `content()`, `photo()`, `add()`, `remove()`,
+`invite()`, `revoke()`, `announce()`, `restrict()`), y todos los demás
 métodos de acción funcionan igual.
 
 !!! info "Detección"
@@ -18,7 +18,7 @@ métodos de acción funcionan igual.
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 export const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + '/.session'),
+    engine: new FileSystemEngine('.session'),
     phone: 14155551234,
 });
 
@@ -39,7 +39,7 @@ import { wa } from './client';
 wa.on('message:created', async (msg, chat) => {
     if (chat.type === 'group') {
         const author = await msg.author();
-        console.log(`[${chat.name}] ${author.name}: ${msg.caption}`);
+        console.log(`[${chat.name()}] ${author.name}: ${msg.caption()}`);
     }
 });
 ```
@@ -64,19 +64,20 @@ const GROUP_CID = '120363025912345678@g.us';
 const chat = await wa.Chat.get(GROUP_CID);
 
 if (chat && chat.type === 'group') {
-    console.log(chat.name, '—', await chat.content());
+    console.log(chat.name(), '—', await chat.content());
 
     const members = await chat.members(0, 500);
     console.log(`${members.length} miembros:`);
     for (const member of members) {
-        console.log(`- ${member.name} (${member.phone ?? member.lid})`);
+        console.log(`- ${member.name} (${member.phone ?? member.id})`);
     }
 }
 ```
 
-!!! info "Los contactos no tienen getter `id`"
-    Un `Contact` expone `name`, `phone`, `jid`, `lid`, `photo` y `me`. En grupos direccionados por
-    LID, `phone` puede ser `null` — cae en `lid` como en el fragmento de arriba.
+!!! info "El `id` de un contacto es su LID cuando se conoce"
+    Un `Contact` expone `id` (el LID cuando se conoce, el JID si no), `name`, `phone`, `me`,
+    `photo()` y `content()`. En grupos direccionados por LID, `phone` puede ser `null` — cae en `id` como en
+    el fragmento de arriba.
 
 ---
 
@@ -121,14 +122,13 @@ del autor contra el propio grupo en vez de contra una lista blanca mantenida a m
 bot escucha `!purge` y solo actúa cuando el remitente administra el grupo.
 
 ```typescript title="admin-commands.ts"
-import { Text } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg, chat) => {
-    if (chat.type === 'group' && msg instanceof Text && msg.caption.trim() === '!purge') {
+    if (chat.type === 'group' && msg instanceof wa.Message.Text && msg.caption().trim() === '!purge') {
         const author = await msg.author();
         const admins = await chat.admins();
-        if (admins.some((who) => who.phone === author.phone)) {
+        if (admins.some((who) => who.id === author.id || (who.phone !== null && who.phone === author.phone))) {
             await chat.clear();
             await msg.text('Historial limpiado.');
         } else await msg.text('Solo los administradores pueden ejecutar ese comando.');
@@ -137,9 +137,9 @@ wa.on('message:created', async (msg, chat) => {
 ```
 
 !!! warning "Compara contactos resueltos, no `msg.from`"
-    `msg.from` es el identificador del autor tal como está almacenado: un JID `@s.whatsapp.net` en la
-    mayoría de los grupos, pero un `@lid` en los grupos migrados al nuevo direccionamiento.
-    `msg.author()` lo canoniza, así que compara `phone` (o `lid`) entre contactos como arriba.
+    `msg.from` es el JID de teléfono del autor cuando la llave del mensaje lo trae, y el `@lid` si no,
+    lo que pasa en los grupos migrados al nuevo direccionamiento. `msg.author()` lo canoniza, así que
+    compara `id` y `phone` entre contactos como arriba.
 
 !!! tip "Alternativa con decoradores"
     Para una lista fija de operadores prefiere el decorador `@from` de `@arcaelas/whatsapp/decorators`
@@ -156,16 +156,16 @@ se describe.
 ```typescript title="membership.ts"
 import { wa } from './client';
 
-wa.on('chat:joined',   (chat, people) => console.log(`${people.map((who) => who.name)} entraron a ${chat.name}`));
-wa.on('chat:left',     (chat, people) => console.log(`${people.map((who) => who.name)} salieron de ${chat.name}`));
-wa.on('chat:promoted', (chat, people) => console.log(`${people.map((who) => who.name)} administran ${chat.name}`));
-wa.on('chat:demoted',  (chat, people) => console.log(`${people.map((who) => who.name)} ya no administran ${chat.name}`));
-wa.on('chat:updated',  (chat) => console.log(`${chat.name} se renombró o se describió`));
+wa.on('chat:joined',   (chat, people) => console.log(`${people.map((who) => who.name)} entraron a ${chat.name()}`));
+wa.on('chat:left',     (chat, people) => console.log(`${people.map((who) => who.name)} salieron de ${chat.name()}`));
+wa.on('chat:promoted', (chat, people) => console.log(`${people.map((who) => who.name)} administran ${chat.name()}`));
+wa.on('chat:demoted',  (chat, people) => console.log(`${people.map((who) => who.name)} ya no administran ${chat.name()}`));
+wa.on('chat:updated',  (chat) => console.log(`${chat.name()} se renombró o se describió`));
 ```
 
 El aviso de sistema que WhatsApp muestra por cada cambio sigue llegando como un `message:created`
-con caption vacío y un `messageStubType` en el documento crudo; los eventos de arriba son la forma de
-reaccionar a él.
+con caption vacío y un `messageStubType` en el mensaje crudo que abre su timeline; los eventos de
+arriba son la forma de reaccionar a él.
 
 ---
 
@@ -180,8 +180,8 @@ import { wa } from './client';
 const group = await wa.Chat.create('Equipo de release', ['14155557777', '14155558888']);
 console.log(await group.invite());                   // https://chat.whatsapp.com/…
 
-await group.describe('Coordinación del release 2.0');
-await group.promote('14155557777');
+await group.content('Coordinación del release 2.0');
+await group.admin(true, '14155557777');
 await group.announce(true);                          // solo los administradores envían
 await group.remove('14155558888');                   // 1 cuando WhatsApp lo aceptó
 
@@ -208,13 +208,13 @@ const GROUP_CID = '120363025912345678@g.us';
 const chat = await wa.Chat.get(GROUP_CID);
 
 if (chat) {
-    await chat.archive(true);
-    await chat.pin(true);                              // false si ya hay 3 chats fijados
-    await chat.mute('2026-08-01T10:00:00Z');           // fecha ISO, epoch ms o Date
+    await chat.archived(true);
+    await chat.pinned(true);                              // false si ya hay 3 chats fijados
+    await chat.muted('2026-08-01T10:00:00Z');           // fecha ISO, epoch ms o Date
 
     // Revertirlos más tarde
-    await chat.mute(false);
-    await chat.archive(false);
+    await chat.muted(false);
+    await chat.archived(false);
 
     // Salir del grupo es `delete()`
     // await chat.delete();

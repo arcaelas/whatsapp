@@ -9,11 +9,10 @@ Este es el "hola mundo" de `@arcaelas/whatsapp`. Todo lo que necesitas vive en u
 ## Ejemplo completo
 
 ```typescript title="index.ts"
-import { join } from 'node:path';
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 const wa = new WhatsApp({
-    engine: new FileSystemEngine(join(__dirname, 'session')),
+    engine: new FileSystemEngine('session'),
     phone: 5491112345678,
 });
 
@@ -30,9 +29,9 @@ wa.on('message:created', async (msg, chat, wa) => {
         return;
     }
 
-    console.log(`[${chat.name}] ${msg.caption}`);
+    console.log(`[${chat.name()}] ${msg.caption()}`);
 
-    if (msg.caption.trim().toLowerCase() === 'ping') {
+    if (msg.caption().trim().toLowerCase() === 'ping') {
         await msg.text('pong');
     }
 });
@@ -67,7 +66,7 @@ npx tsx index.ts
 ### 1. Engine
 
 ```typescript
-engine: new FileSystemEngine(join(__dirname, 'session')),
+engine: new FileSystemEngine('session'),
 ```
 
 El motor es la capa de persistencia. `FileSystemEngine` escribe credenciales, chats, contactos y mensajes bajo el directorio que le das. Elimina ese directorio y la siguiente ejecución comenzará una sesión fresca.
@@ -105,7 +104,7 @@ wa.on('message:created', async (msg, chat, wa) => {
 });
 ```
 
-Cada oyente recibe el artefacto, el chat y la instancia del cliente. El guard `!msg.me` es esencial — sin él el bot reaccionará a sus propios mensajes salientes y entrará en loop infinito.
+Cada oyente recibe el artefacto, el chat y la instancia del cliente. El guard `msg.me` omite lo que la cuenta escribe desde el teléfono u otro dispositivo vinculado; los mensajes que envía la librería no emiten `message:created`, así que las respuestas del propio bot nunca llegan a este listener.
 
 ### 5. Respondiendo
 

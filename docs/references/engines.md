@@ -5,7 +5,7 @@ string-only key-value store implementing the `Engine` contract. The library ship
 drivers (`SQLiteEngine`, `FileSystemEngine`, `RedisEngine`, `S3Engine`) and you can plug in your
 own.
 
-Serialization (Buffers, BigInts, etc.) lives in a dedicated layer (`serialize` / `deserialize`) on
+Serialization (Buffers and proto values) lives in a dedicated layer (`serialize` / `deserialize`) on
 top of baileys' `BufferJSON`, so engines never need to deal with JSON.
 
 ---
@@ -57,10 +57,10 @@ interface Engine {
 | `set_buffer(path, data)`   | *Optional.* Writes a raw binary, skipping JSON and base64.                                               |
 
 !!! info "`score` is what keeps chronology intact"
-    Messages are written with their `created_at` as the score. Every reconnect re-delivers history,
-    and a re-sync that rewrote old documents with the current clock would push ancient messages to
-    the top of `list`. Passing the score keeps the timeline stable no matter how many times a
-    document is rewritten.
+    A message is written with its timestamp as the score, and every event appended to its timeline —
+    a receipt, a reaction, an edit — rewrites the document with that same score. If those rewrites
+    took the current clock, old messages would jump to the top of `list`. Passing the score keeps the
+    order stable no matter how many times a document is rewritten.
 
 !!! info "Path semantics"
     Paths are POSIX-like strings (`/chat/<jid>/message/<id>`). Drivers normalize redundant
@@ -77,7 +77,7 @@ has to be parsed to be read). A driver without these two methods is still perfec
 | ------------------ | ------------------------------------------------------------------ |
 | `SQLiteEngine`     | Yes — a `BLOB` column.                                            |
 | `FileSystemEngine` | Yes — a `content.bin` file next to the document.                  |
-| `RedisEngine`      | Yes, when the client exposes `getBuffer` / `setBuffer` (ioredis does). |
+| `RedisEngine`      | Yes, when the client exposes `getBuffer` / `setBuffer` (ioredis does); without them the binary is not stored and the media is downloaded again when read. |
 | `S3Engine`         | No — falls back to the base64 document.                           |
 
 ---
@@ -116,8 +116,9 @@ const engine = new SQLiteEngine(new Database('.sessions/5491112345678.db'));
 
 The driver injects no dependency of its own: the database arrives already open, exactly like
 `RedisEngine`'s client. It only needs `exec(sql)` and `prepare(sql)` with `run` / `get` / `all`
-(the `SQLiteDatabase` interface). At construction it applies `journal_mode = WAL` and
-`synchronous = NORMAL` when the driver accepts them, and creates the table and index if missing.
+(the `SQLiteDatabase` interface). At construction it creates the table and index if missing, and
+requests `journal_mode = WAL` and `synchronous = NORMAL` without requiring them: a database that
+rejects them keeps working.
 
 !!! tip "Measured against the filesystem driver"
     On a real 55,146-message chat: **220 MB → 64 MB** on disk, first `list` **115 ms → 0.6 ms**,
@@ -155,9 +156,16 @@ LRU and backed by a `.order` file: opening a directory loads that file and only 
 `readdir` + `stat` when the count does not match. Binaries live next to the document as
 `content.bin`.
 
+Documents and binaries are read and written with synchronous `fs` calls, through a read cache of up
+to 4,096 files shared by every `FileSystemEngine` in the process, which drops the least recently
+used first. Each read revalidates its entry with a `stat` of the file's mtime and size, and each
+write reads the file back, so a write is visible to the next read. Files over 1 MB — usually media —
+are neither cached nor read back.
+
 !!! warning "One writer per base directory"
-    The in-memory index assumes a single writer process. Two processes writing the same base
-    directory will desynchronize their `.order` files.
+    The in-memory index and the read cache assume a single writer process. Two processes writing the
+    same base directory will desynchronize their `.order` files, and a document that another process
+    rewrites with the same size and the same score is still served from the cache.
 
 !!! tip "When to choose the filesystem driver"
     Local development and inspectable state: every document is a readable JSON file. For volume,
@@ -203,27 +211,27 @@ new RedisEngine(client: RedisClient, prefix = 'wa:default')
 interface RedisClient {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<unknown>;
-    del(keys: string | string[]): Promise<unknown>;
+    del(...keys: unknown[]): Promise<unknown>;
     mget(keys: string[]): Promise<(string | null)[]>;
     scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
     zadd(key: string, score: number, member: string): Promise<unknown>;
-    zrem(key: string, members: string | string[]): Promise<unknown>;
+    zrem(...args: unknown[]): Promise<unknown>;
     zrevrange(key: string, start: number, stop: number): Promise<string[]>;
     zcard(key: string): Promise<number>;
-    sadd(key: string, ...members: string[]): Promise<unknown>;
-    srem(key: string, ...members: string[]): Promise<unknown>;
+    sadd(...args: unknown[]): Promise<unknown>;
+    srem(...args: unknown[]): Promise<unknown>;
     smembers(key: string): Promise<string[]>;
 
     // optional — enable extra behaviour when present
-    getBuffer?(key: string): Promise<Buffer | null>;
-    setBuffer?(key: string, value: Buffer): Promise<unknown>;
+    getBuffer?(...args: unknown[]): Promise<Buffer | null>;
+    setBuffer?(...args: unknown[]): Promise<unknown>;
     pipeline?(): {
         set(key: string, value: string): unknown;
-        del(keys: string | string[]): unknown;
+        del(...keys: unknown[]): unknown;
         zadd(key: string, score: number, member: string): unknown;
-        zrem(key: string, members: string | string[]): unknown;
-        sadd(key: string, ...members: string[]): unknown;
-        srem(key: string, ...members: string[]): unknown;
+        zrem(...args: unknown[]): unknown;
+        sadd(...args: unknown[]): unknown;
+        srem(...args: unknown[]): unknown;
         exec(): Promise<unknown>;
     };
 }
@@ -289,11 +297,13 @@ ordering by `LastModified`. Keys mangle `@` into `_at_`.
 
 ### Local cache
 
-When `cache` is provided, `when(key)` decides which paths are cached — return `true` for stable,
-frequently-read documents (chats, contacts, the LID→JID map) and `false` for volatile ones (Signal
-sessions, messages). Each cached entry is evicted by a `setTimeout(ttl)`; there is **no expiry check
-on read** — the timer simply removes the entry. Writes are write-through (cache + S3), and `unset`
-purges the cached subtree so deleted data is never served stale.
+When `cache` is provided, `when(key)` decides which paths are cached. It receives the normalized
+path, without leading or trailing slash — `chat/<cid>`, not `/chat/<cid>` — so a path written with
+or without its slashes shares one entry. Return `true` for stable, frequently-read documents (chats,
+contacts, the LID→JID map) and `false` for volatile ones (Signal sessions, messages). Each cached
+entry is evicted by a `setTimeout(ttl)`; there is **no expiry check on read** — the timer simply
+removes the entry. Writes are write-through (cache + S3), and `unset` purges the cached subtree so
+deleted data is never served stale; it returns `true` even when there was nothing to delete.
 
 ```typescript title="Usage with cache" hl_lines="8 9 10 11 12 13 14"
 import { S3Client } from '@aws-sdk/client-s3';
@@ -307,9 +317,9 @@ const wa = new WhatsApp({
         cache: {
             ttl: 180_000, // 3 minutes
             when: (key) =>
-                key.startsWith('/chat/') ||
-                key.startsWith('/contact/') ||
-                key.startsWith('/lid/'),
+                /^chat\/[^/]+$/.test(key) ||
+                key.startsWith('contact/') ||
+                key.startsWith('lid/'),
         },
     }),
     phone: 5491112345678,
@@ -317,9 +327,6 @@ const wa = new WhatsApp({
 
 await wa.connect((pin) => console.log('PIN:', pin));
 ```
-
-The driver also exposes `delete_prefix(prefix)`, which removes every object under a prefix and
-returns how many were deleted — handy for maintenance scripts.
 
 !!! tip "When to choose S3"
     Serverless / stateless deployments (Lambda, Fargate) where neither the filesystem nor Redis is
@@ -335,11 +342,13 @@ function serialize<T>(doc: T): string;
 function deserialize<T>(raw: string | null): T | null;
 ```
 
-Both helpers are thin wrappers over `JSON.stringify` / `JSON.parse` using baileys' `BufferJSON`
-replacer/reviver, so `Buffer` instances inside Signal keys, message media references and poll
-payloads round-trip without loss. `deserialize` returns `null` when the input is `null` **or when
-the JSON is invalid**, so a document truncated by an interrupted write behaves as missing instead
-of poisoning a whole page with a parse error.
+`serialize` is `JSON.stringify` with a replacer that writes proto instances with their real values —
+enums and longs as numbers, bytes as Buffers — instead of the proto's JSON mapping, turns `Long`
+values into numbers and encodes Buffers with baileys' `BufferJSON`, so `Buffer` instances inside
+Signal keys, message media references and poll payloads round-trip without loss. `deserialize` is
+`JSON.parse` with the `BufferJSON` reviver; it returns `null` when the input is `null` **or when the
+JSON is invalid**, so a document truncated by an interrupted write behaves as missing instead of
+poisoning a whole page with a parse error.
 
 ```typescript title="Custom storage on top of an engine"
 import { serialize, deserialize } from '@arcaelas/whatsapp';

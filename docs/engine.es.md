@@ -9,12 +9,12 @@ La capa de persistencia de `@arcaelas/whatsapp`.
 `Engine` es un **contrato key/value solo de strings**. No sabe nada sobre WhatsApp, JSON o Buffers —
 simplemente almacena y recupera strings opacos bajo rutas jerárquicas, en el orden que se le indica.
 
-| Preocupación        | Vive en                                                    |
-| ------------------- | ---------------------------------------------------------- |
-| Protocolo de red    | `baileys`                                                  |
-| Formas del dominio  | `Contact`, `Chat`, `Message`, `Feed`                       |
-| Serialización       | `serialize` / `deserialize` (BufferJSON)                   |
-| Persistencia        | **Implementaciones de `Engine`**                           |
+| Preocupación        | Vive en                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| Protocolo de red    | `baileys`                                                                                |
+| Formas del dominio  | Los raws de baileys, que leen los getters de `Contact`, `Chat`, `Message`, `Feed`, `Catalog` y `Product` |
+| Serialización       | `serialize` / `deserialize` (BufferJSON y valores del proto)                             |
+| Persistencia        | **Implementaciones de `Engine`**                                                         |
 
 Esta separación implica que un motor puede estar respaldado por cualquier cosa capaz de
 `get`/`set`/`unset`/`list`/`count`/`clear` strings bajo una ruta: un archivo SQLite, un árbol de
@@ -74,10 +74,10 @@ interface Engine {
 | `*_buffer`   | Par opcional. Implementa **ambos o ninguno**: la librería consulta `set_buffer` para decidir cómo guardar el media.         |
 
 !!! info "Por qué existe `score`"
-    Los mensajes se escriben con su `created_at`. Cada reconexión reentrega el historial; si un
-    documento viejo reescrito tomara el reloj actual como posición, los mensajes antiguos saltarían
-    al tope de `list`. El score mantiene la línea de tiempo estable sin importar cuántas veces se
-    reescriba un documento.
+    Un mensaje se escribe con su timestamp, y cada evento que se suma a su timeline — un recibo, una
+    reacción, una edición — reescribe el documento con ese mismo score. Si un documento viejo
+    reescrito tomara el reloj actual como posición, los mensajes antiguos saltarían al tope de
+    `list`. El score mantiene el orden estable sin importar cuántas veces se reescriba un documento.
 
 !!! info "Normalización de rutas"
     Todos los drivers integrados colapsan `//` y recortan las barras de los extremos antes de usar la
