@@ -1,8 +1,8 @@
 # Feed
 
 `Feed` is a **status broadcast** post — what WhatsApp stores under the `status@broadcast` chat. It
-extends [`Message`](message.md), so it inherits the readable getters, `author()`, `content()` and
-`stream()`, and it voids everything a status does not support.
+is a class of its own, separate from [`Message`](message.md), and extends `Sender`: replying to a
+status sends to the author's 1:1 chat quoting it, as WhatsApp does.
 
 Statuses live for 24 hours (`FEED_TTL_MS`), never emit `message:*` events, and travel through their
 own channel: `feed:created`, `feed:updated` and `feed:deleted`.
@@ -12,148 +12,144 @@ own channel: `feed:created`, `feed:updated` and `feed:deleted`.
 ## Import
 
 ```typescript title="imports.ts"
-import { WhatsApp, Feed, FEED_TTL_MS } from '@arcaelas/whatsapp';
+import { WhatsApp, feed, FEED_TTL_MS, type Feed } from '@arcaelas/whatsapp';
 ```
 
-You never construct a `Feed` yourself. Instances come from:
+`Feed` is a type; the class lives on the session as `wa.Feed`, built by the `feed` factory —the
+default export of `src/lib/feed.ts`—. Instances come from:
 
-- `(await wa.account()).post({ … })` — the post you publish.
+- `wa.Feed.create({ … })` — the status you publish.
+- `wa.Feed.get(id)` and `wa.Feed.list(offset, limit)` — the stored ones.
 - The `feed:created`, `feed:updated` and `feed:deleted` events.
+- `new wa.Feed(timeline)`, with a timeline stored at `/status/<id>`.
 
 ---
 
 ## Publishing
 
 ```typescript
-account.post(input: { caption?: string; buffer?: Buffer; audience: (string | number | Contact)[] }): Promise<Feed | null>
+wa.Feed.create(input: { caption?: string; media?: { buffer: Buffer; mime: string }; audience?: (Contact | string | number)[] }): Promise<Feed>
 ```
 
-```typescript title="publish.ts"
-// Text status
-const account = await wa.account();
-await account.post({
-    caption: 'We are live!',
-    audience: ['5491112345678', 584121234567],
-});
+A text status with `caption` alone, or an image, video or audio status with `media`, told apart by
+`media.mime` and with `caption` as its caption. The binary is recognized by its first bytes —JPEG,
+PNG, WebP, MP4, OGG or MP3— and must match `media.mime`. Without `audience` it goes to the address
+book: the contacts saved with a name (`name`), not whoever only wrote in a group; WhatsApp delivers
+it to nobody outside the audience, which is stored to revoke it later from the same people. It
+rejects with `ERR_FEED_EMPTY` without `caption` nor `media`, with `ERR_FEED_MEDIA` when the binary
+is not an image, video nor audio or does not match `media.mime`, and with `ERR_SEND_FAILED` when
+WhatsApp does not return the status.
 
-// Image or video status — the type is inferred from the binary signature
-await account.post({
-    buffer: await readFile('./promo.jpg'),
+```typescript title="publish.ts"
+await wa.Feed.create({ caption: 'We are live!' });
+await wa.Feed.create({
     caption: 'New collection',
+    media: { buffer: await readFile('./promo.jpg'), mime: 'image/jpeg' },
     audience: ['5491112345678'],
 });
 ```
 
-!!! warning "`audience` is mandatory"
-    WhatsApp does not deliver a status to anyone outside the list you pass. There is no "all my
-    contacts" shortcut: build the list yourself, for instance from `wa.Contact.list()`.
-
-| Error              | Thrown when                                       |
-| ------------------ | ------------------------------------------------- |
-| `ERR_FEED_EMPTY`   | Neither `buffer` nor `caption` was given.         |
-| `ERR_FEED_MEDIA`   | `buffer` is neither a JPEG/PNG/WebP nor an MP4.   |
+!!! info "Who sees a status"
+    WhatsApp only shows a status to people who have the author saved in their contacts, even when
+    they are in the audience.
 
 ---
 
 ## Properties
 
-Inherited from `Message`, with the values a status actually carries:
-
-| Property     | Type                                        | Notes                                                                     |
-| ------------ | ------------------------------------------- | --------------------------------------------------------------------------- |
-| `id`         | `string`                                    | Status identifier.                                                        |
-| `cid`        | `string`                                    | Always `'status@broadcast'`.                                              |
-| `type`       | `'text' \| 'image' \| 'video' \| 'audio'`   | Kind of status.                                                           |
-| `caption`    | `string`                                    | The text, or the media footer.                                            |
-| `mime`       | `string`                                    | `text/plain` for text, the real MIME for media.                           |
-| `from`       | `string`                                    | JID of the author.                                                        |
-| `created_at` | `string`                                    | Publication date, ISO UTC.                                                |
-| `expires_at` | `string \| null`                            | Expiration, ISO UTC — 24 hours after `created_at`.                        |
-| `viewed`     | `boolean`                                   | `true` once a read receipt was sent for this status.                      |
-
-```typescript title="properties.ts"
-wa.on('feed:created', async (post) => {
-    const author = await post.author();
-    console.log(`${author.name}: ${post.caption}`);
-    console.log('expires at', post.expires_at, 'viewed?', post.viewed);
-});
-```
-
-!!! info "The 24-hour window is exported"
-    `FEED_TTL_MS` is the status lifetime in milliseconds (`86_400_000`), the same constant used to
-    compute `expires_at`.
+| Property     | Type                                        | Notes                                                       |
+| ------------ | ------------------------------------------- | ----------------------------------------------------------- |
+| `id`         | `string`                                    | Status identifier.                                          |
+| `from`       | `string`                                    | JID of the author: the phone when known, otherwise the LID. |
+| `me`         | `boolean`                                   | `true` when the status is your own.                         |
+| `type`       | `'text' \| 'image' \| 'video' \| 'audio'`   | Kind of status.                                             |
+| `mime`       | `string`                                    | `text/plain` for text, the real MIME for media.             |
+| `caption`    | `string`                                    | The text, or the media caption.                             |
+| `created_at` | `string`                                    | Publication date, ISO.                                      |
+| `expires_at` | `string`                                    | Expiration, ISO — 24 hours after `created_at`.              |
 
 ---
 
 ## Methods
 
-### `view()`
+### `seen()` / `seen(true)`
 
 ```typescript
-view(): Promise<boolean>
+seen(): boolean
+seen(value: true): Promise<boolean>
 ```
 
-Marks the status as seen: sends the read receipt, persists `viewed` and emits `feed:updated`.
-Calling it twice is safe — the receipt is only sent the first time.
+Without an argument, whether you already viewed it —your own always are—. With `true` it sends the
+read receipt, sets the timeline delivery record to read, emits `feed:updated` and puts the account
+online; calling it again sends nothing.
 
-```typescript title="view.ts"
+### `delete()`
+
+```typescript
+delete(): Promise<boolean>
+```
+
+On your own status it revokes it for everyone —to the audience `Feed.create()` published it with
+or, when it came from another device, to the address book—, and the echo removes it from the engine
+and emits `feed:deleted`. On someone else's it only removes it from the engine and emits
+`feed:deleted`.
+
+### `content()` / `stream()` / `author()`
+
+```typescript
+content(): Promise<Buffer>
+stream(): Promise<Readable>
+author(): Promise<Contact>
+```
+
+`content()` is the media binary —the stored one or the download, which gets stored; it throws when
+it cannot be downloaded— or, on a text status, the caption as a Buffer. `stream()` delivers the
+stored one or the download as it arrives, without buffering nor storing it. `author()` is the
+`Contact` who published it.
+
+### Replies
+
+`text()`, `image()`, `video()`, `audio()` and the other [sends](message.md#sending) inherited from
+`Sender` reply to the status: they go to the author's 1:1 chat and quote it.
+
+```typescript title="reply.ts"
 wa.on('feed:created', async (post) => {
-    await post.view();
+    await post.seen(true);
+    await post.text('Nice!');
 });
 ```
 
-`seen()` is an alias of `view()`, so the `Message` habit keeps working.
+### `sub(handler)` / `metadata()`
 
-### Inherited and usable
-
-| Method        | Behaviour on a status                                                              |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `author()`    | The `Contact` who published it.                                                    |
-| `chat()`      | A minimal `Chat` for `status@broadcast` (statuses are not a real conversation).     |
-| `content()`   | The text as UTF-8, or the downloaded media binary.                                 |
-| `stream()`    | The content as a `Readable`.                                                       |
-| `reactions()` | Always empty: reactions to statuses are not tracked.                               |
-
-### Unsupported
-
-```typescript title="unsupported.ts"
-try {
-    await post.delete();
-} catch (error) {
-    // Error: ERR_FEED_UNSUPPORTED
-}
+```typescript
+sub(handler: (event: { name: 'updated' | 'deleted' | 'seen'; payload: Feed }) => void): () => void
 ```
 
-`message()`, `react()`, `star()`, `edit()`, `forward()`, `delete()` and every reply helper
-(`text()`, `image()`, `video()`, `audio()`, `location()`, `poll()`, `document()`, `vcard()`,
-`event()`) throw **`ERR_FEED_UNSUPPORTED`**.
+`sub()` reports what happens to the status: it changes, is revoked, or gets viewed. `metadata()`
+keeps integration values under `/status/<id>/metadata`, the same way as
+[`contact.metadata()`](contact.md#metadata).
 
-!!! info "TypeScript stops you first"
-    The overrides are declared with **no parameters** and a `Promise<never>` return, so
-    `post.react('❤️')` does not even compile. The runtime error is the second line of defence.
+---
+
+## Statics (via `wa.Feed`)
+
+| Static           | Signature                                               | Notes                                     |
+| ---------------- | ------------------------------------------------------- | ----------------------------------------- |
+| `wa.Feed.get`    | `(id: string) => Promise<Feed \| null>`                 | The stored status.                        |
+| `wa.Feed.list`   | `(offset?: number, limit?: number) => Promise<Feed[]>`  | Current statuses, newest first.           |
+| `wa.Feed.create` | `(input) => Promise<Feed>`                              | See [Publishing](#publishing).            |
 
 ---
 
 ## Events
 
-| Event          | Signature      | Fires when…                                                                 |
-| -------------- | -------------- | ----------------------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | A status arrives from a contact, or you publish one with `account.post()`.        |
-| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, by `view()` or by a read receipt.            |
-| `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                               |
+| Event          | Signature      | Fires when…                                                           |
+| -------------- | -------------- | ----------------------------------------------------------------------- |
+| `feed:created` | `[feed, wa]`   | A status arrives from a contact, or you publish one with `Feed.create()`. |
+| `feed:updated` | `[feed, wa]`   | The status is viewed, by `seen(true)` or by a read receipt, or receives a reaction. |
+| `feed:deleted` | `[feed, wa]`   | The status is revoked, or `delete()` removes it.                       |
 
 Unlike `message:*`, the payload has **no chat argument**: statuses do not belong to a conversation.
-
-```typescript title="events.ts"
-wa.on('feed:created', async (post) => {
-    if (post.type === 'image') {
-        await writeFile(`./statuses/${post.id}.jpg`, await post.content());
-    }
-    await post.view();
-});
-
-wa.on('feed:deleted', (post) => console.log('revoked:', post.id));
-```
 
 ---
 
@@ -161,10 +157,11 @@ wa.on('feed:deleted', (post) => console.log('revoked:', post.id));
 
 | Path                     | Value                                                                     |
 | ------------------------ | --------------------------------------------------------------------------- |
-| `/status/<id>`           | The status document (`author_jid`, `type`, `caption`, `mime`, `created_at`, `expires_at`, `viewed`, `raw`). |
-| `/status/<id>/content`   | The payload: raw binary when the driver supports buffers, base64 JSON otherwise. |
+| `/status/<id>`           | The status timeline: the raws exactly as baileys emitted them, the `WAMessage` first, then the reactions, the `{ lid, pn }` mapping when the author arrived by LID and a single delivery record `{ key, update: { status } }` with the highest state of the receipts —`seen(true)` sets it to read—. |
+| `/status/<id>/audience`  | The JIDs `Feed.create()` published it to; `delete()` revokes it from them. |
+| `/status/<id>/content`   | The media binary of an image, video or audio status. A text status has none. |
+| `/status/<id>/metadata`  | The values written with `metadata()`.                                     |
 
 !!! note "Nothing expires by itself"
-    The library does not garbage-collect statuses after 24 hours; `expires_at` tells you when
-    WhatsApp considers them gone. Prune them yourself with `wa.engine.unset('/status/<id>')` if
-    storage matters.
+    The library does not delete statuses after 24 hours; `Feed.list()` leaves out the expired ones
+    and `expires_at` tells when WhatsApp considers them gone.

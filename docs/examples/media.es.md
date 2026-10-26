@@ -31,7 +31,7 @@ Cada fragmento de abajo asume el mismo cliente. Instáncialo una vez y reutilíz
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 export const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + '/.session'),
+    engine: new FileSystemEngine('.session'),
     phone: 14155551234,
 });
 
@@ -60,23 +60,22 @@ await wa.Message.image('14155557777', buffer, {
 });
 ```
 
-Detecta las imágenes entrantes con `instanceof Image` y luego llama a `content()` para descargar los
-bytes:
+Detecta las imágenes entrantes con `instanceof wa.Message.Image` y luego llama a `content()` para
+obtener los bytes:
 
 ```typescript title="receive-image.ts"
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Image } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg, chat) => {
-    if (msg instanceof Image) {
+    if (msg instanceof wa.Message.Image) {
         const bytes = await msg.content();
         await writeFile(join('./inbox', `${msg.id}.jpg`), bytes);
-        console.log(`Guardados ${bytes.length} bytes de ${chat.name}`);
+        console.log(`Guardados ${bytes.length} bytes de ${chat.name()}`);
         console.log(`${msg.width}x${msg.height}, ${msg.size} bytes anunciados`);
 
-        const thumb = await msg.thumb();     // vista previa JPEG embebida, o null
+        const thumb = msg.thumb;             // vista previa JPEG embebida, o null
         if (thumb) {
             await writeFile(join('./inbox', `${msg.id}.thumb.jpg`), thumb);
         }
@@ -107,11 +106,10 @@ await wa.Message.video('14155557777', clip, { gif: true });
 
 ```typescript title="receive-video.ts"
 import { createWriteStream } from 'node:fs';
-import { Video } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg) => {
-    if (msg instanceof Video) {
+    if (msg instanceof wa.Message.Video) {
         console.log(`${msg.duration}s, ${msg.width}x${msg.height}`);
         // Canaliza directo a disco — útil para clips grandes.
         const out = createWriteStream(`./inbox/${msg.id}.mp4`);
@@ -144,11 +142,10 @@ El audio entrante expone `ptt`, `duration` y el `waveform` del protocolo:
 
 ```typescript title="receive-audio.ts"
 import { writeFile } from 'node:fs/promises';
-import { Audio } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg) => {
-    if (msg instanceof Audio) {
+    if (msg instanceof wa.Message.Audio) {
         const kind = msg.ptt ? 'voice-note' : 'audio';
         const bytes = await msg.content();
         await writeFile(`./inbox/${msg.id}-${kind}.ogg`, bytes);
@@ -176,11 +173,10 @@ await wa.Message.document('14155557777', await readFile('./contract.pdf'), {
 
 ```typescript title="receive-document.ts"
 import { writeFile } from 'node:fs/promises';
-import { Document } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg) => {
-    if (msg instanceof Document) {
+    if (msg instanceof wa.Message.Document) {
         console.log(msg.name, msg.pages, 'páginas,', msg.size, 'bytes,', msg.mime);
         await writeFile(`./inbox/${msg.name || msg.id}`, await msg.content());
     }
@@ -197,16 +193,15 @@ Envía un WebP — estático o animado — y recíbelos con dimensiones y una ba
 import { readFile } from 'node:fs/promises';
 import { wa } from './client';
 
-await wa.Message.sticker('14155557777', await readFile('./assets/party.webp'));
+await wa.Message.image('14155557777', await readFile('./assets/party.webp', { sticker: true }));
 ```
 
 ```typescript title="receive-sticker.ts"
 import { writeFile } from 'node:fs/promises';
-import { Sticker } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', async (msg) => {
-    if (msg instanceof Sticker) {
+    if (msg instanceof wa.Message.Sticker) {
         console.log(`${msg.width}x${msg.height}`, msg.animated ? '(animado)' : '(estático)');
         await writeFile(`./inbox/${msg.id}.webp`, await msg.content());
     }
@@ -217,7 +212,7 @@ wa.on('message:created', async (msg) => {
 
 ## Ubicación
 
-El envío admite un pin estático; la recepción cubre tanto las ubicaciones estáticas como las en vivo
+El envío admite un pin estático, con el nombre y la dirección del lugar si se dan; la recepción cubre tanto las ubicaciones estáticas como las en vivo
 a través de la subclase `Location`.
 
 ```typescript title="send-location.ts"
@@ -226,28 +221,29 @@ import { wa } from './client';
 await wa.Message.location('14155557777', {
     lat: 40.4168,
     lng: -3.7038,
+    name: 'Puerta del Sol',
+    address: 'Plaza de la Puerta del Sol, Madrid',
 });
 ```
 
 ```typescript title="receive-location.ts"
-import { Location } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:created', (msg) => {
-    if (msg instanceof Location) {
-        console.log(`Pin: ${msg.lat}, ${msg.lng}`);
+    if (msg instanceof wa.Message.Location) {
+        console.log(`Pin: ${msg.lat}, ${msg.lng} ${msg.name ?? ''} ${msg.address ?? ''}`);
         console.log(`URL de Maps: ${msg.link}`);
         if (msg.live) {
-            console.log('Ubicación en vivo — las actualizaciones llegan como message:updated');
+            console.log('Ubicación en vivo compartida');
         }
     }
 });
 ```
 
 !!! warning "La ubicación en vivo es solo de recepción"
-    La API de envío acepta `{ lat, lng }` y nada más: transmitir tu propia ubicación en vivo no está
-    soportado. Las ubicaciones en vivo entrantes siguen actualizándose por `message:updated`, con
-    `live === true`.
+    La API de envío acepta `{ lat, lng, name?, address? }`: transmitir tu propia ubicación en vivo no está
+    soportado. Las ubicaciones en vivo entrantes llegan con `live === true` y las coordenadas de ese
+    mensaje; sus actualizaciones de posición posteriores no emiten `message:updated`.
 
 ---
 
@@ -257,14 +253,13 @@ Cualquier instancia de mensaje puede reenviarse a otro chat en una sola llamada.
 identificador string, un `Chat` o un `Contact`.
 
 ```typescript title="forward.ts"
-import { Image } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 const ARCHIVE_CID = '14155550000';
 
 wa.on('message:created', async (msg) => {
     // Archiva cada foto que recibo en un chat personal conmigo mismo.
-    if (msg instanceof Image && !msg.me) {
+    if (msg instanceof wa.Message.Image && !msg.me) {
         const ok = await msg.forward(ARCHIVE_CID);
         console.log(ok ? 'Reenviado' : 'Falló el reenvío');
     }
@@ -275,8 +270,10 @@ wa.on('message:created', async (msg) => {
 
 ## Dónde viven los bytes
 
-La primera vez que llega un mensaje de media, el contenido se descarga y se persiste junto al
-documento del mensaje (`/chat/<cid>/message/<mid>/content`). A partir de ahí, `content()` y
-`stream()` leen la caché del motor y solo caen en una descarga nueva de baileys cuando la caché está
-vacía — por eso los medios viejos se siguen pudiendo leer después de que WhatsApp los venció, y por
-eso `content()` devuelve un buffer vacío cuando ninguna de las dos fuentes lo tiene.
+La primera vez que llega un mensaje de media (imagen, video, audio, documento o sticker), su binario
+se descarga y se guarda junto al timeline del mensaje, en `/chat/<cid>/message/<mid>/content`; el
+contenido de un texto, una ubicación, una encuesta, una tarjeta, un evento o un producto se deriva
+del mensaje y no se guarda. A partir de ahí, `content()` y `stream()` leen esa copia y solo caen en
+una descarga cuando falta, pidiendo a WhatsApp que reenvíe el media que ya caducó. Por eso los
+medios viejos se siguen pudiendo leer, y por eso `content()` devuelve un buffer vacío cuando ninguna
+de las dos fuentes lo tiene.

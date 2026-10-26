@@ -167,12 +167,12 @@ graceful shutdown hooks, cache warm-up) to the connection lifecycle.
 ### `@command('/help')`
 
 String form: `@command` applies `@on('message:created')`, a guard matching
-`msg.caption.startsWith('/help')` and a transform that rewrites the handler signature to
+`msg.caption().startsWith('/help')` and a transform that rewrites the handler signature to
 `(msg, chat, args)`, where `args` is the tail split by whitespace.
 
 ### `@command(/^\/echo\s+(.+)$/)`
 
-RegExp form: the regex is tested against `msg.caption`. `args` is `match.slice(1)`, so the first
+RegExp form: the regex is tested against `msg.caption()`. `args` is `match.slice(1)`, so the first
 capture group is the echoed text. This is the idiomatic way to parse complex command shapes without
 writing manual `split`/`trim` logic.
 
@@ -199,8 +199,9 @@ to the same workflow, and workflows are independent of each other.
 ### `@on('message:created') + @guard(...)`
 
 Generic inbound logger that demonstrates the plain event subscription with an ad-hoc guard. `@guard`
-is stackable and short-circuits with AND semantics; `msg.me` is `true` for messages authored by the
-bot, so filtering it out prevents self-logging loops.
+is stackable and short-circuits with AND semantics; `msg.me` is `true` for what the account writes
+from the phone or another linked device (what the library sends does not emit `message:created`),
+so filtering it out keeps the log to inbound messages.
 
 !!! warning "Guards receive `unknown` arguments"
     The predicate signature is `(...args: unknown[])`, so `@guard((msg: Message) => !msg.me)` does

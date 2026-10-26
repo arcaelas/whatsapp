@@ -9,12 +9,12 @@ The persistence layer of `@arcaelas/whatsapp`.
 `Engine` is a **string-only key/value contract**. It knows nothing about WhatsApp, JSON or Buffers —
 it just stores and retrieves opaque strings under hierarchical paths, in the order it is told to.
 
-| Concern             | Lives in                                                   |
-| ------------------- | ---------------------------------------------------------- |
-| Wire protocol       | `baileys`                                                  |
-| Domain shapes       | `Contact`, `Chat`, `Message`, `Feed`                       |
-| Serialization       | `serialize` / `deserialize` (BufferJSON)                   |
-| Persistence         | **`Engine` implementations**                               |
+| Concern             | Lives in                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| Wire protocol       | `baileys`                                                                                |
+| Domain shapes       | The baileys raws, read by the getters of `Contact`, `Chat`, `Message`, `Feed`, `Catalog` and `Product` |
+| Serialization       | `serialize` / `deserialize` (BufferJSON and proto values)                                |
+| Persistence         | **`Engine` implementations**                                                             |
 
 This separation means an engine can be backed by anything that can `get`/`set`/`unset`/`list`/
 `count`/`clear` strings under a path: a SQLite file, a directory tree, Redis, S3, DynamoDB, an
@@ -74,9 +74,10 @@ interface Engine {
 | `*_buffer`   | Optional pair. Implement **both or neither**: the library probes `set_buffer` to decide how to store media.                 |
 
 !!! info "Why `score` exists"
-    Messages are written with their `created_at`. Every reconnect re-delivers history; if a rewritten
-    old document took the current clock as its position, ancient messages would jump to the top of
-    `list`. The score keeps the timeline stable no matter how many times a document is rewritten.
+    A message is written with its timestamp, and every event appended to its timeline — a receipt, a
+    reaction, an edit — rewrites the document with that same score. If a rewritten old document took
+    the current clock as its position, ancient messages would jump to the top of `list`. The score
+    keeps the order stable no matter how many times a document is rewritten.
 
 !!! info "Path normalization"
     Every built-in driver collapses `//` and trims leading/trailing `/` before use. A custom engine

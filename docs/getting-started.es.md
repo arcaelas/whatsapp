@@ -41,7 +41,7 @@ El `Engine` es la capa de persistencia de credenciales, chats, contactos y mensa
     ```typescript title="index.ts"
     import { FileSystemEngine } from "@arcaelas/whatsapp";
 
-    const engine = new FileSystemEngine(__dirname + "/.session");
+    const engine = new FileSystemEngine(".session");
     ```
 
     Guarda todo como archivos JSON legibles bajo el directorio que le indiques. Ideal mientras
@@ -82,7 +82,7 @@ El `Engine` es la capa de persistencia de credenciales, chats, contactos y mensa
 
 ## 3. Instancia el cliente
 
-`new WhatsApp(...)` no abre una conexión — solo cablea las entidades y el emisor de eventos.
+`new WhatsApp(...)` no abre una conexión — solo guarda el motor y las opciones, y el emisor de eventos queda listo desde ese momento. Las entidades (`wa.Contact`, `wa.Chat`, `wa.Message`, …) se publican dentro de `connect()`, cuando el socket ya existe.
 
 ```typescript title="index.ts" hl_lines="4 5 6 7"
 import { DatabaseSync } from "node:sqlite";
@@ -115,12 +115,12 @@ wa.on("disconnected", () => {
 
 wa.on("message:created", async (msg, chat) => {
     if (!msg.me) {
-        console.log(`[${chat.name}] ${msg.caption}`);
+        console.log(`[${chat.name()}] ${msg.caption()}`);
     }
 });
 ```
 
-El mapa completo de eventos (`chat:*`, `contact:*`, `message:*`, `feed:*`) está documentado en [Events](references/events.es.md).
+El mapa completo de eventos (`chat:*`, `contact:*`, `message:*`, `feed:*`, `catalog:updated`) está documentado en [Events](references/events.es.md).
 
 ---
 
@@ -153,10 +153,10 @@ usa el delegado `wa.Message` con el id del chat.
 
 ```typescript title="index.ts" hl_lines="3 6"
 wa.on("message:created", async (msg, chat) => {
-    if (!msg.me && msg.caption.toLowerCase() === "ping") {
+    if (!msg.me && msg.caption().toLowerCase() === "ping") {
         await msg.text("pong");                        // respuesta citada
     }
-    if (!msg.me && msg.caption.toLowerCase() === "hola") {
+    if (!msg.me && msg.caption().toLowerCase() === "hola") {
         await wa.Message.text(chat.id, "¡hola!");      // mensaje suelto
     }
 });

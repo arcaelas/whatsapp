@@ -7,7 +7,7 @@ puede descifrar el conteo. La librería maneja la derivación de claves y el des
 
 !!! info "El cifrado es automático"
     La librería deriva la clave HMAC por encuesta, descifra los payloads entrantes de
-    `pollUpdateMessage`, los fusiona en la encuesta almacenada y emite `message:updated`. Nunca
+    `pollUpdateMessage`, los suma al timeline de la encuesta y emite `message:updated`. Nunca
     necesitas tocar bytes crudos ni firmas de votos.
 
 ---
@@ -18,7 +18,7 @@ puede descifrar el conteo. La librería maneja la derivación de claves y el des
 import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 
 export const wa = new WhatsApp({
-    engine: new FileSystemEngine(__dirname + '/.session'),
+    engine: new FileSystemEngine('.session'),
     phone: 14155551234,
 });
 
@@ -63,16 +63,15 @@ await wa.Message.poll(GROUP_CID, {
 ## Recibir votos
 
 Los conteos de votos llegan como eventos `message:updated` sobre la encuesta original. Detéctalos con
-`instanceof Poll` y luego lee `options` — cada entrada es `{ name, count }` — y la bandera
+`instanceof wa.Message.Poll` y luego lee `options` — cada entrada es `{ name, count }` — y la bandera
 `multiple`.
 
 ```typescript title="watch-poll.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', (msg, chat) => {
-    if (msg instanceof Poll) {
-        console.log(`[${chat.name}] ${msg.caption}`);
+    if (msg instanceof wa.Message.Poll) {
+        console.log(`[${chat.name()}] ${msg.caption()}`);
         console.log(`Modo: ${msg.multiple ? 'selección múltiple' : 'selección única'}`);
         for (const option of msg.options) {
             console.log(`  ${option.name}: ${option.count}`);
@@ -82,12 +81,12 @@ wa.on('message:updated', (msg, chat) => {
 ```
 
 !!! tip "Filtrar una sola encuesta"
-    No hay un helper de suscripción por mensaje. Guarda el id que te interesa y compáralo dentro del
-    listener:
+    `msg.sub()` avisa `updated`, `deleted`, `reacted`, `seen` y `played`. Para los votos, guarda el id que te interesa
+    y compáralo dentro del listener:
 
     ```typescript
     const off = wa.on('message:updated', (msg) => {
-        if (msg instanceof Poll && msg.id === poll_id) {
+        if (msg instanceof wa.Message.Poll && msg.id === poll_id) {
             console.log(msg.options);
         }
     });
@@ -100,14 +99,13 @@ wa.on('message:updated', (msg, chat) => {
 ## Quién votó qué
 
 `votes()` desglosa el conteo por votante. Cada entrada es `{ name, contact }`, donde `name` es la
-opción elegida y `contact` es el teléfono del votante.
+opción elegida y `contact` es el JID del votante —el del teléfono cuando se conoce, el LID si no—.
 
 ```typescript title="votes.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', async (msg) => {
-    if (msg instanceof Poll) {
+    if (msg instanceof wa.Message.Poll) {
         for (const vote of await msg.votes()) {
             console.log(`${vote.contact} votó por ${vote.name}`);
         }
@@ -123,7 +121,6 @@ Llama a `poll.select(index)` para emitir un voto de opción única, o `poll.sele
 encuestas de selección múltiple. Los índices siguen el orden de `options`.
 
 ```typescript title="vote.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 const POLL_CID = '120363025912345678@g.us';
@@ -131,7 +128,7 @@ const POLL_MID = '3EB0C7689C2E0F5A4F4E';
 
 const poll = await wa.Message.get(POLL_CID, POLL_MID);
 
-if (poll instanceof Poll) {
+if (poll instanceof wa.Message.Poll) {
     if (poll.multiple) {
         await poll.select([0, 2]); // primera y tercera opción
     } else {
@@ -143,9 +140,9 @@ if (poll instanceof Poll) {
 !!! warning "`select()` es best-effort"
     El voto se cifra y se retransmite correctamente, pero WhatsApp **no** propaga un voto emitido
     desde un dispositivo vinculado (companion) — que es lo que esta librería es. Los votos entrantes
-    se descifran bien; tu propio voto puede no aparecer en otros dispositivos. `select()` devuelve
-    `false` cuando la encuesta no tiene clave de cifrado, no hay socket, o no se pasó ningún índice
-    válido.
+    se descifran bien; tu propio voto puede no aparecer en otros dispositivos. `select([])` retira el
+    voto. `select()` rechaza con `ERR_POLL_SECRET` cuando la encuesta no tiene clave de cifrado y con
+    `ERR_POLL_OPTION` cuando un índice está fuera de rango o sobra en una encuesta de opción única.
 
 ---
 
@@ -156,13 +153,12 @@ elige una opción válida al azar y vota. Demuestra crear + recibir + votar en u
 solo ejemplo.
 
 ```typescript title="auto-vote-bot.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 const TEST_GROUP = '120363025912345678@g.us';
 
 wa.on('message:created', async (msg) => {
-    if (!(msg instanceof Poll)) {
+    if (!(msg instanceof wa.Message.Poll)) {
         return;
     }
     if (msg.cid !== TEST_GROUP || msg.me) {
@@ -190,7 +186,7 @@ wa.on('message:created', async (msg) => {
         await msg.select(Math.floor(Math.random() * total_options));
     }
 
-    console.log(`Voto automático en "${msg.caption}"`);
+    console.log(`Voto automático en "${msg.caption()}"`);
 });
 ```
 
@@ -202,11 +198,10 @@ Como toda subclase de `Message`, `Poll` hereda `text()`, `image()`, etc. — res
 la cita automáticamente.
 
 ```typescript title="reply-to-poll.ts"
-import { Poll } from '@arcaelas/whatsapp';
 import { wa } from './client';
 
 wa.on('message:updated', async (msg) => {
-    if (!(msg instanceof Poll)) {
+    if (!(msg instanceof wa.Message.Poll)) {
         return;
     }
     const total = msg.options.reduce((sum, option) => sum + option.count, 0);

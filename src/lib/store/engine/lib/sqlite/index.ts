@@ -7,10 +7,7 @@
 import type { Engine } from '~/lib/store/engine';
 import { normalize_path, split_path } from '~/lib/store/engine/lib';
 
-/**
- * Sentencia preparada, con la forma que exponen `better-sqlite3` y `node:sqlite`.
- * Prepared statement, shaped as `better-sqlite3` and `node:sqlite` expose it.
- */
+/** Sentencia preparada, con la forma de `better-sqlite3` y `node:sqlite`. / Prepared statement, shaped as `better-sqlite3` and `node:sqlite` expose it. */
 interface SQLiteStatement {
   run(...params: unknown[]): unknown;
   get(...params: unknown[]): unknown;
@@ -18,12 +15,10 @@ interface SQLiteStatement {
 }
 
 /**
- * Interface mínima de la base SQLite. La cumplen `better-sqlite3` (`new Database(file)`) y
- * el `node:sqlite` nativo (`new DatabaseSync(file)`), así que el driver no agrega ninguna
- * dependencia: la base se inyecta ya abierta, igual que el cliente de `RedisEngine`.
- * Minimal SQLite database interface. Both `better-sqlite3` (`new Database(file)`) and the
- * native `node:sqlite` (`new DatabaseSync(file)`) satisfy it, so this driver adds no
- * dependency: the database is injected already open, just like `RedisEngine`'s client.
+ * Base SQLite mínima: la cumplen `better-sqlite3` y el `node:sqlite` nativo, así que el driver no
+ * agrega dependencias y recibe la base ya abierta.
+ * Minimal SQLite database: both `better-sqlite3` and the native `node:sqlite` satisfy it, so the
+ * driver adds no dependency and receives the database already open.
  */
 export interface SQLiteDatabase {
   exec(sql: string): unknown;
@@ -31,141 +26,99 @@ export interface SQLiteDatabase {
 }
 
 /**
- * Driver de persistencia con SQLite: una tabla `(path, parent, score, value)` con índice
- * `(parent, score DESC)`.
- *
- * Es el driver más eficiente de los integrados porque delega en el motor lo que los demás
- * resuelven a mano: `list` es un `ORDER BY score DESC LIMIT/OFFSET` sobre el índice (sin
- * índice en memoria ni archivo de orden), `count` un `COUNT(*)` y el `unset` en cascada una
- * sola sentencia por rango de `path`. Medido sobre un chat real de 55.146 mensajes frente al
- * filesystem: 220 MB → 64 MB en disco, primer `list` 115 ms → 0,6 ms y dos archivos en total.
- *
- * SQLite persistence driver: a single `(path, parent, score, value)` table with a
- * `(parent, score DESC)` index. The most efficient built-in driver, since it delegates to the
- * engine what the others hand-roll: `list` is an indexed `ORDER BY score DESC LIMIT/OFFSET`
- * (no in-memory index, no order file), `count` a `COUNT(*)` and cascading `unset` a single
- * range statement. Measured on a real 55,146-message chat against the filesystem: 220 MB →
- * 64 MB on disk, first `list` 115 ms → 0.6 ms and two files in total.
- *
- * @example
- * import Database from 'better-sqlite3';
- * const engine = new SQLiteEngine(new Database('.sessions/5491112345678.db'));
+ * Driver SQLite: una tabla `(path, parent, score, value, binary)` con índice `(parent, score DESC)`;
+ * `list` es un `ORDER BY` sobre el índice y `count` un `COUNT(*)`, sin índice en memoria.
+ * SQLite driver: a `(path, parent, score, value, binary)` table with a `(parent, score DESC)`
+ * index; `list` is an `ORDER BY` over the index and `count` a `COUNT(*)`, with no in-memory index.
  *
  * @example
  * import { DatabaseSync } from 'node:sqlite';
  * const engine = new SQLiteEngine(new DatabaseSync('.sessions/5491112345678.db'));
  */
 export class SQLiteEngine implements Engine {
-  private readonly _read: SQLiteStatement;
-  private readonly _write: SQLiteStatement;
-  private readonly _remove: SQLiteStatement;
-  private readonly _page: SQLiteStatement;
-  private readonly _total: SQLiteStatement;
-  private readonly _wipe: SQLiteStatement;
-  private readonly _read_blob: SQLiteStatement;
-  private readonly _write_blob: SQLiteStatement;
+  readonly #read: SQLiteStatement;
+  readonly #write: SQLiteStatement;
+  /** Borra el sub-árbol por rango: '0' es el carácter siguiente a '/', así el índice de `path` lo resuelve. / Deletes the subtree by range: '0' is the character right after '/', so the `path` index serves it. */
+  readonly #remove: SQLiteStatement;
+  readonly #page: SQLiteStatement;
+  readonly #total: SQLiteStatement;
+  readonly #wipe: SQLiteStatement;
+  readonly #read_blob: SQLiteStatement;
+  readonly #write_blob: SQLiteStatement;
 
   /**
-   * @param _db - Base SQLite ya abierta / Already open SQLite database
+   * @param db - Base SQLite ya abierta; WAL y `synchronous = NORMAL` se piden sin exigirlos / Already open SQLite database; WAL and `synchronous = NORMAL` are requested without requiring them
    * @param table - Tabla donde viven los documentos / Table holding the documents
    */
-  constructor(private readonly _db: SQLiteDatabase, table = 'documents') {
-    // WAL y synchronous NORMAL multiplican el rendimiento de escritura; se aplican con
-    // tolerancia porque un driver puede exponerlos como no-op o rechazarlos en :memory:.
-    // WAL and synchronous NORMAL greatly speed up writes; applied leniently since a driver
-    // may expose them as no-ops or reject them on :memory:.
-    try {
-      _db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    } catch {
-      /* optional tuning */
-    }
-    _db.exec(
+  constructor(db: SQLiteDatabase, table = 'documents') {
+    void Promise.resolve().then(() => db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;')).catch(() => null);
+    db.exec(
       `CREATE TABLE IF NOT EXISTS ${table} (path TEXT PRIMARY KEY, parent TEXT NOT NULL, score INTEGER NOT NULL, value TEXT NOT NULL DEFAULT '', binary BLOB);
        CREATE INDEX IF NOT EXISTS ${table}_order ON ${table} (parent, score DESC);`
     );
-    this._read = _db.prepare(`SELECT value FROM ${table} WHERE path = ?`);
-    this._write = _db.prepare(`INSERT INTO ${table} (path, parent, score, value) VALUES (?, ?, ?, ?)
+    this.#read = db.prepare(`SELECT value FROM ${table} WHERE path = ?`);
+    this.#write = db.prepare(`INSERT INTO ${table} (path, parent, score, value) VALUES (?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET value = excluded.value, score = excluded.score`);
-    // El sub-árbol se borra por rango en vez de con LIKE: '0' es el carácter siguiente a '/',
-    // así el rango cubre exactamente los descendientes y se resuelve con el índice de `path`.
-    // The subtree is deleted by range instead of LIKE: '0' is the character right after '/',
-    // so the range covers exactly the descendants and is served by the `path` index.
-    this._remove = _db.prepare(`DELETE FROM ${table} WHERE path = ? OR (path >= ? AND path < ?)`);
-    this._page = _db.prepare(`SELECT value FROM ${table} WHERE parent = ? ORDER BY score DESC LIMIT ? OFFSET ?`);
-    this._total = _db.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE parent = ?`);
-    this._wipe = _db.prepare(`DELETE FROM ${table}`);
-    this._read_blob = _db.prepare(`SELECT binary FROM ${table} WHERE path = ?`);
-    this._write_blob = _db.prepare(`INSERT INTO ${table} (path, parent, score, value, binary) VALUES (?, ?, ?, '', ?)
+    this.#remove = db.prepare(`DELETE FROM ${table} WHERE path = ? OR (path >= ? AND path < ?)`);
+    this.#page = db.prepare(`SELECT value FROM ${table} WHERE parent = ? ORDER BY score DESC LIMIT ? OFFSET ?`);
+    this.#total = db.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE parent = ?`);
+    this.#wipe = db.prepare(`DELETE FROM ${table}`);
+    this.#read_blob = db.prepare(`SELECT binary FROM ${table} WHERE path = ?`);
+    this.#write_blob = db.prepare(`INSERT INTO ${table} (path, parent, score, value, binary) VALUES (?, ?, ?, '', ?)
        ON CONFLICT(path) DO UPDATE SET binary = excluded.binary, score = excluded.score`);
   }
 
-  /**
-   * Lee el valor de un documento.
-   * Reads a document's value.
-   */
+  /** @param path - Ruta del documento / Document path */
   async get(path: string): Promise<string | null> {
-    return (this._read.get(normalize_path(path)) as { value: string } | undefined)?.value ?? null;
+    return (this.#read.get(normalize_path(path)) as { value: string } | undefined)?.value ?? null;
   }
 
   /**
-   * Escribe el valor del documento; `score` fija el orden de `list` (por defecto, la hora
-   * de escritura).
-   * Writes the document value; `score` drives `list` ordering (write time by default).
+   * @param path - Ruta del documento / Document path
+   * @param value - Contenido / Content
+   * @param score - Orden en `list`; sin él, la hora de escritura / `list` order; without it, write time
    */
   async set(path: string, value: string, score?: number): Promise<void> {
-    const { parent } = split_path(path);
-    this._write.run(normalize_path(path), parent, score ?? Date.now(), value);
+    this.#write.run(normalize_path(path), split_path(path).parent, score ?? Date.now(), value);
   }
 
-  /**
-   * Elimina el documento y todos sus descendientes. Idempotente.
-   * Deletes the document and every descendant. Idempotent.
-   */
+  /** @param path - Ruta que se borra con todo su sub-árbol / Path deleted with its whole subtree */
   async unset(path: string): Promise<boolean> {
     const full = normalize_path(path);
-    this._remove.run(full, `${full}/`, `${full}0`);
+    this.#remove.run(full, `${full}/`, `${full}0`);
     return true;
   }
 
   /**
-   * Lista los valores de los hijos directos, ordenados por score DESC.
-   * Lists direct children values ordered by score DESC.
+   * @param path - Directorio / Directory
+   * @param offset - Desplazamiento / Offset
+   * @param limit - Tamaño de página / Page size
    */
   async list(path: string, offset = 0, limit = 50): Promise<string[]> {
-    return (this._page.all(normalize_path(path), limit, offset) as { value: string }[]).map((row) => row.value);
+    return (this.#page.all(normalize_path(path), limit, offset) as { value: string }[]).map((row) => row.value);
   }
 
-  /**
-   * Cuenta los hijos directos.
-   * Counts direct children.
-   */
+  /** @param path - Directorio / Directory */
   async count(path: string): Promise<number> {
-    return Number((this._total.get(normalize_path(path)) as { total: number }).total);
+    return Number((this.#total.get(normalize_path(path)) as { total: number }).total);
   }
 
-  /**
-   * Lee el binario del documento, o null si la fila no lo tiene.
-   * Reads the document binary, or null when the row has none.
-   */
+  /** @param path - Ruta del documento / Document path */
   async get_buffer(path: string): Promise<Buffer | null> {
-    const row = this._read_blob.get(normalize_path(path)) as { binary: Buffer | Uint8Array | null } | undefined;
+    const row = this.#read_blob.get(normalize_path(path)) as { binary: Buffer | Uint8Array | null } | undefined;
     return row?.binary ? Buffer.from(row.binary) : null;
   }
 
   /**
-   * Escribe el binario del documento como BLOB, sin JSON ni base64.
-   * Writes the document binary as a BLOB, with no JSON nor base64.
+   * @param path - Ruta del documento / Document path
+   * @param data - Binario crudo, sin JSON ni base64 / Raw binary, no JSON nor base64
+   * @param score - Orden en `list` / `list` order
    */
   async set_buffer(path: string, data: Buffer, score?: number): Promise<void> {
-    const { parent } = split_path(path);
-    this._write_blob.run(normalize_path(path), parent, score ?? Date.now(), data);
+    this.#write_blob.run(normalize_path(path), split_path(path).parent, score ?? Date.now(), data);
   }
 
-  /**
-   * Vacía la tabla completa.
-   * Clears the entire table.
-   */
   async clear(): Promise<void> {
-    this._wipe.run();
+    this.#wipe.run();
   }
 }

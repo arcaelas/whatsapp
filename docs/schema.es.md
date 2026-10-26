@@ -2,10 +2,22 @@
 
 Referencia para cada documento que `@arcaelas/whatsapp` escribe a través de un `Engine`.
 
-Los documentos pasan por `serialize()` (que usa `BufferJSON` de baileys), por lo que el motor solo ve
-y persiste **strings**. Los contenidos binarios son la única excepción: cuando el driver implementa
-`set_buffer` se escriben crudos, y si no caen en un documento JSON con base64. Los drivers son
-tuberías opacas; no están al tanto de JSON, de WhatsApp, ni de buffers.
+Cada documento conserva el raw tal como WhatsApp lo entrega a través de baileys, con los nombres de
+campo de baileys: la librería no traduce nada al escribir, y lo único propio que agrega es el
+envoltorio de los timelines y los documentos de metadatos. Los nombres en snake_case pertenecen a los
+getters de las entidades, que los derivan del raw al leer, así que un campo que baileys agrega se
+guarda sin esperar a que la librería lo mapee.
+
+Los documentos pasan por `serialize()`, por lo que el motor solo ve y persiste **strings**. Los
+contenidos binarios son la única excepción: cuando el driver implementa `set_buffer` se escriben
+crudos, y si no caen en un documento JSON con base64. Los drivers son tuberías opacas; no están al
+tanto de JSON, de WhatsApp, ni de buffers.
+
+!!! warning "Documentos escritos por 8.x"
+    9.0.0 no lee los documentos escritos por 8.x — documentos de contacto y de chat en snake_case,
+    mensajes con un campo `raw` — y no hay migración: los listados los omiten, igual que un documento
+    corrupto, en vez de fallar. La sesión sí se conserva: `/session` no cambió de forma y las llaves
+    de app-state que 8.x guardó como texto base64 se recuperan al leerlas.
 
 ---
 
@@ -13,14 +25,20 @@ tuberías opacas; no están al tanto de JSON, de WhatsApp, ni de buffers.
 
 El orquestador escribe en un conjunto pequeño y fijo de ramas:
 
-| Rama         | Propósito                                                                         |
-| ------------ | ----------------------------------------------------------------------------------- |
-| `/session/`  | Credenciales de autenticación y material del protocolo Signal.                     |
-| `/contact/`  | Metadatos de contactos (un documento por id de contacto).                          |
-| `/chat/`     | Metadatos de chats + documentos de mensajes por chat (con sus subdocumentos de contenido). |
-| `/status/`   | Estados (`Feed`) y su contenido.                                                   |
-| `/lid/`      | Índice bidireccional de búsqueda LID ↔ JID.                                        |
-| `/catalog/`  | Catálogos de productos (`Catalog`), un documento por negocio.                      |
+| Rama         | Propósito                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `/session/`  | Credenciales de autenticación y material del protocolo Signal.                               |
+| `/contact/`  | El `Contact` de baileys de cada contacto, bajo su JID canónico.                              |
+| `/chat/`     | El `Chat` de baileys de cada conversación, el timeline de cada mensaje y su binario de media. |
+| `/status/`   | El timeline de cada estado (`Feed`) y su binario de media.                                   |
+| `/lid/`      | Índice bidireccional de búsqueda LID ↔ JID.                                                  |
+| `/catalog/`  | El timeline de cada colección del catálogo (`Catalog`), por negocio.                         |
+| `/blocklist` | Un único documento con los JIDs que la cuenta tiene bloqueados.                              |
+| `/pinned`    | Un único documento con los JIDs de los chats fijados.                                        |
+| `/unmapped`  | Un único documento con los LIDs de las fichas y chats guardados todavía sin teléfono.        |
+
+Cualquier ruta de una entidad puede tener además un hijo `metadata` con los valores propios de la
+integración; ver [Metadatos](#metadatos-pathmetadata).
 
 Las rutas usan `/` como separador y **nunca empiezan ni terminan con barra** una vez normalizadas —
 todos los drivers colapsan `//` y recortan los extremos.
@@ -29,25 +47,41 @@ todos los drivers colapsan `//` y recortan los extremos.
 
 ## Índice de rutas
 
-| Ruta                                    | Propósito                                                                     |
-| --------------------------------------- | ------------------------------------------------------------------------------- |
-| `/session/creds`                        | `AuthenticationCreds` de baileys (identidad, prekey firmada, registro…).       |
-| `/session/<category>/<id>`              | Material de Signal escrito por el key store de baileys (`pre-key`, `session`, `sender-key`, `app-state-sync-key`, …). |
-| `/contact/<id>`                         | Documento del contacto.                                                        |
-| `/chat/<cid>`                           | Documento del chat.                                                            |
-| `/chat/<cid>/message/<mid>`             | Documento del mensaje, incluyendo el `WAMessage` crudo completo de baileys.    |
-| `/chat/<cid>/message/<mid>/content`     | Contenido del mensaje (binario crudo, o `{ data: "<base64>" }`).               |
-| `/status/<id>`                          | Documento del estado.                                                          |
-| `/status/<id>/content`                  | Contenido del estado (binario crudo, o `{ data: "<base64>" }`).                |
-| `/lid/<lid>`                            | Mapa directo: LID → JID (string serializado).                                  |
-| `/lid/<pn>`                             | Mapa inverso: JID → LID (string serializado).                                  |
-| `/lid/<digits>_reverse`                 | Fallback legado que lee el resolver de JIDs; solo lo escribían versiones antiguas. |
-| `/catalog/<jid>`                        | El documento del catálogo del negocio con sus productos.                       |
+| Ruta                                      | Propósito                                                                     |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `/session/creds`                          | `AuthenticationCreds` de baileys (identidad, prekey firmada, registro…).      |
+| `/session/<category>/<id>`                | Material de Signal escrito por el key store de baileys (`pre-key`, `session`, `sender-key`, `app-state-sync-key`, …). |
+| `/contact/<jid>`                          | El `Contact` de baileys.                                                      |
+| `/contact/<jid>/metadata`                 | Metadatos del contacto.                                                       |
+| `/contact/<jid>/photo`                    | `{ url }` de la última foto de perfil descargada; su binario en `photo/content`. |
+| `/contact/<jid>/bio`                      | `{ status, at }` de la última biografía leída: `content()` no vuelve a preguntar en 24 h. |
+| `/chat/<cid>`                             | El `Chat` de baileys.                                                         |
+| `/chat/<cid>/metadata`                    | Metadatos del chat.                                                           |
+| `/chat/<cid>/photo`                       | `{ url }` de la última foto del grupo descargada; su binario en `photo/content`. |
+| `/chat/<cid>/message/<mid>`               | Timeline del mensaje: el `WAMessage` y cada evento posterior.                 |
+| `/chat/<cid>/message/<mid>/content`       | Binario del media (crudo, o `{ data: "<base64>" }`).                          |
+| `/chat/<cid>/message/<mid>/metadata`      | Metadatos del mensaje.                                                        |
+| `/status/<id>`                            | Timeline del estado.                                                          |
+| `/status/<id>/content`                    | Binario del media del estado (crudo, o `{ data: "<base64>" }`).               |
+| `/status/<id>/metadata`                   | Metadatos del estado.                                                         |
+| `/status/<id>/audience`                   | Arreglo de JIDs a los que `Feed.create()` publicó el estado; el retiro va a ellos. |
+| `/lid/<lid>`                              | Mapa directo: LID → JID (string serializado).                                 |
+| `/lid/<pn>`                               | Mapa inverso: JID → LID (string serializado).                                 |
+| `/lid/<digits>_reverse`                   | Fallback legado que lee el resolver de JIDs; solo lo escribían versiones antiguas. |
+| `/catalog/<jid>/collection/<id>`          | Timeline de las descargas de una colección del catálogo.                      |
+| `/catalog/<jid>/collection/<id>/metadata` | Metadatos del catálogo; la librería guarda aquí `updated_at`.                 |
+| `/catalog/<jid>/product/<pid>/metadata`   | Metadatos de un producto del catálogo.                                        |
+| `/blocklist`                              | Arreglo de JIDs bloqueados.                                                   |
+| `/pinned`                                 | Arreglo de JIDs de los chats fijados: `pinned(true)` los cuenta con una lectura. |
+| `/unmapped`                               | Arreglo de LIDs guardados sin teléfono: la conexión revisa sólo estos.         |
 
 !!! note "Claves de sesión"
     El conjunto exacto de rutas `/session/<category>/<id>` depende de lo que baileys persista. La
-    librería trata cada categoría de forma uniforme: serializa el valor con `BufferJSON` y lo escribe
-    bajo `/session/<category>/<id>`.
+    librería trata cada categoría de forma uniforme: serializa el valor con `serialize()` y lo escribe
+    bajo `/session/<category>/<id>`, un valor `null` lo borra, y las escrituras sobre una misma ruta
+    se encolan en orden. Los valores de `app-state-sync-key` se reconstruyen con
+    `proto.Message.AppStateSyncKeyData.fromObject` al leerlos, lo que además decodifica las claves que
+    versiones anteriores guardaron como texto base64.
 
 ---
 
@@ -55,43 +89,76 @@ todos los drivers colapsan `//` y recortan los extremos.
 
 `engine.set(path, value, score?)` recibe un score opcional, que es por lo que `list` ordena (DESC).
 
-| Documento                          | Score                                                          |
-| ---------------------------------- | ---------------------------------------------------------------- |
-| `/chat/<cid>/message/<mid>`        | El `created_at` del mensaje (epoch ms).                         |
-| `/status/<id>` (publicado por ti)  | La marca de tiempo de la publicación.                           |
-| `/catalog/<jid>`                  | La marca de tiempo de la descarga (`fetched_at`).               |
-| Todo lo demás                      | Ninguno — el driver cae en la hora de escritura.                |
+| Documento                         | Score                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| `/chat/<cid>`                     | `conversationTimestamp` × 1000: la última actividad, en epoch ms (la hora de escritura mientras no lo tenga). |
+| `/chat/<cid>/message/<mid>`       | `messageTimestamp` × 1000 (epoch ms).                                                  |
+| `/status/<id>`                    | `messageTimestamp` × 1000 (epoch ms).                                                  |
+| `/catalog/<jid>/collection/<id>`  | Su posición en la descarga: la primera colección devuelta recibe el score más alto.    |
+| Todo lo demás                     | Ninguno — el driver cae en la hora de escritura.                                       |
 
-Por eso resincronizar el historial no reordena tus chats: reescribir un mensaje viejo conserva su
-posición original.
+Cada evento que se suma a un timeline reescribe el documento con su score original, así que un
+recibo o una reacción sobre un mensaje viejo lo dejan en su sitio.
 
 ---
 
 ## Formas de los documentos
 
-Todos los documentos se serializan a JSON con `BufferJSON`. Los buffers se codifican como:
+Todos los documentos son JSON escrito por `serialize()`. Los valores del proto conservan sus valores
+reales — enums y longs como números, bytes como Buffers — en lugar del mapeo JSON del proto, así un
+raw releído se sigue comparando con los enums de baileys. Los buffers se codifican con el
+`BufferJSON` de baileys:
 
 ```json
 { "type": "Buffer", "data": "<base64 string>" }
 ```
 
-`deserialize<T>(raw)` reconstruye las instancias originales de `Buffer` / `Uint8Array` al leer, y
-devuelve `null` ante un documento corrupto o truncado en lugar de lanzar.
+`deserialize<T>(raw)` reconstruye las instancias originales de `Buffer` al leer, y devuelve `null`
+ante un documento corrupto o truncado en lugar de lanzar.
 
 ---
 
-### Contacto — `/contact/<id>`
+### Timelines
+
+Los mensajes, los estados y las colecciones del catálogo se guardan como un **timeline**: un arreglo
+con los raws exactamente como los emitió baileys, en orden de llegada y sin sobre. El primer raw es
+la entidad tal como llegó; cada raw posterior es un evento que baileys emitió para ella —un
+`messages.update`, un mensaje que la refiere—. Nada de lo registrado se reescribe: un raw nuevo se
+suma al final, y un raw idéntico al último es su eco y se ignora. Los getters buscan en el timeline,
+de atrás hacia adelante, el último raw que define su valor, así que una edición deja vigente el texto
+nuevo y el anterior queda en el timeline.
+
+La única excepción es la entrega. Los recibos (`message-receipt.update`) y los `messages.update` que
+sólo traen `status` no se suman: reemplazan un único registro de entrega `{ key, update: { status } }`
+al final del timeline, con el estado más alto alcanzado —un error manda, con su
+`messageStubParameters`, hasta que llega un avance—. Así un mensaje propio en un grupo de 200 no
+suma 600 raws de acuses.
 
 ```ts
-interface ContactRaw {
-    id: string;                   // identificador LID o PN, según el addressing
-    lid?: string | null;          // LID cuando se conoce
-    phone_number?: string | null; // JID PN cuando baileys lo conoce
-    name?: string | null;         // nombre de agenda
-    notify?: string | null;       // nombre público que puso el contacto
-    verified_name?: string | null;// nombre verificado de negocio
-    img_url?: string | null;      // URL de la foto de perfil ("changed" al rotarla)
-    status?: string | null;       // bio / info
+import type { LIDMapping, MessageUserReceiptUpdate, WAMessage, WAMessageUpdate } from 'baileys';
+
+// el timeline de un mensaje o un estado es un Raw[] en orden de llegada
+type Raw = WAMessage | WAMessageUpdate | MessageUserReceiptUpdate | LIDMapping;
+```
+
+---
+
+### Contacto — `/contact/<jid>`
+
+El `Contact` de baileys, guardado bajo su JID canónico: el JID de teléfono cuando se conoce, el LID
+si no.
+
+```ts
+interface Contact {           // Contact de baileys
+    id: string;               // LID o JID de teléfono, tal como lo entregó baileys
+    lid?: string;             // LID cuando se conoce
+    phoneNumber?: string;     // JID de teléfono cuando se conoce
+    name?: string;            // nombre de agenda
+    notify?: string;          // nombre público que puso el contacto
+    username?: string;        // nombre de usuario, cuando WhatsApp lo envía
+    verifiedName?: string;    // nombre verificado de negocio
+    imgUrl?: string | null;   // URL de la foto de perfil ("changed" al rotarla)
+    status?: string;          // bio / info
 }
 ```
 
@@ -101,41 +168,49 @@ Ejemplo de payload:
 {
     "id": "5491112345678@s.whatsapp.net",
     "lid": "140913951141911@lid",
-    "phone_number": "5491112345678@s.whatsapp.net",
+    "phoneNumber": "5491112345678@s.whatsapp.net",
     "name": "Juan Perez",
     "notify": "Juanito",
-    "verified_name": null,
-    "img_url": "https://pps.whatsapp.net/v/t61.24694-24/...",
-    "status": "Disponible 24/7"
+    "imgUrl": "https://pps.whatsapp.net/v/t61.24694-24/...",
+    "status": "Hey there! I am using WhatsApp."
 }
 ```
 
-Los getters de [`Contact`](references/contact.es.md) derivan `name`, `phone`, `jid`, `lid` y `photo`
-de este documento.
+Las actualizaciones parciales — `contacts.update`, o el nombre público de un mensaje entrante cuando
+el contacto aún no tiene nombre — se fusionan campo por campo sobre el documento guardado, y un campo
+que llega como `undefined` nunca sobrescribe: una actualización que trae solo la foto conserva el
+nombre. Los getters de [`Contact`](references/contact.es.md) derivan `id`, `name` y `phone` de este
+documento; `content()` guarda en `/contact/<id>/bio` la biografía que lee con la hora de la consulta
+—y en `status` cuando cambia—, y `photo()` guarda la foto bajo `/contact/<id>/photo`.
+
+Cuando WhatsApp revela el teléfono detrás de un LID — con `lid-mapping.update`, o con la revisión de
+`/unmapped` que corre en cada conexión — el contacto, el chat y los mensajes guardados bajo el LID
+pasan al JID de teléfono con sus binarios y sus metadatos, y las copias del LID se borran. Los campos
+que el contacto y el chat ya tenían bajo el teléfono mandan, y cada mensaje movido recibe una entrada
+`{ lid, pn }`.
 
 ---
 
 ### Chat — `/chat/<cid>`
 
-El documento del chat solo persiste los campos que el orquestador sigue:
+El `Chat` de baileys (`proto.IConversation`), guardado sin su arreglo `messages` bajo el id canónico
+— el JID de teléfono cuando se conoce, si no el LID o el `@g.us` — y fusionado campo por campo en
+cada `chats.upsert`, `chats.update`, `groups.upsert`, `groups.update` y mensaje nuevo. Estos son los
+campos que lee la librería; cualquier otro campo que envíe baileys se conserva tal como llegó:
 
 ```ts
-interface ChatRaw {
-    id: string;
-    name?: string | null;
+interface Chat {                             // Chat de baileys
+    id: string;                              // JID de teléfono, LID o @g.us
+    name?: string | null;                    // asunto del grupo, o nombre del contacto
+    description?: string | null;             // descripción del grupo
     archived?: boolean | null;
-    pinned?: number | null;          // timestamp del pin; null/ausente = sin fijar
-    mute_end_time?: number | null;   // epoch ms; <= Date.now() significa sin silenciar
-    unread_count?: number | null;
-    activity?: number | null;        // epoch ms del último mensaje: ordena la lista
+    pinned?: number | null;                  // timestamp del pin; null/ausente = sin fijar
+    muteEndTime?: number | null;             // epoch ms; <= Date.now() significa sin silenciar
+    unreadCount?: number | null;
+    conversationTimestamp?: number | null;   // epoch en segundos de la última actividad: ordena la lista
+    pnJid?: string | null;                   // JID de teléfono del chat, cuando se conoce
 }
 ```
-
-`activity` es el score con el que se escribe el documento, así que `Chat.list` devuelve los
-chats por actividad real. Fijar, archivar, silenciar o marcar leído reescriben el documento
-**conservando** ese score: solo un mensaje nuevo mueve el chat de sitio. En un documento
-guardado antes de que el campo existiera, la actividad se deduce de su último mensaje
-persistido, de modo que no hace falta migrar nada.
 
 Ejemplo de payload:
 
@@ -143,48 +218,78 @@ Ejemplo de payload:
 {
     "id": "120363123456789@g.us",
     "name": "Dev Team",
+    "description": "Standup at 9:00",
     "archived": false,
     "pinned": 1767371367857,
-    "mute_end_time": null,
-    "unread_count": 5,
-    "activity": 1767371360000
+    "unreadCount": 5,
+    "conversationTimestamp": 1767371360
 }
 ```
+
+`conversationTimestamp` × 1000 es el score con el que se escribe el documento, así que `Chat.list`
+devuelve los chats por actividad real. Cada escritura conserva el mayor valor entre lo que llega y lo
+guardado, y un mensaje nuevo lo sube a su propio timestamp, así que fijar, archivar, silenciar o
+marcar leído nunca mueven un chat de sitio.
+
+Los setters de [`Chat`](references/chat.es.md) — `archived()`, `pinned()`, `muted()`, `name()`,
+`content()`, `ephemeral()` y `seen()` — escriben este documento en cuanto WhatsApp acepta el cambio y
+emiten el evento `chat:*` que corresponde; el eco que llega después ya no encuentra diferencia y no
+lo repite. Un `unreadCount` positivo en `chats.update` es un incremento, como lo
+define baileys, y se suma al guardado; `0` lo reinicia y `-1` es un chat marcado como no leído.
 
 ---
 
 ### Mensaje — `/chat/<cid>/message/<mid>`
 
-```ts
-import type { WAMessage } from 'baileys';
+Un timeline. El primer raw es el `WAMessage` tal como llegó o como lo envió la librería; cada raw
+posterior es exactamente lo que baileys emitió para él:
 
-interface MessageRaw {
-    id: string;                  // key.id
-    cid: string;                 // remoteJidAlt || remoteJid
-    mid: string | null;          // contextInfo.stanzaId (mensaje citado)
-    me: boolean;                 // key.fromMe
-    type: 'text' | 'image' | 'video' | 'audio' | 'sticker'
-        | 'document' | 'location' | 'poll' | 'vcard' | 'event' | 'product';
-    author: string;              // JID resuelto del remitente
-    status: number;              // 0..5, ver la tabla de abajo
-    starred: boolean;
-    forwarded: boolean;          // contextInfo.isForwarded
-    created_at: number;          // epoch ms (messageTimestamp * 1000)
-    deleted_at: number | null;   // epoch ms en que vence un mensaje temporal
-    mime: string;                // mimetype del media, o text/plain
-    caption: string;             // cuerpo del texto, pie, pregunta de encuesta o descripción del evento
-    edited: boolean;
-    revoked_at?: number | null;  // epoch ms en que se eliminó para todos; el documento se conserva
-    pinned_at?: number | null;   // epoch ms en que se fijó en el chat; null al soltarlo
-    multiple?: boolean;          // encuestas: selección múltiple, preservada entre re-syncs
-    reactions?: { author: string; emoji: string; at: number }[];
-    responses?: { author: string; response: 'going' | 'not_going' | 'maybe'; guests: number; at: number }[];   // eventos: una por asistente
-    raw: WAMessage;              // crudo completo de baileys, usado para reenviar / redescargar
-}
+```ts
+[
+    WAMessage,          // el mensaje (messages.upsert)
+    WAMessage,          // un mensaje que lo refiere: reactionMessage, pinInChatMessage, protocolMessage
+                        // (edición, retiro), pollUpdateMessage o encEventResponseMessage, cifrado
+    { key, update },    // ese voto o esa respuesta descifrados al llegar, con la forma del messages.update de baileys
+    { key, update },    // messages.update: destacado, edición, retiro, pollUpdates o eventResponses de baileys
+    { lid, pn },        // lid-mapping.update: el chat se tradujo de su LID al teléfono
+    { key, update },    // el registro de entrega: { status }, el más alto de los acuses y estados
+]
 ```
 
-Valores numéricos de `status`, y el string legible que expone
-[`Message.status`](references/message.es.md):
+Un mensaje que lo refiere no se suma dos veces cuando su id ya está en el timeline. Los envíos y las
+acciones de la propia librería llegan por el mismo camino: baileys les hace eco, y lo que la librería
+retransmite por su cuenta (una edición de media, un voto, una vista única, un reenvío) se publica en
+`messages.upsert` como cualquier otro mensaje.
+
+Ejemplo de payload, un texto enviado que fue leído; el segundo raw es el registro de entrega que
+dejaron los acuses:
+
+```json
+[
+    {
+        "key": { "remoteJid": "5491112345678@s.whatsapp.net", "fromMe": true, "id": "3EB0C767D26A1D0F8A7B" },
+        "message": { "conversation": "Hi!" },
+        "messageTimestamp": 1767371360,
+        "status": 1
+    },
+    {
+        "key": { "remoteJid": "5491112345678@s.whatsapp.net", "fromMe": true, "id": "3EB0C767D26A1D0F8A7B" },
+        "update": { "status": 4 }
+    }
+]
+```
+
+Los getters de [`Message`](references/message.es.md) buscan en el timeline de atrás hacia adelante: la
+última edición da `caption`, el último pin da `pinned` y el último raw con `starred` da `starred`. Un
+retiro marca `revoked_at` y conserva el texto. Un voto o una respuesta de evento se guarda cifrado, como
+lo emite baileys, y además descifrado al llegar —probando cada identidad por LID y por teléfono del
+votante y del creador—, así la lectura no descifra; sólo el que no se pudo descifrar entonces se
+reintenta al leer, y gana el último voto de cada votante por su hora de envío. `msg.status` toma el
+estado del registro de entrega: en el ejemplo de arriba es `'read'`.
+
+El `status` del `WAMessage` y del registro de entrega es el valor numérico del proto; un recibo
+cuenta como `3`, o como `4` con `readTimestamp` y `5` con `playedTimestamp`. El string legible que
+expone [`Message.status`](references/message.es.md):
 
 | Valor | `msg.status`  | Significado                    |
 | ----- | ------------- | ------------------------------ |
@@ -195,17 +300,18 @@ Valores numéricos de `status`, y el string legible que expone
 | `4`   | `'read'`      | Leído por el destinatario      |
 | `5`   | `'played'`    | Reproducido (audio/video)      |
 
-El documento no guarda campos propios para el rechazo ni para la firma del negocio: ambos se
-leen del `raw` de baileys. Cuando el servidor rechaza un envío, el stub del ack se persiste en
-`raw.messageStubParameters` y [`Message.reason`](references/message.es.md) lo traduce
-(`463` → `restricted`, `479` → `invalid-session`); el nombre del negocio verificado llega en
-`raw.verifiedBizName` y lo expone `Message.business`.
+El rechazo y la firma del negocio también se leen de los raws. Cuando el servidor rechaza un envío,
+el stub del ack llega en `messageStubParameters` del mensaje o de una actualización, y
+[`Message.reason`](references/message.es.md) lo traduce (`463` → `restricted`, `479` →
+`invalid-session`); el nombre del negocio verificado llega en `verifiedBizName` del `WAMessage` y lo
+expone `Message.business`.
 
 ---
 
 ### Contenido del mensaje — `/chat/<cid>/message/<mid>/content`
 
-Se escribe crudo cuando el driver implementa `set_buffer`; si no, como un pequeño envoltorio JSON:
+Aquí solo vive el binario de los mensajes de media: imagen, video, audio, sticker y documento. Se
+escribe crudo cuando el driver implementa `set_buffer`; si no, como un pequeño envoltorio JSON:
 
 ```ts
 interface ContentEnvelope {
@@ -213,80 +319,189 @@ interface ContentEnvelope {
 }
 ```
 
-El contenido depende de `type`:
+Los demás tipos no guardan nada aquí: `content()` deriva su contenido del timeline.
 
-| `type`                                               | Contenido                                                            |
-| ---------------------------------------------------- | ---------------------------------------------------------------------- |
-| `text`                                               | Texto UTF-8 (el cuerpo del mensaje).                                 |
-| `location`                                           | JSON UTF-8 `{ "lat": number, "lng": number }`.                       |
-| `poll`                                               | JSON UTF-8 `{ "content": string, "options": [{ "content": string }] }`. |
-| `vcard`                                              | Las vCards crudas, unidas por saltos de línea.                       |
-| `event`                                              | JSON UTF-8 del `eventMessage` de baileys.                            |
-| `product`                                            | JSON UTF-8 `{ id, owner, name, description, price, currency, retailer_id, url }`. |
-| `image` / `video` / `audio` / `sticker` / `document` | Bytes descifrados descargados con `downloadMediaMessage`.            |
+| `type`                                               | Se guarda aquí               | `Message.content()` devuelve                                            |
+| ---------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------- |
+| `text`                                               | Nada                         | Texto UTF-8 de la última edición.                                       |
+| `location`                                           | Nada                         | JSON UTF-8 `{ "lat": number, "lng": number }`.                          |
+| `poll`                                               | Nada                         | JSON UTF-8 `{ "content": string, "options": [{ "content": string }] }`. |
+| `vcard`                                              | Nada                         | Las vCards crudas, unidas por saltos de línea.                          |
+| `event`                                              | Nada                         | JSON UTF-8 del `eventMessage` de baileys.                               |
+| `product`                                            | Nada                         | Descripción del producto en UTF-8.                                      |
+| `image` / `video` / `audio` / `sticker` / `document` | Los bytes descifrados        | Los bytes guardados, o una descarga nueva.                              |
 
-!!! info "El contenido es opcional y se escribe una sola vez"
-    El subdocumento solo se escribe cuando hay algo que guardar — los buffers vacíos se saltan — y
-    solo en la **primera** entrega del mensaje: los re-syncs lo omiten porque el contenido ya vive en
-    el motor. `Message.content()` devuelve `Buffer.alloc(0)` cuando no hay nada guardado y el media
-    ya no se puede descargar.
+!!! info "El binario se escribe una sola vez"
+    El binario se escribe en la primera entrega del mensaje, o cuando la librería lo envía, y solo
+    cuando hay bytes que guardar. `Message.content()` lo devuelve; cuando falta, lo descarga —pidiéndole
+    a WhatsApp que lo reenvíe si caducó—, lo guarda y lo devuelve, y lanza si no se puede descargar.
+    `Message.stream()` entrega el guardado o la descarga mientras llega, sin acumularla ni guardarla.
 
 ---
 
 ### Estado — `/status/<id>`
 
-```ts
-import type { WAMessage } from 'baileys';
+Un timeline como el del mensaje. Solo se guardan los estados de texto, imagen, video y audio, en su
+primera entrega o cuando la cuenta los publica; un retiro borra el documento con su binario.
 
-interface FeedRaw {
-    id: string;
-    author_jid: string;
-    type: 'text' | 'image' | 'video' | 'audio';
-    caption: string;
-    mime: string;
-    created_at: number;   // epoch ms
-    expires_at: number;   // created_at + 24h (FEED_TTL_MS)
-    viewed: boolean;      // true una vez que se envió el read receipt
-    raw: WAMessage;
-}
+```ts
+[
+    WAMessage,          // el mensaje de status@broadcast
+    { lid, pn },        // el autor se tradujo de su LID al teléfono
+    WAMessage,          // un reactionMessage al estado
+    { key, update },    // el registro de entrega: los acuses de quien lo vio; seen(true) lo deja en leído
+]
 ```
 
-Su contenido vive en `/status/<id>/content` con las mismas reglas de envoltorio que un mensaje. Ver
-[Feed](references/feed.es.md).
+Un estado publicado con `Feed.create()` guarda en `/status/<id>/audience` los JIDs a los que se
+publicó, y `delete()` retira el estado a esos mismos; sin ese documento —un estado publicado desde el
+teléfono— el retiro va a la agenda.
+
+`created_at`, `expires_at` (24 horas después, `FEED_TTL_MS`) y `seen()` los deriva
+[`Feed`](references/feed.es.md) y no se guardan. La librería no borra un estado cuando vence. Su
+binario vive en `/status/<id>/content` con las mismas reglas de envoltorio que un mensaje.
 
 ---
 
-### Catálogo — `/catalog/<jid>`
+### Catálogo — `/catalog/<jid>/collection/<id>`
+
+Cada colección del catálogo de un negocio es el timeline de sus descargas distintas, bajo el JID de
+teléfono del negocio: cada elemento es la colección exactamente como la devuelve `getCollections` de
+baileys. Un negocio sin colecciones tiene una sola con todos los productos de `getCatalog`, el
+teléfono del negocio como `id`, `''` como `name` y sin `status`. La colección no nombra a su dueño ni
+la hora de la descarga: el dueño sale de la ruta, y la librería escribe la hora de la última descarga
+en la metadata de la colección como `updated_at`.
 
 ```ts
-interface CatalogRaw {
-    id: string;              // el JID del negocio
-    fetched_at: number;      // epoch ms de la última descarga
-    products: {
-        id: string;          // id del producto en WhatsApp
-        owner: string;       // el JID del negocio
-        name: string;
-        description: string;
-        price: number;       // en unidades, como lo muestra WhatsApp
-        currency: string;    // ISO 4217
-        retailer_id: string | null;
-        url: string | null;
-        hidden: boolean;
-        images: string[];    // URLs del CDN
-        availability: string | null;
-        status: string | null;   // estado de revisión
-    }[];
+import type { Product } from 'baileys';
+
+type Collection = {
+    id: string;                                        // id de la colección; el teléfono en el catálogo sin colecciones
+    name: string;                                      // '' en el catálogo sin colecciones
+    products: Product[];                               // productos de baileys, en el orden del catálogo
+    status?: { status: string; canAppeal: boolean };   // ausente en el catálogo sin colecciones
+};
+
+// el documento es un Collection[]: cada descarga distinta, la última es la vigente
+// /catalog/<jid>/collection/<id>/metadata guarda { updated_at: <epoch ms de la última descarga>, ... }
+```
+
+Cada producto es el nodo de baileys:
+
+```ts
+interface Product {                                        // Product de baileys
+    id: string;
+    name: string;
+    description: string;
+    price: number;                                         // milésimas de la unidad de la moneda
+    currency: string;                                      // ISO 4217
+    retailerId?: string;
+    url?: string;
+    isHidden?: boolean;
+    imageUrls: { requested: string; original: string };    // portada en 100×100 y portada original
+    reviewStatus: { whatsapp: string };                    // veredicto de la revisión de Meta
+    availability: 'in stock';                              // baileys lo escribe literal
 }
 ```
 
-Lo escribe `wa.Catalog.get` la primera vez y `catalog.sync()` después. Ver
-[Catalog](references/catalog.es.md).
+Ejemplo de payload:
+
+```json
+[
+    {
+        "id": "5491112345678",
+        "name": "",
+        "products": [
+            {
+                "id": "8034215663256571",
+                "imageUrls": {
+                    "requested": "https://mmg.whatsapp.net/v/t45.5328-4/...",
+                    "original": "https://mmg.whatsapp.net/v/t45.5328-4/..."
+                },
+                "reviewStatus": { "whatsapp": "APPROVED" },
+                "availability": "in stock",
+                "name": "Linen shirt",
+                "retailerId": "SHIRT-001",
+                "url": "https://shop.example.com/linen-shirt",
+                "description": "100% linen, size M",
+                "price": 15500,
+                "currency": "USD",
+                "isHidden": false
+            }
+        ]
+    }
+]
+```
+
+El timeline guarda solo las descargas que cambiaron algo: una descarga idéntica al último elemento
+solo refresca `updated_at`, y una distinta suma un elemento y emite `catalog:updated`. Una colección
+que una respuesta posterior de colecciones ya no devuelve se borra; una descarga que WhatsApp no
+responde no borra nada. [`Catalog`](references/catalog.es.md) lee el último elemento y se construye
+con su dueño, `new wa.Catalog(timeline, jid)`; cada `wa.Product` se construye con uno de sus
+productos, `new wa.Product([product], jid)`.
+
+---
+
+### Índices — `/pinned` y `/unmapped`
+
+Dos arreglos JSON que evitan recorrer los chats, como hace WhatsApp Web con los índices que lleva en
+memoria. `/pinned` tiene los JIDs de los chats fijados y lo mantienen los ecos de WhatsApp y
+`pinned()`. `/unmapped` tiene los LIDs de las fichas y chats guardados sin teléfono: cada escritura de
+uno así lo agrega, y cada conexión revisa sólo esos LIDs, une al teléfono los que ya tienen mapeo y
+deja el resto. La primera conexión que no los encuentra recorre `/contact` y `/chat` una vez y los
+arma.
+
+---
+
+### Lista de bloqueados — `/blocklist`
+
+Un arreglo JSON con los JIDs normalizados que la cuenta tiene bloqueados:
+
+```json
+["5491187654321@s.whatsapp.net"]
+```
+
+Se reescribe en cada conexión con la lista de WhatsApp, cuando WhatsApp responde, y se mantiene al
+día con el evento `blocklist.update`. [`chat.blocked()`](references/chat.es.md) lo lee sin
+salir a la red, y le pregunta a WhatsApp solo mientras el documento no existe.
+
+---
+
+### Metadatos — `<path>/metadata`
+
+Toda entidad tiene `metadata(patch?)`: valores de la integración que viven en el motor, en un hijo
+`metadata` de la ruta de la entidad. Sin argumento los lee; con un objeto fusiona sus claves de
+primer nivel sobre las guardadas, borra las que valen `null` o `undefined`, y devuelve el resultado;
+cuando no queda nada, el documento se borra. WhatsApp nunca ve estos valores, y no sobreviven a un
+cambio de motor ni a vaciar el motor.
+
+| Entidad                                               | Ruta                                        |
+| ----------------------------------------------------- | ------------------------------------------- |
+| `Contact`                                             | `/contact/<jid>/metadata`                   |
+| `Chat`                                                | `/chat/<cid>/metadata`                      |
+| `Message` y sus subclases, tarjetas de producto incluidas | `/chat/<cid>/message/<mid>/metadata`    |
+| `Feed`                                                | `/status/<id>/metadata`                     |
+| `Catalog`                                             | `/catalog/<jid>/collection/<id>/metadata`   |
+| `Product` de un catálogo                              | `/catalog/<jid>/product/<pid>/metadata`     |
+
+```ts
+const chat = await wa.Chat.get('5491112345678');
+
+await chat?.metadata({ crm_id: 'A-1029', stage: 'lead' }); // fusiona
+await chat?.metadata({ stage: null });                     // borra stage
+const values = await chat?.metadata();                     // { crm_id: 'A-1029' }
+```
+
+Los metadatos van a donde va su entidad: borrar un chat o un mensaje los borra en cascada, y un LID
+absorbido por su teléfono se los lleva consigo. Los del catálogo son el único lugar donde la librería
+escribe una clave propia, `updated_at`, la hora de la última descarga: el raw de la colección no trae
+hora. Borrarla hace que la siguiente lectura de `contact.catalog()` vuelva a descargar.
 
 ---
 
 ### Credenciales de sesión — `/session/creds`
 
-El valor es el objeto **opaco** `AuthenticationCreds` de baileys serializado con `BufferJSON`. La
+El valor es el objeto **opaco** `AuthenticationCreds` de baileys serializado con `serialize()`. La
 librería no inspecciona ni documenta sus campos internos; trátalo como una caja negra propiedad de
 baileys.
 
@@ -297,11 +512,11 @@ el siguiente intento — el orquestador relee las credenciales al inicio de cada
 
 ### Índice LID — `/lid/<lid>`, `/lid/<pn>`
 
-| Ruta                    | Valor                                                                       |
+| Ruta                    | Valor                                                                         |
 | ----------------------- | ----------------------------------------------------------------------------- |
-| `/lid/<lid>`            | **String** codificado en JSON: el JID/PN canónico de ese LID.                |
-| `/lid/<pn>`             | **String** codificado en JSON: el LID de ese PN (lo escribe `lid-mapping.update`). |
-| `/lid/<digits>_reverse` | Fallback legado, todavía se lee cuando el mapa directo está vacío.           |
+| `/lid/<lid>`            | **String** codificado en JSON: el JID/PN canónico de ese LID.                 |
+| `/lid/<pn>`             | **String** codificado en JSON: el LID de ese PN, escrito junto con el mapa directo. |
+| `/lid/<digits>_reverse` | Fallback legado, todavía se lee cuando el mapa directo está vacío.            |
 
 El resolver de JIDs usa este índice para normalizar cualquier identificador `@lid` a un JID canónico
 `@s.whatsapp.net`, y cae en el mapeo de LID propio de baileys cuando el índice no tiene la entrada.
@@ -357,7 +572,7 @@ SADD  wa:default:dir:                              "chat"
 | ----------------- | ---------------------------------------------------------------------------- |
 | `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
 | `set(path,v,s)`   | `SET` + `ZADD` + un `SADD` por ancestro, en un solo pipeline cuando el cliente lo expone |
-| `unset(path)`     | Recorre `ZREVRANGE idx:` + `SMEMBERS dir:` por el subárbol y luego `DEL` en lotes de 500 + `ZREM`/`SREM` del padre |
+| `unset(path)`     | Recorre `ZREVRANGE idx:` + `SMEMBERS dir:` por el subárbol, un nivel por tanda, y luego `DEL` en lotes de 500 + `ZREM`/`SREM` del padre |
 | `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET`                                   |
 | `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
 | `clear()`         | `SCAN`/`DEL` sobre `<prefix>:*`                                            |
@@ -379,27 +594,31 @@ const engine_b = new RedisEngine(redis, 'wa:584121234567');
 Cada ruta lógica se mapea a un directorio que contiene el documento como `index.json`:
 
 ```
-<base>/chat/120363@g.us/
-├── index.json                     # el documento del chat
-├── .order                         # índice ordenado de los hijos
-└── message/
-    ├── .order
-    ├── ABC/
-    │   ├── index.json             # el documento del mensaje
-    │   └── content/
-    │       └── content.bin        # el contenido crudo
-    └── DEF/
-        └── index.json
+<base>/chat/
+├── .order                             # orden de los chats
+└── 120363123456789@g.us/
+    ├── index.json                     # el documento del chat
+    ├── metadata/
+    │   └── index.json                 # los metadatos del chat
+    └── message/
+        ├── .order                     # orden de los mensajes
+        ├── 3EB0C767D26A1D0F8A7B/
+        │   ├── index.json             # el timeline del mensaje
+        │   └── content/
+        │       └── content.bin        # el binario del media
+        └── 3EB0A1B2C3D4E5F60718/
+            └── index.json
 ```
 
-| Operación     | Comportamiento en el sistema de archivos                                    |
-| ------------- | ----------------------------------------------------------------------------- |
-| `get(path)`   | `readFile(<base>/<path>/index.json)`; `null` si falta.                       |
-| `set(path,v)` | `mkdir -p`, escritura atómica (tmp + rename); el `score` se aplica con `utimes`. |
-| `unset(path)` | `rm -rf <base>/<path>`. Idempotente.                                         |
-| `list(path)`  | Índice ordenado desde `.order` (o reconstruido con `readdir` + `stat`) y luego lectura. |
-| `count(path)` | Tamaño del índice ordenado.                                                  |
-| `clear()`     | `rm -rf <base>`.                                                             |
+| Operación        | Comportamiento en el sistema de archivos                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `get(path)`      | Lee `<base>/<path>/index.json` del disco, de forma asíncrona; `null` si falta.              |
+| `set(path,v)`    | `mkdir -p`, escritura atómica (tmp + rename) y el `score` aplicado con `utimes`.            |
+| `unset(path)`    | `rm -rf <base>/<path>`. Idempotente.                                                        |
+| `list(path)`     | Índice ordenado desde `.order` (o reconstruido con `readdir` + `stat`), y luego los documentos de la página en paralelo. |
+| `count(path)`    | Tamaño del índice ordenado.                                                                 |
+| `get/set_buffer` | `content.bin` junto al documento.                                                           |
+| `clear()`        | `rm -rf <base>`.                                                                            |
 
 ### `S3Engine`
 
@@ -415,33 +634,38 @@ de binario crudo.
 `unset(path)` elimina el documento **y todo el subárbol debajo de él**. Es intencional y se usa en
 todo el orquestador para limpiezas masivas baratas:
 
-| Quién llama                     | Ruta pasada a `unset()`              | Qué se elimina                                            |
-| ------------------------------- | ------------------------------------ | ----------------------------------------------------------- |
-| `chat.delete()`                 | `/chat/<cid>`                        | El doc del chat + cada mensaje y su contenido.             |
-| `chat.clear()`                  | `/chat/<cid>/message`                | Todos los mensajes del chat; el documento del chat sobrevive. |
-| `msg.delete()`                  | `/chat/<cid>/message/<mid>`          | El doc del mensaje + su subdocumento de contenido.         |
-| Estado revocado                 | `/status/<id>`                       | El doc del estado + su contenido.                          |
-| Logout con `autoclean: false`   | `/session/creds`                     | Solo las credenciales; el historial se conserva.           |
+| Quién llama                                          | Ruta pasada a `unset()`              | Qué se elimina                                                        |
+| ---------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------- |
+| `chat.delete()`, o un chat borrado en otro dispositivo | `/chat/<cid>`                      | El documento del chat, sus metadatos, y cada mensaje con su binario y sus metadatos. |
+| `chat.clear()`                                       | `/chat/<cid>/message`                | Todos los mensajes del chat; el documento del chat y sus metadatos sobreviven. |
+| `msg.delete()` (solo para mí)                        | `/chat/<cid>/message/<mid>`          | El timeline del mensaje, su binario y sus metadatos.                  |
+| Estado retirado                                      | `/status/<id>`                       | El timeline del estado, su binario y sus metadatos.                   |
+| Colección que WhatsApp ya no devuelve                | `/catalog/<jid>/collection/<id>`     | El timeline de la colección y sus metadatos.                          |
+| `metadata()` que queda vacío                         | `<path>/metadata`                    | Solo el documento de metadatos.                                       |
+| LID absorbido por su teléfono                        | `/contact/<lid>`, `/chat/<lid>`      | Las copias del LID, una vez movidas al teléfono.                      |
+| `disconnect()` sin `destroy`                         | `/session`                           | Credenciales y claves de Signal; el historial se conserva.            |
+| Logout con `autoclean: false`                        | `/session/creds`                     | Solo las credenciales; el historial se conserva.                      |
 
 !!! warning "No hay unset por hoja"
     `unset` siempre cae en cascada. Para eliminar solo una subhoja, apúntala directamente (p. ej.
-    `unset('/chat/<cid>/message/<mid>/content')` para soltar solo el contenido y conservar los
-    metadatos del mensaje).
+    `unset('/chat/<cid>/message/<mid>/content')` para soltar solo el binario y conservar el timeline
+    del mensaje).
 
 ---
 
 ## Helpers de serialización
 
 Los motores nunca ven objetos tipados — solo strings. Los helpers `serialize` / `deserialize`
-manejan la frontera JSON ↔ objeto y preservan las instancias de `Buffer` mediante `BufferJSON`:
+manejan la frontera JSON ↔ objeto: `serialize` escribe los valores del proto con sus valores reales
+y los dos preservan las instancias de `Buffer` mediante `BufferJSON`:
 
 ```ts
 import { serialize, deserialize } from '@arcaelas/whatsapp';
 
-await wa.engine.set('/app/config', serialize({ greeting: 'hola' }));
+await wa.engine.set('/app/config', serialize({ greeting: 'hi' }));
 
 const raw = await wa.engine.get('/app/config');
-const doc = deserialize<{ greeting: string }>(raw);  // → { greeting: 'hola' } | null
+const doc = deserialize<{ greeting: string }>(raw);  // → { greeting: 'hi' } | null
 ```
 
 Usa los mismos helpers desde cualquier código propio que toque el motor si quieres compatibilidad

@@ -5,8 +5,9 @@ store clave-valor solo de strings que implementa el contrato `Engine`. La librer
 drivers de producción (`SQLiteEngine`, `FileSystemEngine`, `RedisEngine`, `S3Engine`) y puedes
 conectar el tuyo propio.
 
-La serialización (Buffers, BigInts, etc.) vive en una capa dedicada (`serialize` / `deserialize`)
-por encima del `BufferJSON` de baileys, para que los motores nunca necesiten lidiar con JSON.
+La serialización (Buffers y valores del proto) vive en una capa dedicada (`serialize` /
+`deserialize`) por encima del `BufferJSON` de baileys, para que los motores nunca necesiten lidiar
+con JSON.
 
 ---
 
@@ -57,10 +58,10 @@ interface Engine {
 | `set_buffer(path, data)`   | *Opcional.* Escribe un binario crudo, sin pasar por JSON ni base64.                                       |
 
 !!! info "`score` es lo que mantiene intacta la cronología"
-    Los mensajes se escriben con su `created_at` como score. Cada reconexión reentrega el historial,
-    y un re-sync que reescribiera documentos viejos con el reloj actual empujaría mensajes antiguos
-    al tope de `list`. Pasar el score mantiene la línea de tiempo estable sin importar cuántas veces
-    se reescriba un documento.
+    Un mensaje se escribe con su timestamp como score, y cada evento que se suma a su timeline — un
+    recibo, una reacción, una edición — reescribe el documento con ese mismo score. Si esas
+    reescrituras tomaran el reloj actual, los mensajes viejos saltarían al tope de `list`. Pasar el
+    score mantiene el orden estable sin importar cuántas veces se reescriba un documento.
 
 !!! info "Semántica de rutas"
     Las rutas son strings tipo POSIX (`/chat/<jid>/message/<id>`). Los drivers normalizan las barras
@@ -77,7 +78,7 @@ parsearlo para leerlo). Un driver sin esos dos métodos sigue siendo perfectamen
 | ------------------ | -------------------------------------------------------------------- |
 | `SQLiteEngine`     | Sí — una columna `BLOB`.                                            |
 | `FileSystemEngine` | Sí — un archivo `content.bin` junto al documento.                   |
-| `RedisEngine`      | Sí, cuando el cliente expone `getBuffer` / `setBuffer` (ioredis lo hace). |
+| `RedisEngine`      | Sí, cuando el cliente expone `getBuffer` / `setBuffer` (ioredis lo hace); sin ellos el binario no se guarda y el media se vuelve a descargar al leerlo. |
 | `S3Engine`         | No — cae en el documento con base64.                                |
 
 ---
@@ -116,8 +117,8 @@ const engine = new SQLiteEngine(new Database('.sessions/5491112345678.db'));
 
 El driver no agrega ninguna dependencia propia: la base llega ya abierta, igual que el cliente de
 `RedisEngine`. Solo necesita `exec(sql)` y `prepare(sql)` con `run` / `get` / `all` (la interfaz
-`SQLiteDatabase`). Al construirse aplica `journal_mode = WAL` y `synchronous = NORMAL` cuando el
-driver los acepta, y crea la tabla y el índice si faltan.
+`SQLiteDatabase`). Al construirse crea la tabla y el índice si faltan, y pide `journal_mode = WAL` y
+`synchronous = NORMAL` sin exigirlos: una base que los rechaza sigue funcionando.
 
 !!! tip "Medido contra el driver de sistema de archivos"
     Sobre un chat real de 55.146 mensajes: **220 MB → 64 MB** en disco, primer `list`
@@ -148,13 +149,18 @@ import { WhatsApp, FileSystemEngine } from '@arcaelas/whatsapp';
 const engine = new FileSystemEngine(join(process.cwd(), 'data', 'wa'));
 
 const wa = new WhatsApp({ engine });
-await wa.connect((qr) => console.log('QR listo', (qr as Buffer).length, 'bytes'));
+await wa.connect((qr) => console.log('QR ready', (qr as Buffer).length, 'bytes'));
 ```
 
 Para que `list` / `count` cuesten O(limit), el driver mantiene un índice ordenado por directorio,
 acotado por LRU y respaldado en un archivo `.order`: al abrir un directorio carga ese archivo y solo
 lo reconstruye con `readdir` + `stat` cuando el conteo no coincide. Los binarios viven junto al
 documento como `content.bin`.
+
+Los documentos y los binarios se leen y se escriben con llamadas asíncronas de `fs/promises`, así
+el disco nunca detiene el proceso, y `list` lee la página en paralelo. No hay caché de contenido:
+cada lectura va al disco, una escritura es visible en la lectura siguiente y la memoria no depende de
+cuánto haya guardado.
 
 !!! warning "Un solo escritor por directorio base"
     El índice en memoria asume un único proceso escritor. Dos procesos escribiendo el mismo
@@ -179,8 +185,10 @@ ordenados.
 | `<prefix>:dir:<parent>`      | `set`       | Los subdirectorios de una ruta (`chat/a/message` bajo `chat/a`), para que `unset` recorra un subárbol cuyos niveles intermedios no son documentos. |
 
 `list()` es `ZREVRANGE` + `MGET`; `count()` es `ZCARD` (O(1)); `unset()` recorre el subárbol por los
-sets `idx:` y `dir:` y lo borra por lotes, nunca con `SCAN`, que costaría el keyspace entero de Redis
-en cada borrado — y baileys hace un borrado por cada pre-key de Signal que consume. Las escrituras
+sets `idx:` y `dir:` nivel por nivel —todos los nodos de un nivel en una sola tanda, así los viajes son
+la profundidad del árbol y no la cantidad de descendientes— y lo borra por lotes, nunca con `SCAN`,
+que costaría el keyspace entero de Redis en cada borrado — y baileys hace un borrado por cada pre-key
+de Signal que consume. Las escrituras
 agrupan documento, índice y directorios en un pipeline cuando el cliente lo expone, de modo que una
 caída entre ellas no puede dejar un documento huérfano de su índice.
 
@@ -206,27 +214,27 @@ new RedisEngine(client: RedisClient, prefix = 'wa:default')
 interface RedisClient {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<unknown>;
-    del(keys: string | string[]): Promise<unknown>;
+    del(...keys: unknown[]): Promise<unknown>;
     mget(keys: string[]): Promise<(string | null)[]>;
     scan(cursor: number | string, ...args: unknown[]): Promise<[string, string[]]>;
     zadd(key: string, score: number, member: string): Promise<unknown>;
-    zrem(key: string, members: string | string[]): Promise<unknown>;
+    zrem(...args: unknown[]): Promise<unknown>;
     zrevrange(key: string, start: number, stop: number): Promise<string[]>;
     zcard(key: string): Promise<number>;
-    sadd(key: string, ...members: string[]): Promise<unknown>;
-    srem(key: string, ...members: string[]): Promise<unknown>;
+    sadd(...args: unknown[]): Promise<unknown>;
+    srem(...args: unknown[]): Promise<unknown>;
     smembers(key: string): Promise<string[]>;
 
     // opcionales — habilitan comportamiento extra cuando están
-    getBuffer?(key: string): Promise<Buffer | null>;
-    setBuffer?(key: string, value: Buffer): Promise<unknown>;
+    getBuffer?(...args: unknown[]): Promise<Buffer | null>;
+    setBuffer?(...args: unknown[]): Promise<unknown>;
     pipeline?(): {
         set(key: string, value: string): unknown;
-        del(keys: string | string[]): unknown;
+        del(...keys: unknown[]): unknown;
         zadd(key: string, score: number, member: string): unknown;
-        zrem(key: string, members: string | string[]): unknown;
-        sadd(key: string, ...members: string[]): unknown;
-        srem(key: string, ...members: string[]): unknown;
+        zrem(...args: unknown[]): unknown;
+        sadd(...args: unknown[]): unknown;
+        srem(...args: unknown[]): unknown;
         exec(): Promise<unknown>;
     };
 }
@@ -293,12 +301,14 @@ reconstruye listando el prefijo una sola vez y ordenando por `LastModified`. Las
 
 ### Caché local
 
-Cuando se pasa `cache`, `when(key)` decide qué rutas se cachean — devuelve `true` para documentos
-estables y muy leídos (chats, contactos, el mapa LID→JID) y `false` para los volátiles (sesiones de
-Signal, mensajes). Cada entrada cacheada se desaloja con un `setTimeout(ttl)`; **no hay chequeo de
-expiración en la lectura** — el timer simplemente elimina la entrada. Las escrituras son
-write-through (caché + S3), y `unset` purga el subárbol cacheado para que un dato eliminado nunca se
-sirva obsoleto.
+Cuando se pasa `cache`, `when(key)` decide qué rutas se cachean. Recibe la ruta normalizada, sin
+barra al inicio ni al final — `chat/<cid>`, no `/chat/<cid>` — así que una ruta escrita con o sin sus
+barras comparte una sola entrada. Devuelve `true` para documentos estables y muy leídos (chats,
+contactos, el mapa LID→JID) y `false` para los volátiles (sesiones de Signal, mensajes). Cada entrada
+cacheada se desaloja con un `setTimeout(ttl)`; **no hay chequeo de expiración en la lectura** — el
+timer simplemente elimina la entrada. Las escrituras son write-through (caché + S3), y `unset` purga
+el subárbol cacheado para que un dato eliminado nunca se sirva obsoleto; devuelve `true` aunque no
+haya nada que borrar.
 
 ```typescript title="Uso con caché" hl_lines="8 9 10 11 12 13 14"
 import { S3Client } from '@aws-sdk/client-s3';
@@ -312,9 +322,9 @@ const wa = new WhatsApp({
         cache: {
             ttl: 180_000, // 3 minutos
             when: (key) =>
-                key.startsWith('/chat/') ||
-                key.startsWith('/contact/') ||
-                key.startsWith('/lid/'),
+                /^chat\/[^/]+$/.test(key) ||
+                key.startsWith('contact/') ||
+                key.startsWith('lid/'),
         },
     }),
     phone: 5491112345678,
@@ -322,9 +332,6 @@ const wa = new WhatsApp({
 
 await wa.connect((pin) => console.log('PIN:', pin));
 ```
-
-El driver expone además `delete_prefix(prefix)`, que elimina todos los objetos bajo un prefijo y
-devuelve cuántos borró — práctico para scripts de mantenimiento.
 
 !!! tip "Cuándo elegir S3"
     Despliegues serverless / sin estado (Lambda, Fargate) donde no hay ni sistema de archivos ni
@@ -340,12 +347,14 @@ function serialize<T>(doc: T): string;
 function deserialize<T>(raw: string | null): T | null;
 ```
 
-Ambos helpers son envoltorios finos sobre `JSON.stringify` / `JSON.parse` usando el replacer/reviver
-`BufferJSON` de baileys, de modo que las instancias de `Buffer` dentro de las claves de Signal, las
-referencias de media y los payloads de encuestas viajan de ida y vuelta sin pérdida. `deserialize`
-devuelve `null` cuando la entrada es `null` **o cuando el JSON es inválido**, así un documento
-truncado por una escritura interrumpida se comporta como inexistente en lugar de envenenar una
-página entera con un error de parseo.
+`serialize` es `JSON.stringify` con un replacer que escribe las instancias del proto con sus valores
+reales — enums y longs como números, bytes como Buffers — en lugar del mapeo JSON del proto,
+convierte los `Long` en números y codifica los Buffers con el `BufferJSON` de baileys, de modo que
+las instancias de `Buffer` dentro de las claves de Signal, las referencias de media y los payloads de
+encuestas viajan de ida y vuelta sin pérdida. `deserialize` es `JSON.parse` con el reviver
+`BufferJSON`; devuelve `null` cuando la entrada es `null` **o cuando el JSON es inválido**, así un
+documento truncado por una escritura interrumpida se comporta como inexistente en lugar de envenenar
+una página entera con un error de parseo.
 
 ```typescript title="Almacenamiento propio sobre un motor"
 import { serialize, deserialize } from '@arcaelas/whatsapp';
@@ -353,7 +362,7 @@ import { serialize, deserialize } from '@arcaelas/whatsapp';
 interface BotConfig { greeting: string; quiet_hours: [number, number] }
 
 await wa.engine.set('/app/config', serialize<BotConfig>({
-    greeting: '¡Hola!',
+    greeting: 'Hello!',
     quiet_hours: [22, 8],
 }));
 

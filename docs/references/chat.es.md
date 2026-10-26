@@ -1,440 +1,292 @@
 # Chat
 
-La entidad `Chat` representa una conversación de WhatsApp, ya sea un chat 1:1 con un contacto o un
-grupo. Expone metadatos de solo lectura mediante getters síncronos (nombre, tipo, estado
-fijado/archivado/silenciado, no leídos) y métodos mutables que propagan los cambios a WhatsApp y a
-la persistencia local vía el motor configurado.
+La entidad `Chat` representa una conversación de WhatsApp — un chat 1:1 con un contacto o un grupo.
+Lo que el chat es (`id`, `type`, `count`) son getters; cada valor que la cuenta también puede cambiar
+es un único método que lee sin argumento y escribe con uno, y rechaza con `UNAUTHORIZED` cuando
+la cuenta no tiene derecho a cambiarlo.
 
-Cada instancia está vinculada a un contexto `WhatsApp` a través de la factory interna `chat(wa)`,
-que además expone los estáticos `wa.Chat.get(cid)`, `wa.Chat.list(offset, limit)`,
-`wa.Chat.create(name, members)` y `wa.Chat.join(invite)`.
+La clase es `wa.Chat`, que la sesión construye al conectar con la factory `chat` —el export por
+defecto de `src/lib/chat.ts`, publicado como `chat`—, que sólo depende de la sesión y de baileys.
 
 ---
 
 ## Importación
 
 ```typescript title="imports.ts"
-import { WhatsApp, Chat, FileSystemEngine } from "@arcaelas/whatsapp";
+import { WhatsApp, FileSystemEngine, type Chat } from '@arcaelas/whatsapp';
 ```
 
-La clase `Chat` exportada es la clase **base**: lleva los getters y nada más. El constructor que
-realmente usas es `wa.Chat`, la subclase vinculada a la sesión que agrega los métodos de abajo y los
-estáticos.
-
-!!! warning "Tipar tus propios helpers"
-    Los chats que viajan en los eventos son instancias de la subclase vinculada. Anotar un parámetro
-    con el `Chat` exportado esconde `members()`, `messages()`, `content()` y todos los métodos de
-    acción. Deriva el tipo correcto en su lugar:
-
-    ```typescript
-    import type { WhatsApp } from '@arcaelas/whatsapp';
-
-    type Conversation = InstanceType<WhatsApp['Chat']>;
-
-    async function summarize(chat: Conversation) {
-      const recent = await chat.messages(0, 20); // disponible
-    }
-    ```
+`Chat` se exporta como tipo: la instancia de `wa.Chat`, con cada getter y método de abajo. La clase
+es `wa.Chat`, publicada por la sesión: úsala para construir un chat (`new wa.Chat(raw)`), para los
+estáticos y para `instanceof`.
 
 ---
 
 ## De dónde salen las instancias
 
-- `wa.Chat.get(cid)` — carga por teléfono, JID, LID o id de grupo.
-- `wa.Chat.list(offset, limit)` — lectura paginada de chats persistidos.
-- `wa.Chat.create(name, members)` — un grupo recién creado por ti.
-- `wa.Chat.join(invite)` — un grupo al que acabas de entrar por enlace.
-- `contact.chat()` — el chat 1:1 de un `Contact`.
+- `wa.Chat.get(cid)` — el chat guardado por teléfono, JID, LID o id de grupo, o `null`.
+- `wa.Chat.list(offset, limit)` — lectura paginada de los chats guardados.
+- `wa.Chat.create(name, members)` — un grupo recién creado.
+- `wa.Chat.join(invite)` — un grupo al que se acaba de entrar por enlace.
+- `new wa.Chat(raw)` — desde un documento `Chat` de baileys.
+- `contact.chat()` — el chat 1:1 de un `Contact`, guardado o armado en el momento.
 - `msg.chat()` — el chat al que pertenece un mensaje.
-- Payloads de eventos (`message:*`, `chat:*`, `contact:*`) — el `Chat` viaja con ellos.
+- Los eventos (`message:*`, `chat:*`, `contact:*`) — el `Chat` viaja con ellos.
 
 ```typescript title="bootstrap.ts"
-import { WhatsApp, FileSystemEngine } from "@arcaelas/whatsapp";
-
-const wa = new WhatsApp({ engine: new FileSystemEngine("./.whatsapp") });
-
-await wa.connect((auth) => console.log(auth));
-
-const chat = await wa.Chat.get("5215555555555");
+const chat = await wa.Chat.get('5215555555555');
 if (chat) {
-  console.log(chat.name, chat.type);
+    console.log(chat.name(), chat.type, chat.count);
 }
 ```
-
-!!! info "`get` nunca escribe"
-    `wa.Chat.get(cid)` resuelve el identificador y devuelve el documento persistido, o una
-    **instancia mínima construida al vuelo** cuando el chat todavía no existe. La búsqueda en sí no
-    persiste nada: el documento del chat aparece la primera vez que WhatsApp lo reporta
-    (`chats.upsert`) o cuando llega un mensaje. Devuelve `null` solo si el identificador no se puede
-    resolver.
 
 ---
 
 ## Propiedades
 
-Todas las propiedades son getters síncronos sobre el documento interno `_raw`.
-
-| Propiedad | Tipo | Descripción |
-| --------- | ---- | ----------- |
-| `id` | `string` | El **teléfono** en chats 1:1 (`5215555555555`), o el identificador crudo en grupos (`…@g.us`) y LIDs. |
-| `name` | `string` | Nombre del grupo o del contacto; si falta, cae en `id`. |
-| `type` | `'contact' \| 'group'` | Derivado del sufijo del identificador (`@g.us` → grupo). |
-| `archived` | `boolean` | `true` si el chat está archivado. |
-| `pinned` | `boolean` | `true` si el chat está fijado. |
-| `count` | `number` | Mensajes sin leer. |
-| `muted` | `string \| null` | **Fecha ISO UTC** hasta la que el chat está silenciado, o `null` si no lo está (o si la ventana ya venció). |
-
-!!! warning "`id` no es un JID en chats 1:1"
-    Un identificador `@s.whatsapp.net` se recorta hasta su teléfono, así que `chat.id` se lee como
-    `5215555555555`. Ese valor se acepta en toda la librería (`wa.Message.text(chat.id, …)`,
-    `wa.Chat.get(chat.id)`), porque los identificadores se normalizan internamente. Los grupos y los
-    LIDs conservan su forma cruda. El identificador intacto siempre está en `chat._raw.id`.
-
-!!! info "`muted` es una fecha, no un booleano"
-    ```typescript
-    if (chat.muted) {
-      console.log("silenciado hasta", new Date(chat.muted).toLocaleString());
-    }
-    ```
-
-Los getters `cid`, `content`, `read` y `readonly` ya no existen: usa `_raw.id` para el identificador
-crudo, el método asíncrono [`content()`](#content) para la descripción y `count === 0` para saber si
-está todo leído.
+| Propiedad | Tipo                   | Descripción                                                                          |
+| --------- | ---------------------- | ------------------------------------------------------------------------------------ |
+| `id`      | `string`               | JID completo: el del teléfono en un 1:1, el `@g.us` en un grupo, el LID si no está mapeado. Mismo formato que `contact.id` y `msg.cid`. |
+| `type`    | `'contact' \| 'group'` | Conversación 1:1 o grupo.                                                            |
+| `count`   | `number`               | Mensajes sin leer; `seen()` lo deja en `0`.                                          |
 
 ---
 
 ## Métodos
 
-Los métodos mutables escriben primero al socket y luego persisten el nuevo snapshot en el motor.
-Los exclusivos de grupo (`rename`, `describe`, `picture`, `add`, `remove`, `promote`, `demote`,
-`invite`, `revoke`, `announce`, `restrict`) devuelven `false`, `null` o `0` en un chat 1:1 y no
-hacen nada.
+Cada método sirve en un 1:1 y en un grupo salvo que diga lo contrario. Lo que cambia el estado
+propio de la cuenta —archivar, fijar, silenciar, renombrar, describir, mensajes temporales— se
+guarda en la instancia y en el motor en cuanto WhatsApp lo acepta, y emite el evento `chat:*` que
+corresponde; el eco de WhatsApp que llega después ya no encuentra diferencia y no lo repite. Una operación de grupo
+rechaza con `UNAUTHORIZED` cuando la cuenta no tiene el permiso o no está en el grupo, y en un
+1:1 cuando sólo existe en grupos.
 
-### `content()`
-
-```typescript
-content(): Promise<string>
-```
-
-La descripción del chat: el asunto del grupo en grupos, o la bio del contacto en un 1:1. Es
-asíncrono porque ninguno de los dos vive en el documento del chat — los grupos pasan por
-`groupMetadata` (con caché de 15 segundos) y los 1:1 leen el documento del contacto.
-
-```typescript title="content.ts"
-const description = await chat.content(); // '' cuando no hay
-```
-
-### `members(offset?, limit?)`
+### `name()` / `name(value)`
 
 ```typescript
-members(offset = 0, limit = 50): Promise<Contact[]>
+name(): string
+name(value: string): Promise<string>
 ```
 
-Participantes del chat como instancias de `Contact`: los integrantes en grupos; el contacto y tú en
-un 1:1. Los metadatos del grupo se memorizan 15 segundos para no repetir el round-trip en cada
-página.
+En un 1:1, el nombre del contacto (agenda, nombre público o teléfono); en un grupo, el asunto. Con
+texto, en un 1:1 cambia el nombre con que la cuenta guarda al contacto en su agenda —en el chat y en
+la ficha, lo mismo que [`contact.rename(value)`](contact.es.md#rename-name)—, y en un grupo intenta
+cambiar el asunto, que exige permiso.
 
-```typescript title="members.ts"
-const chat = await wa.Chat.get("120363000000000000@g.us");
-
-if (chat?.type === "group") {
-  let offset = 0;
-  while (true) {
-    const batch = await chat.members(offset, 50);
-    if (batch.length === 0) {
-      break;
-    }
-    for (const member of batch) {
-      console.log(member.phone, member.name);
-    }
-    offset += batch.length;
-  }
-}
-```
-
-### `admins(offset?, limit?)` / `admin()`
+### `content()` / `content(value)`
 
 ```typescript
-admins(offset = 0, limit = 50): Promise<Contact[]>
-admin(): Promise<boolean>
+content(value?: string): Promise<string>
 ```
 
-`admins()` devuelve a los administradores del grupo como instancias de `Contact` (vacío en un 1:1);
-`admin()` dice si la **propia cuenta** administra el grupo. Todas las operaciones de grupo de abajo
-lo exigen, así que compruébalo antes cuando el resultado importe.
+En un 1:1, la biografía del contacto tal como la lee
+[`contact.content()`](contact.es.md#content-contentvalue) —de WhatsApp, o la guardada sin red—; en un
+grupo, la descripción. Con texto intenta cambiar la descripción del grupo (`''` la borra); en un 1:1
+rechaza, porque la biografía es de la otra persona.
 
-```typescript title="admins.ts"
-if (await chat.admin()) {
-  console.log("puedo moderar", (await chat.admins()).map((who) => who.name));
-}
+### `photo()` / `photo(value)`
+
+```typescript
+photo(value?: Buffer | null): Promise<Buffer>
 ```
+
+En un 1:1, la foto del contacto; en un grupo, la del grupo, guardada bajo `/chat/<id>/photo` y,
+como la del contacto, consultada de nuevo pasadas 24 horas y descargada sólo si cambió. Un Buffer vacío si no hay o la privacidad la oculta. Con un
+Buffer intenta cambiar la foto del grupo (`null` la quita) y devuelve el resultado; en un 1:1
+rechaza. Rechaza con `ERR_PROFILE_PICTURE_LIB` cuando no está instalado ni `sharp` ni `jimp`.
+
+### `archived()` / `pinned()` / `muted()`
+
+```typescript
+archived(): boolean
+archived(value: boolean): Promise<boolean>
+pinned(): boolean
+pinned(value: boolean): Promise<boolean>
+muted(): string | null
+muted(until: string | number | Date | false): Promise<string | null>
+```
+
+Leen o cambian si el chat está archivado, fijado —WhatsApp admite tres, así que `pinned(true)`
+devuelve `false` cuando no hay lugar, contados con el índice `/pinned` en una sola lectura— o silenciado hasta una fecha ISO (`false` lo reactiva). Sólo
+afectan a la cuenta.
+
+```typescript title="state.ts"
+await chat.archived(true);
+await chat.muted(Date.now() + 8 * 3_600_000);
+console.log(chat.pinned(), chat.muted());
+```
+
+### `blocked()` / `blocked(value)`
+
+```typescript
+blocked(value?: boolean): Promise<boolean>
+```
+
+En un 1:1, lee o cambia si la cuenta tiene bloqueado al contacto; la `/blocklist` guardada se
+actualiza al instante, porque WhatsApp no avisa del cambio propio. En un grupo rechaza.
+
+### `ephemeral()` / `ephemeral(value)`
+
+```typescript
+ephemeral(): number | false
+ephemeral(value: 86_400 | 604_800 | 7_776_000 | false): Promise<number | false>
+```
+
+Lee o fija la duración de los mensajes temporales: 24 horas, 7 días o 90 días, o `false` para
+desactivarlos. En un 1:1 lo puede cambiar cualquiera de los dos; en un grupo lo intenta y rechaza
+sin permiso.
+
+### `seen()` / `seen(false)`
+
+```typescript
+seen(value?: boolean): Promise<boolean>
+```
+
+Con `true` o sin argumento, marca como leídos los mensajes pendientes —el otro lado ve los checks
+azules— y deja `count` en `0`. Con `false` marca el chat como no leído, como la opción de WhatsApp;
+WhatsApp no tiene estado de no leído por mensaje.
+
+### `typing(value)` / `recording(value)`
+
+```typescript
+typing(value: boolean): Promise<boolean>
+recording(value: boolean): Promise<boolean>
+```
+
+Muestran u ocultan el «escribiendo…» o el «grabando audio…» a los demás participantes.
+
+!!! info "La cuenta se pone en línea sola"
+    `typing(true)`, `recording(true)` y `seen()` anuncian la cuenta en línea, como WhatsApp Web, y a
+    los 30 segundos sin ninguno de ellos se anuncia no disponible: eso es lo que actualiza la última
+    conexión que ven los demás. Enviar mensajes no la anuncia; `(await wa.me())?.online(value)` la fuerza.
 
 ### `messages(offset?, limit?)`
 
 ```typescript
-messages(offset = 0, limit = 50): Promise<Message[]>
+messages(offset?: number, limit?: number): Promise<Message[]>
 ```
 
-Atajo de `wa.Message.list(chat._raw.id, offset, limit)`. Los mensajes llegan del más reciente al
-más antiguo.
+Los mensajes guardados del chat, del más nuevo al más viejo. Por defecto: `0, 50`.
 
-```typescript title="messages.ts"
-const latest = await chat.messages(0, 20);
-
-for (const msg of latest) {
-  console.log(msg.type, msg.caption);
-}
-```
-
-### `typing(value)` / `recording(value)`
-
-Alternan los indicadores de presencia (`composing` / `recording`, o `paused` con `false`).
-
-```typescript title="typing.ts"
-await chat.typing(true);
-await new Promise((r) => setTimeout(r, 1_500));
-await chat.typing(false);
-```
-
-!!! tip "Cadencia natural"
-    Activa `typing(true)`, envía el mensaje y luego `typing(false)` para imitar el comportamiento
-    humano. Mantén la ventana corta (1–3 s) — WhatsApp limpia `composing` automáticamente a los
-    pocos segundos.
-
-### `archive(value)`
-
-Archiva o desarchiva el chat en la cuenta.
-
-```typescript title="archive.ts"
-await chat.archive(true);
-```
-
-### `pin(value)`
-
-Fija o desfija el chat.
-
-```typescript title="pin.ts"
-const ok = await chat.pin(true);
-```
-
-!!! warning "WhatsApp admite 3 chats fijados"
-    El cuarto pin lo descarta WhatsApp en silencio, así que el límite se verifica **antes** de
-    enviar: `pin(true)` devuelve `false` cuando ya hay otros tres chats fijados y no envía nada.
-
-### `mute(until)`
+### `clear()` / `delete()`
 
 ```typescript
-mute(until: string | number | Date | false): Promise<boolean>
+clear(): Promise<boolean>
+delete(): Promise<boolean>
 ```
 
-Silencia el chat hasta la fecha indicada. `false` — o cualquier fecha pasada — lo des-silencia.
+`clear()` vacía los mensajes en la cuenta y en el motor, conservando el chat. `delete()` elimina el
+chat de la cuenta y del motor; en un grupo, además sale de él —si todavía es parte— y espera el
+aviso de salida, para que no vuelva como chat de sólo lectura.
 
-```typescript title="mute.ts"
-await chat.mute("2026-08-01T10:00:00Z");       // string ISO
-await chat.mute(Date.now() + 8 * 3_600_000);   // epoch ms
-await chat.mute(new Date("2026-12-31"));       // Date
-await chat.mute(false);                        // quitar el silencio
-```
-
-### `seen()`
-
-Marca el chat completo como leído en la cuenta y deja `count` en `0`.
-
-```typescript title="seen.ts"
-await chat.seen();
-```
-
-### `ephemeral(seconds)`
+### `members(offset?, limit?)`
 
 ```typescript
-ephemeral(seconds: 86_400 | 604_800 | 7_776_000 | false): Promise<boolean>
+members(offset?: number, limit?: number): Promise<Contact[]>
 ```
 
-Mensajes temporales del chat: un día, una semana, 90 días, o `false` para desactivarlos. En un grupo
-exige ser administrador; en un 1:1 aplica a los dos lados.
+En un grupo, los participantes; en un 1:1, el contacto y la propia cuenta. En un grupo rechaza
+cuando la cuenta no está en él.
 
-```typescript title="ephemeral.ts"
-await chat.ephemeral(604_800);   // una semana
-await chat.ephemeral(false);     // apagado
-```
-
-### `watch(handler)`
+### `admins(offset?, limit?)` / `admin()` / `admin(value, ...who)`
 
 ```typescript
-watch(handler: (event: { name: ChatWatch; payload: Contact | Message }) => void): Promise<() => void>
+admins(offset?: number, limit?: number): Promise<Contact[]>
+admin(): Promise<boolean>
+admin(value: boolean, ...who: (Contact | string | number)[]): Promise<number>
 ```
 
-Supervisa la conversación entera: lo que hace la persona al otro lado (`online`, `offline`,
-`typing`, `recording`, `stopped-typing`, `stopped-recording`, con el `Contact` como payload) y cada
-`message` nuevo (con el `Message` como payload). En un grupo no hay una sola persona a la que seguir,
-así que solo llegan los mensajes. Devuelve la función que deja de supervisar.
+Sólo grupos. `admins()` lista los administradores; `admin()` dice si la cuenta lo es;
+`admin(true, ...who)` da el rango y `admin(false, ...who)` lo quita, y devuelven a cuántos se aplicó.
 
-```typescript title="watch.ts"
-const stop = await chat.watch(({ name, payload }) => {
-  if (name === "message") console.log("nuevo:", (payload as Message).caption);
-  else console.log(chat.name, "está", name);
-});
-
-stop();
-```
-
-!!! info "La presencia es por sesión"
-    WhatsApp no difunde la presencia por su cuenta y deja de mandarla al reconectar, así que la
-    supervisión se vuelve a montar en cada sesión nueva.
-
-### `rename(name)` / `describe(text)` / `picture(content)`
+### `add(...who)` / `remove(...who)`
 
 ```typescript
-rename(name: string): Promise<boolean>
-describe(text: string): Promise<boolean>
-picture(content: Buffer | string | null): Promise<boolean>
+add(...who: (Contact | string | number)[]): Promise<number>
+remove(...who: (Contact | string | number)[]): Promise<number>
 ```
 
-Cambian el asunto, la descripción (texto vacío la borra) y la foto del grupo (`Buffer`, URL `https`
-o `null` para quitarla). WhatsApp confirma los dos primeros con `chat:updated`. `picture()` necesita
-`sharp` o `jimp` instalados y lanza `ERR_PROFILE_PICTURE_LIB` si faltan.
-
-```typescript title="edit-group.ts"
-await chat.rename("Equipo Dev");
-await chat.describe("Standup diario a las 9:30");
-await chat.picture(await readFile("./team.jpg"));
-```
-
-### `add(...who)` / `remove(...who)` / `promote(...who)` / `demote(...who)`
-
-```typescript
-add(...who: (string | number | Contact)[]): Promise<number>
-remove(...who: (string | number | Contact)[]): Promise<number>
-promote(...who: (string | number | Contact)[]): Promise<number>
-demote(...who: (string | number | Contact)[]): Promise<number>
-```
-
-Gestionan a los participantes por teléfono, JID, LID o `Contact`. Cada llamada devuelve **cuántos**
-aceptó WhatsApp: una persona cuya privacidad impide agregarla, o que no está en el grupo, no cuenta.
-Los cambios vuelven como `chat:joined`, `chat:left`, `chat:promoted` y `chat:demoted`.
-
-```typescript title="participants.ts"
-const added = await chat.add("5491112345678", "5491187654321");   // 2 si entraron los dos
-await chat.promote("5491112345678");
-await chat.demote("5491112345678");
-await chat.remove("5491187654321");
-```
-
-!!! warning "WhatsApp decide a quién se puede agregar"
-    Una persona con la privacidad de *Grupos* en *Mis contactos* no puede ser agregada por una
-    cuenta que no tiene guardada, y a quien fue expulsado de un grupo no se le puede volver a
-    agregar de inmediato. En ambos casos `add()` devuelve `0`: entrégale el enlace de invitación.
+Sólo grupos. Intentan agregar o sacar participantes por `Contact`, JID, LID o teléfono y devuelven a
+cuántos se aplicó. Quien por privacidad sólo deja que lo agreguen sus contactos no entra: necesita el
+enlace de [`invite()`](#invite-revoke).
 
 ### `invite()` / `revoke()`
 
 ```typescript
-invite(): Promise<string | null>
-revoke(): Promise<string | null>
+invite(): Promise<string>
+revoke(): Promise<string>
 ```
 
-El enlace de invitación vigente (`https://chat.whatsapp.com/<código>`), o uno nuevo tras invalidar
-el anterior. Ambos devuelven `null` en un 1:1 y cuando la cuenta no administra el grupo.
+Sólo grupos. El enlace de invitación vigente, o uno nuevo tras anular el actual.
 
-```typescript title="invite.ts"
-const link = await chat.invite();
-const fresh = await chat.revoke();   // el enlace viejo deja de servir
-```
-
-### `announce(value)` / `restrict(value)`
+### `announce()` / `restrict()`
 
 ```typescript
-announce(value: boolean): Promise<boolean>
-restrict(value: boolean): Promise<boolean>
+announce(value?: boolean): Promise<boolean>
+restrict(value?: boolean): Promise<boolean>
 ```
 
-`announce(true)` deja que solo los administradores envíen mensajes; `restrict(true)` deja que solo
-ellos editen los datos del grupo. `false` vuelve a abrir cada uno para todos.
+Sólo grupos. Leen o cambian si sólo los administradores envían mensajes (`announce`) o editan el
+asunto, la descripción y la foto (`restrict`).
 
-```typescript title="settings.ts"
-await chat.announce(true);    // solo lectura para los miembros
-await chat.restrict(true);    // los miembros no renombran ni describen
+### `sub(handler)`
+
+```typescript
+sub(handler: (event: { name: ChatEvent; payload: Chat; message?: Message; contacts?: Contact[]; presence?: Presence }) => void): () => void
 ```
 
-### `clear()`
+Se suscribe a todo lo que le pasa al chat: `created`, `updated` —nombre, descripción, archivado,
+fijado, silenciado— y `deleted`; `message` con el mensaje nuevo en `message`; en un grupo, `joined`,
+`left`, `promoted` y `demoted` con los participantes en `contacts`; en un 1:1, `presence` con la
+acción del contacto en `presence`, que necesita la cuenta en línea. Devuelve la función que
+desuscribe.
 
-Vacía los mensajes del chat en la cuenta **y** en el motor, conservando el chat. Siempre devuelve
-`true`: la limpieza local es idempotente, así que funciona incluso sin socket.
-
-```typescript title="clear.ts"
-await chat.clear();
+```typescript title="sub.ts"
+const stop = chat.sub(({ name, message, contacts }) => console.log(name, message?.caption() ?? '', contacts?.length ?? ''));
 ```
 
-### `delete()`
+### `metadata()`
 
-Elimina el chat y sus mensajes en la cuenta y en el motor. En grupos **abandona el grupo**
-(`groupLeave`). Siempre devuelve `true`.
-
-```typescript title="delete.ts"
-await chat.delete();
+```typescript
+metadata(): Promise<Record<string, unknown>>
+metadata(key: string): Promise<unknown>
+metadata(key: string, value: unknown): Promise<Record<string, unknown>>
+metadata(patch: Record<string, unknown>): Promise<Record<string, unknown>>
 ```
 
-!!! warning "Irreversible"
-    `delete()` cae en cascada sobre el subárbol `/chat/<id>`, que incluye cada mensaje y su
-    contenido almacenado. Respalda el snapshot del motor si necesitas el historial.
+Valores de tu integración ligados al chat bajo `/chat/<id>/metadata`, igual que
+[`contact.metadata()`](contact.es.md#metadata): todos, una clave, o una fusión donde `null` borra.
+
+---
+
+## Envíos
+
+`Chat` extiende `Sender`, la base de todo envío: `chat.text('hola')` envía a este chat y
+`wa.Chat.text(cid, 'hola')` a cualquier chat, que queda creado si no existía. Los métodos, sus
+opciones —`mid`, `once`, `expiration`, `mentions`— y los stickers están en
+[Message › Envíos](message.es.md#envios).
+
+```typescript title="send.ts"
+const chat = await wa.Chat.get('5215555555555');
+await chat?.text('¡Listo!');
+await wa.Chat.image('5215555555555', buffer, { caption: 'mira', once: true });
+```
 
 ---
 
 ## Estáticos (vía `wa.Chat`)
 
-| Estático | Firma | Notas |
-| -------- | ----- | ----- |
-| `wa.Chat.get` | `(cid: string \| number) => Promise<Chat \| null>` | Resuelve teléfono / JID / LID / id de grupo. `null` solo si no se puede resolver. |
-| `wa.Chat.list` | `(offset?: number, limit?: number) => Promise<Chat[]>` | Pagina los chats persistidos, del más reciente al más antiguo. Por defecto: `0, 50`. |
-| `wa.Chat.create` | `(name: string, members: (string \| number \| Contact)[]) => Promise<Chat>` | Crea un grupo con la cuenta como administradora y persiste su chat. Los miembros que WhatsApp no pudo agregar simplemente no están. |
-| `wa.Chat.join` | `(invite: string) => Promise<Chat \| null>` | Entra a un grupo por su enlace de invitación o su código. `null` cuando WhatsApp no admitió a la cuenta. |
-
-No hay estáticos por acción (`wa.Chat.pin`, `wa.Chat.mute`, …): obtén el chat una vez y llama al
-método en la instancia.
-
-```typescript title="statics.ts" hl_lines="4 5 6"
-const cid = "5215555555555";
-
-const chat = await wa.Chat.get(cid);
-if (chat) {
-  await chat.pin(true);
-  await chat.mute("2026-08-01T10:00:00Z");
-  await chat.seen();
-}
-
-const chats = await wa.Chat.list(0, 100);
-console.log(`Siguiendo ${chats.length} chats.`);
-
-const team = await wa.Chat.create("Equipo Dev", ["5491112345678", "5491187654321"]);
-console.log(team._raw.id, await team.invite());
-
-const joined = await wa.Chat.join("https://chat.whatsapp.com/AbCdEfGhIjK");
-```
-
----
-
-## Grupos
-
-No hay una clase aparte para grupos: un grupo es un `Chat` cuyo identificador termina en `@g.us`.
+| Estático         | Firma                                                                       | Notas                                                                                  |
+| ---------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `wa.Chat.get`    | `(cid: string \| number) => Promise<Chat \| null>`                          | El chat guardado por teléfono, JID, LID o id de grupo; `null` si no está guardado.     |
+| `wa.Chat.list`   | `(offset?: number, limit?: number) => Promise<Chat[]>`                      | Chats guardados, del más activo al más antiguo. Por defecto: `0, 50`.                  |
+| `wa.Chat.create` | `(name: string, members: (Contact \| string \| number)[]) => Promise<Chat>` | Crea un grupo con la cuenta como administradora y lo guarda. Quien WhatsApp no pudo agregar no está. |
+| `wa.Chat.join`   | `(invite: string) => Promise<Chat \| null>`                                 | Entra a un grupo por su enlace o código; `null` si el enlace no sirve.                 |
 
 ```typescript title="groups.ts"
-wa.on("message:created", async (msg, chat) => {
-  if (chat.type === "group") {
-    const author = await msg.author();
-    console.log(`[${chat.name}] ${author.name}: ${msg.caption}`);
-  }
-});
+const team = await wa.Chat.create('Dev Team', ['5491112345678']);
+await team.content('Daily standup a las 9:30');
+await team.admin(true, '5491112345678');
+await team.restrict(true);
+console.log(await team.invite());
 ```
-
-| Quieres… | Usa |
-| -------- | --- |
-| El asunto / descripción | `await chat.content()` |
-| Los participantes | `await chat.members(0, 500)` |
-| Los administradores, o saber si eres uno | `await chat.admins()`, `await chat.admin()` |
-| Crear uno o entrar a uno | `await wa.Chat.create(name, members)`, `await wa.Chat.join(link)` |
-| Renombrarlo o describirlo | `await chat.rename("…")`, `await chat.describe("…")` |
-| Gestionar participantes | `await chat.add(…)`, `remove(…)`, `promote(…)`, `demote(…)` |
-| El enlace de invitación | `await chat.invite()`, `await chat.revoke()` |
-| Modo solo administradores | `await chat.announce(true)`, `await chat.restrict(true)` |
-| Mencionar a alguien | `await wa.Message.text(chat._raw.id, "@5491112345678 hola", { mentions: ["5491112345678"] })` |
-| Salir del grupo | `await chat.delete()` |
-| Enviar al grupo | `await wa.Message.text(chat._raw.id, "…")` |

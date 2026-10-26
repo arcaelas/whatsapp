@@ -41,7 +41,7 @@ The `Engine` is the persistence layer for credentials, chats, contacts and messa
     ```typescript title="index.ts"
     import { FileSystemEngine } from "@arcaelas/whatsapp";
 
-    const engine = new FileSystemEngine(__dirname + "/.session");
+    const engine = new FileSystemEngine(".session");
     ```
 
     Stores everything as readable JSON files under the directory you provide. Ideal while you are
@@ -82,7 +82,7 @@ The `Engine` is the persistence layer for credentials, chats, contacts and messa
 
 ## 3. Instantiate the client
 
-`new WhatsApp(...)` does not open a connection — it only wires the entities and the event emitter.
+`new WhatsApp(...)` does not open a connection — it only keeps the engine and the options, and the event emitter is ready from that moment. The entities (`wa.Contact`, `wa.Chat`, `wa.Message`, …) are published inside `connect()`, once the socket exists.
 
 ```typescript title="index.ts" hl_lines="4 5 6 7"
 import { DatabaseSync } from "node:sqlite";
@@ -115,12 +115,12 @@ wa.on("disconnected", () => {
 
 wa.on("message:created", async (msg, chat) => {
     if (!msg.me) {
-        console.log(`[${chat.name}] ${msg.caption}`);
+        console.log(`[${chat.name()}] ${msg.caption()}`);
     }
 });
 ```
 
-The full event map (`chat:*`, `contact:*`, `message:*`, `feed:*`) is documented in [Events](references/events.md).
+The full event map (`chat:*`, `contact:*`, `message:*`, `feed:*`, `catalog:updated`) is documented in [Events](references/events.md).
 
 ---
 
@@ -153,10 +153,10 @@ quoting, use the `wa.Message` delegate with the chat id.
 
 ```typescript title="index.ts" hl_lines="3 6"
 wa.on("message:created", async (msg, chat) => {
-    if (!msg.me && msg.caption.toLowerCase() === "ping") {
+    if (!msg.me && msg.caption().toLowerCase() === "ping") {
         await msg.text("pong");                       // quoted reply
     }
-    if (!msg.me && msg.caption.toLowerCase() === "hello") {
+    if (!msg.me && msg.caption().toLowerCase() === "hello") {
         await wa.Message.text(chat.id, "hi there");   // standalone message
     }
 });

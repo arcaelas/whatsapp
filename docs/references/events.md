@@ -31,7 +31,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 ```typescript title="Subscribe and unsubscribe"
 const off = wa.on('message:created', (msg, chat) => {
-    console.log(`[${chat.id}] ${msg.caption}`);
+    console.log(`[${chat.id}] ${msg.caption()}`);
 });
 
 // later
@@ -67,8 +67,9 @@ wa.on('error',        (error) => console.error(error.code, error.message));
 | Event              | Signature                  | Fires when…                                                            |
 | ------------------ | -------------------------- | ---------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`      | A new contact is upserted, or auto-created from an inbound message.    |
-| `contact:updated`  | `[contact, chat, wa]`      | A contact's name, notify, image, status or LID changes.                |
-| `contact:presence` | `[contact, action, wa]`    | Someone came online, went offline, is typing, recording, stopped typing or stopped recording. Only arrives for contacts watched with `contact.watch()`; `action` is one of `online`, `offline`, `typing`, `recording`, `stopped-typing`, `stopped-recording`. |
+| `contact:updated`  | `[contact, chat, wa]`      | A contact's name, notify, image, status or LID changes; also when `content()` reads a bio different from the stored one. |
+| `contact:deleted`  | `[contact, wa]`            | A contact card leaves the engine: the one stored under the LID, once WhatsApp reveals its phone and the card merges into the phone's. |
+| `contact:presence` | `[contact, action, wa]`    | Someone came online, went offline, is typing or recording. Only arrives for contacts subscribed with `contact.sub()`; `action` is one of `online`, `offline`, `typing`, `recording` —stopping typing or recording arrives as `online`—, and `offline` stores the contact's last seen in `contact.seen`. |
 
 The `chat` argument is the contact's 1:1 chat (built from the cache when needed), so you can reply
 or fetch history without an extra lookup.
@@ -86,25 +87,30 @@ wa.on('contact:created', async (contact, chat, client) => {
 | Event              | Signature        | Fires when…                                                                              |
 | ------------------ | ---------------- | ---------------------------------------------------------------------------------------- |
 | `chat:created`     | `[chat, wa]`     | A new chat is upserted, or auto-created from an inbound message.                         |
-| `chat:deleted`     | `[chat, wa]`     | Baileys reports a chat deletion (`chats.delete`).                                        |
-| `chat:pinned`      | `[chat, wa]`     | The chat is pinned.                                                                      |
-| `chat:unpinned`    | `[chat, wa]`     | The chat is unpinned.                                                                    |
-| `chat:archived`    | `[chat, wa]`     | The chat is archived.                                                                    |
-| `chat:unarchived`  | `[chat, wa]`     | The chat is unarchived.                                                                  |
-| `chat:muted`       | `[chat, wa]`     | A `muteEndTime` in the future is observed.                                               |
-| `chat:unmuted`     | `[chat, wa]`     | `muteEndTime` is cleared or set in the past.                                             |
+| `chat:deleted`     | `[chat, wa]`     | Baileys reports a chat deletion (`chats.delete`), or a chat stored under a LID is merged into its phone chat. |
+| `chat:pinned`      | `[chat, wa]`     | The chat goes from unpinned to pinned.                                                   |
+| `chat:unpinned`    | `[chat, wa]`     | The chat goes from pinned to unpinned.                                                   |
+| `chat:archived`    | `[chat, wa]`     | The chat goes from unarchived to archived.                                               |
+| `chat:unarchived`  | `[chat, wa]`     | The chat goes from archived to unarchived.                                               |
+| `chat:muted`       | `[chat, wa]`     | The chat goes from unmuted to muted: a `muteEndTime` in the future.                      |
+| `chat:unmuted`     | `[chat, wa]`     | The chat goes from muted to unmuted: `muteEndTime` cleared or in the past.               |
 | `chat:updated`     | `[chat, wa]`     | A group changed its name or description.                                                 |
 | `chat:joined`      | `[chat, contacts, wa]` | People entered a group — invited, added or joined by link. `contacts` says who.     |
 | `chat:left`        | `[chat, contacts, wa]` | People left a group or were removed, the account included.                          |
 | `chat:promoted`    | `[chat, contacts, wa]` | People became group admins.                                                         |
 | `chat:demoted`     | `[chat, contacts, wa]` | People lost the admin role.                                                         |
 
+The six pin, archive and mute events fire only when the value really changes: a change made with
+`chat.pinned()`, `chat.archived()` or `chat.muted()` emits them as soon as WhatsApp accepts it, and
+one made from another device, with WhatsApp's echo; the echo of an own change finds no difference
+and does not repeat them.
+
 ```typescript title="Audit chat moderation"
 wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
 wa.on('chat:unarchived', (chat) => console.log('unarchived', chat.id));
-wa.on('chat:muted',      (chat) => console.log('muted until', chat.muted));
-wa.on('chat:joined',     (chat, people) => console.log(people.map((who) => who.name), 'joined', chat.name));
-wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.name), 'now admin in', chat.name));
+wa.on('chat:muted',      (chat) => console.log('muted until', chat.muted()));
+wa.on('chat:joined',     (chat, people) => console.log(people.map((who) => who.name), 'joined', chat.name()));
+wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.name), 'now admin in', chat.name()));
 ```
 
 ---
@@ -113,18 +119,18 @@ wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.n
 
 | Event                | Signature                       | Fires when…                                                                       |
 | -------------------- | ------------------------------- | --------------------------------------------------------------------------------- |
-| `message:created`    | `[message, chat, wa]`           | A new message is upserted (inbound or outbound).                                  |
-| `message:updated`    | `[message, chat, wa]`           | A message is edited, its status changes, its content updates (live location), a poll vote or an event response is decrypted, or it is pinned or unpinned. |
-| `message:deleted`    | `[message, chat, wa]`           | A message is revoked (`protocolMessage.REVOKE`). The document stays, flagged with `revoked`. |
+| `message:created`    | `[message, chat, wa]`           | A new message is stored: inbound, or outbound from the phone or another linked device. The messages sent through this library do not emit it. |
+| `message:updated`    | `[message, chat, wa]`           | A message is edited, its status changes, a poll vote or an event response is decrypted, or it is pinned or unpinned. |
+| `message:deleted`    | `[message, chat, wa]`           | A message is revoked (`protocolMessage.REVOKE`). The document stays, flagged with `revoked_at`. |
 | `message:reacted`    | `[message, chat, emoji, contact, wa]` | A reaction arrives. `emoji` is `''` when the reaction is removed; `contact` is who reacted, so an own echo is told apart from a real reaction. |
 | `message:starred`    | `[message, chat, wa]`           | A message is starred.                                                             |
 | `message:unstarred`  | `[message, chat, wa]`           | A message is unstarred.                                                           |
-| `message:forwarded`  | `[message, chat, wa]`           | A newly stored message carries the `forwarded` flag (it is emitted right after `message:created`). |
+| `message:forwarded`  | `[message, chat, wa]`           | A newly stored message arrived forwarded (`forward()` is `true`) (it is emitted right after `message:created`). |
 | `message:seen`       | `[message, chat, wa]`           | A read or play receipt is observed for the message.                               |
 
 ```typescript title="React-when-mentioned bot" hl_lines="2"
 wa.on('message:created', async (msg, chat) => {
-    if (!msg.me && msg.caption.toLowerCase().includes('@bot')) {
+    if (!msg.me && msg.caption().toLowerCase().includes('@bot')) {
         await msg.text('here!');
     }
 });
@@ -135,8 +141,9 @@ wa.on('message:reacted', (msg, chat, emoji, who) => {
 ```
 
 !!! warning "Guard against your own messages"
-    `message:created` fires for outbound messages too. Without a `!msg.me` check a bot replies to
-    itself in a loop.
+    `message:created` also fires for what the account sends from the phone or another linked
+    device, with `msg.me` set to `true`. Without a `!msg.me` check a bot answers the messages of its
+    own account.
 
 ---
 
@@ -144,8 +151,8 @@ wa.on('message:reacted', (msg, chat, emoji, who) => {
 
 | Event          | Signature      | Fires when…                                                     |
 | -------------- | -------------- | ----------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | A status arrives, or you publish one with `account.post()`.          |
-| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, by `view()` or by a read receipt. |
+| `feed:created` | `[feed, wa]`   | A status arrives, or you publish one with `Feed.create()`.           |
+| `feed:updated` | `[feed, wa]`   | The status is marked as viewed, by `seen(true)` or by a read receipt, or someone reacts to it. |
 | `feed:deleted` | `[feed, wa]`   | The author revokes the status.                                   |
 
 Status broadcasts never emit `message:*`, and their payload carries **no chat**. See
@@ -154,7 +161,25 @@ Status broadcasts never emit `message:*`, and their payload carries **no chat**.
 ```typescript title="Watch statuses"
 wa.on('feed:created', async (post) => {
     console.log((await post.author()).name, post.caption);
-    await post.view();
+    await post.seen(true);
+});
+```
+
+---
+
+## Catalogs
+
+| Event             | Signature       | Fires when…                                                                                     |
+| ----------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| `catalog:updated` | `[catalog, wa]` | A later download of a business catalog brings something different for that collection.         |
+
+The downloads after the first one happen in the background, when `contact.catalog()` reads a stored
+catalog older than 24 hours. The first download of a business and a collection that did not exist
+before do not emit it. `catalog.sub()` narrows it down to one catalog. See [Catalog](catalog.md).
+
+```typescript title="Follow catalog changes"
+wa.on('catalog:updated', async (catalog) => {
+    console.log((await catalog.contact()).name, catalog.name, catalog.updated_at);
 });
 ```
 
@@ -173,7 +198,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 const events = [
     'connected', 'disconnected', 'error',
-    'contact:created', 'contact:updated', 'contact:presence',
+    'contact:created', 'contact:updated', 'contact:deleted', 'contact:presence',
     'chat:created', 'chat:updated', 'chat:deleted',
     'chat:joined', 'chat:left', 'chat:promoted', 'chat:demoted',
     'chat:pinned', 'chat:unpinned',
@@ -184,6 +209,7 @@ const events = [
     'message:starred', 'message:unstarred',
     'message:forwarded', 'message:seen',
     'feed:created', 'feed:updated', 'feed:deleted',
+    'catalog:updated',
 ] as const;
 
 for (const event of events) {
@@ -204,7 +230,7 @@ await wa.connect((qr) => console.log('QR length:', (qr as Buffer).length));
 
 ```typescript title="Wait for the first message"
 const cancel = wa.once('message:created', (msg, chat) => {
-    console.log('first message:', chat.id, msg.caption);
+    console.log('first message:', chat.id, msg.caption());
 });
 
 // Optional: bail out before any message arrives.
@@ -222,10 +248,12 @@ setTimeout(cancel, 60_000);
     - `message:*`         → `[message, chat, wa]`
     - `message:reacted`   → `[message, chat, emoji, contact, wa]`
     - `contact:*`         → `[contact, chat, wa]`
+    - `contact:deleted`   → `[contact, wa]`
     - `contact:presence`  → `[contact, action, wa]`
     - `chat:*`            → `[chat, wa]`
     - `chat:joined` / `chat:left` / `chat:promoted` / `chat:demoted` → `[chat, contacts, wa]`
     - `feed:*`            → `[feed, wa]`
+    - `catalog:updated`   → `[catalog, wa]`
     - `connected`         → `[wa]`
     - `disconnected`      → `[wa, farewell]`
     - `error`             → `[error, wa]`

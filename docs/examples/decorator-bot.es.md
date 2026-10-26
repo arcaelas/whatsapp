@@ -168,12 +168,12 @@ Alias de `@on('connected')` y `@on('disconnected')`. Útiles para enganchar efec
 ### `@command('/help')`
 
 Forma string: `@command` aplica `@on('message:created')`, un guard que verifica
-`msg.caption.startsWith('/help')` y un transform que reescribe la firma del handler a
+`msg.caption().startsWith('/help')` y un transform que reescribe la firma del handler a
 `(msg, chat, args)`, donde `args` es la cola partida por espacios.
 
 ### `@command(/^\/echo\s+(.+)$/)`
 
-Forma RegExp: la expresión se prueba contra `msg.caption`. `args` es `match.slice(1)`, así que el
+Forma RegExp: la expresión se prueba contra `msg.caption()`. `args` es `match.slice(1)`, así que el
 primer grupo de captura es el texto a repetir. Es la manera idiomática de parsear comandos complejos
 sin escribir `split`/`trim` a mano.
 
@@ -201,8 +201,9 @@ puede pertenecer al mismo workflow, y los workflows son independientes entre sí
 ### `@on('message:created') + @guard(...)`
 
 Logger genérico de entrantes que demuestra la suscripción simple a un evento con un guard ad-hoc.
-`@guard` es apilable y cortocircuita con semántica AND; `msg.me` es `true` en los mensajes que
-escribió el bot, así que filtrarlos evita bucles de autologueo.
+`@guard` es apilable y cortocircuita con semántica AND; `msg.me` es `true` en lo que la cuenta
+escribe desde el teléfono u otro dispositivo vinculado (lo que envía la librería no emite
+`message:created`), así que filtrarlo deja en el log solo los mensajes entrantes.
 
 !!! warning "Los guards reciben argumentos `unknown`"
     La firma del predicado es `(...args: unknown[])`, así que `@guard((msg: Message) => !msg.me)`

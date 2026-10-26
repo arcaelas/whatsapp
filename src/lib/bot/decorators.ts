@@ -4,274 +4,169 @@
  * Public bot decorators.
  */
 
+import type { Message } from '~/lib/message';
 import { jid_of } from '~/lib/store';
-import type Message from '~/lib/message';
 import type WhatsApp from '~/lib/whatsapp';
+import { WhatsAppBot, decorator, register_workflow_step, resolve } from './decorator';
 
 type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
-import {
-    WhatsAppBot,
-    decorator,
-    register_workflow_step,
-    resolve,
-} from './decorator';
 
 /**
- * Registra el método como listener del evento indicado. Apilable: varios `@on`
- * sobre el mismo método crean múltiples suscripciones.
- * Registers the method as a listener of the given event. Stackable: several
- * `@on` on the same method produce multiple subscriptions.
+ * Suscribe el método al evento; varios `@on` sobre el mismo método suman suscripciones.
+ * Subscribes the method to the event; several `@on` on the same method add subscriptions.
  *
  * @param event - Nombre del evento del cliente / Client event name
  */
-export const on = decorator<[event: string]>((_meta, h, [event]) => {
-    if (!h.events.includes(event)) {
-        h.events.push(event);
-    }
+export const on = decorator<[event: string]>((_meta, handler, [event]) => {
+    handler.events = [...new Set([...handler.events, event])];
 });
 
 /**
- * Pre-chequeo del handler. Los guards se acumulan y se evalúan en orden con AND.
- * Si el método no tiene `@on` explícito, se auto-registra a `message:created`.
- * Handler pre-check. Guards accumulate and run in order with AND semantics.
- * If the method has no explicit `@on`, it auto-registers to `message:created`.
+ * Pre-chequeo acumulable con semántica AND; sin `@on` explícito el método escucha `message:created`.
+ * Stackable pre-check with AND semantics; without an explicit `@on` the method listens to `message:created`.
  *
- * @param pred - Predicate que recibe los argumentos del evento / Predicate receiving the event arguments
+ * @param check - Predicado que recibe los argumentos del evento / Predicate receiving the event arguments
  */
-export const guard = decorator<[pred: (...args: unknown[]) => boolean | Promise<boolean>]>(
-    (_meta, h, [pred]) => {
-        h.guards.push(pred);
-    },
-);
+export const guard = decorator<[check: (...args: unknown[]) => boolean | Promise<boolean>]>((_meta, handler, [check]) => {
+    handler.guards.push(check);
+});
 
 /**
- * Marca el handler para ejecutarse una sola vez y luego auto-desuscribirse.
- * Con `event` actúa como shortcut de `@on(event) + @once()`.
- * Marks the handler to run once and then auto-unsubscribe. With `event` it acts
- * as a shortcut of `@on(event) + @once()`.
+ * El handler corre una vez y se desuscribe; con `event` equivale a `@on(event)` + `@once()`.
+ * The handler runs once and unsubscribes; with `event` it equals `@on(event)` + `@once()`.
  *
- * @param event - Evento opcional para combinar `@on + @once` en un solo decorador / Optional event to combine `@on + @once` in a single decorator
+ * @param event - Evento opcional / Optional event
  */
 export function once(event?: string) {
-    return (_value: unknown, context: ClassMethodDecoratorContext): void => {
-        if (context.kind !== 'method') {
-            throw new Error('@once only applicable to methods');
-        }
-        const [, handler] = resolve(context.metadata as Record<string | symbol, unknown>, String(context.name));
+    return decorator<[]>((_meta, handler) => {
         handler.once = true;
-        if (event && !handler.events.includes(event)) {
-            handler.events.push(event);
-        }
-    };
+        handler.events = [...new Set([...handler.events, ...(event ? [event] : [])])];
+    })();
 }
 
-/**
- * Alias semántico de `@on('connected')`. El método se invoca al establecerse
- * la conexión con WhatsApp.
- * Semantic alias of `@on('connected')`. The method runs when the WhatsApp
- * connection opens.
- */
+/** Alias de `@on('connected')`. / Alias of `@on('connected')`. */
 export function connect() {
     return on('connected');
 }
 
-/**
- * Alias semántico de `@on('disconnected')`. El método se invoca al cerrarse
- * la conexión con WhatsApp.
- * Semantic alias of `@on('disconnected')`. The method runs when the WhatsApp
- * connection closes.
- */
+/** Alias de `@on('disconnected')`. / Alias of `@on('disconnected')`. */
 export function disconnect() {
     return on('disconnected');
 }
 
 /**
- * Ejecuta el método cada `ms` milisegundos mientras el bot esté conectado.
- * Usa `setInterval` — las ejecuciones son independientes del tiempo que tarde
- * el método, por lo que pueden solaparse si tarda más de `ms`.
- * Los timers arrancan en `connected` y se cancelan en `disconnected`.
- * Runs the method every `ms` milliseconds while the bot is connected.
- * Uses `setInterval` — executions are independent of how long the method takes,
- * so they may overlap if it runs longer than `ms`.
- * Timers start on `connected` and are cancelled on `disconnected`.
+ * Corre el método cada `ms` mientras el bot esté conectado, con `setInterval`: las ejecuciones
+ * pueden solaparse si el método tarda más que el intervalo.
+ * Runs the method every `ms` while the bot is connected, with `setInterval`: executions may
+ * overlap when the method takes longer than the interval.
  *
  * @param ms - Intervalo en milisegundos / Interval in milliseconds
  */
 export function every(ms: number) {
-    return decorator<[]>((_meta, h) => {
-        h.events.push(`__every:${ms}`);
+    return decorator<[]>((_meta, handler) => {
+        handler.events.push(`__every:${ms}`);
     })();
 }
 
 /**
- * Ejecuta el método con un retardo de `ms` milisegundos entre ejecuciones,
- * usando `setTimeout` recursivo. A diferencia de `@every`, la siguiente
- * ejecución solo empieza cuando la anterior ha terminado — nunca hay
- * ejecuciones en paralelo. Arranca en `connected` y se detiene en
- * `disconnected`.
- * Runs the method with `ms` milliseconds between executions using a recursive
- * `setTimeout`. Unlike `@every`, the next execution only starts after the
- * previous one finishes — executions never overlap. Starts on `connected`
- * and stops on `disconnected`.
+ * Corre el método dejando `ms` entre el final de una ejecución y el inicio de la siguiente:
+ * nunca se solapa.
+ * Runs the method leaving `ms` between the end of one execution and the start of the next: it
+ * never overlaps.
  *
- * @param ms - Retardo entre ejecuciones en milisegundos / Delay between executions in milliseconds
+ * @param ms - Retardo en milisegundos / Delay in milliseconds
  */
 export function delay(ms: number) {
-    return decorator<[]>((_meta, h) => {
-        h.events.push(`__delay:${ms}`);
+    return decorator<[]>((_meta, handler) => {
+        handler.events.push(`__delay:${ms}`);
     })();
 }
 
-/**
- * Marca el método como callback de pairing (PIN/QR). Múltiples métodos `@pair`
- * se invocan en paralelo cuando baileys entrega el código.
- * Marks the method as a pairing (PIN/QR) callback. Multiple `@pair` methods run
- * in parallel when baileys delivers the code.
- */
-export const pair = decorator<[]>((_meta, h) => {
-    if (!h.events.includes('__pair')) {
-        h.events.push('__pair');
-    }
+/** Callback de vinculación (PIN o QR); varios `@pair` corren en paralelo. / Linking callback (PIN or QR); several `@pair` run in parallel. */
+export const pair = decorator<[]>((_meta, handler) => {
+    handler.events = [...new Set([...handler.events, '__pair'])];
 });
 
 /**
- * Filtra por autor del mensaje. Acepta JID, LID o teléfono numérico; el string
- * se normaliza con la resolución interna del cliente y cache lazy. Un array produce match OR.
- * Filters by message author. Accepts JID, LID or numeric phone; the string is
- * normalized through the client's internal resolution with lazy cache. An array yields OR matching.
+ * Filtra por autor: JID, LID o teléfono, resueltos una vez y memorizados; una lista hace OR.
+ * Filters by author: JID, LID or phone, resolved once and memoized; a list means OR.
  *
- * @param source - Identificador(es) permitidos o predicate sobre `msg.from` / Allowed identifier(s) or predicate on `msg.from`
+ * @param source - Identificador(es) permitidos o predicado sobre `msg.from` / Allowed identifier(s) or predicate on `msg.from`
  */
 export function from(source: string | string[] | ((jid: string) => boolean)) {
-    return decorator<[]>((_meta, h) => {
-        if (typeof source === 'function') {
-            h.guards.push((...args: unknown[]) => source((args[0] as Message).from));
-        } else {
-            const list = Array.isArray(source) ? source : [source];
-            let resolved: Set<string> | null = null;
-            h.guards.push(async (...args: unknown[]) => {
-                const msg = args[0] as Message;
-                const wa = args[args.length - 1] as WhatsApp;
-                if (resolved === null) {
-                    resolved = new Set();
-                    for (const raw of list) {
-                        const r = await jid_of(wa.engine, raw);
-                        if (r) {
-                            resolved.add(r);
-                        }
-                    }
-                }
-                return resolved.has(msg.from);
-            });
-        }
+    let allowed: Promise<Set<string>> | null = null;
+    return decorator<[]>((_meta, handler) => {
+        handler.guards.push(async (...args: unknown[]) => {
+            const { from: author } = args[0] as Message;
+            const { engine } = args[args.length - 1] as WhatsApp;
+            return typeof source === 'function'
+                ? source(author)
+                : (await (allowed ??= Promise.all([source].flat().map((uid) => jid_of(engine, uid))).then((rows) => new Set(rows.filter((jid): jid is string => jid !== null))))).has(author);
+        });
     })();
 }
 
 /**
- * Class decorator que convierte la clase en un bot WhatsApp con opciones default.
- * La clase no necesita extender `WhatsAppBot` manualmente; el decorador produce
- * una subclase que hereda de `WhatsAppBot` y copia los métodos + metadata del
- * target. El constructor acepta un override parcial que se fusiona con las opts
- * por default.
- * Class decorator that turns the class into a WhatsApp bot with default options.
- * The class does not need to extend `WhatsAppBot` manually; the decorator
- * produces a subclass that inherits from `WhatsAppBot` and copies the target's
- * methods and metadata. The constructor accepts a partial override that is
- * merged with the default options.
+ * Convierte la clase en un bot con opciones por defecto: produce una subclase de `WhatsAppBot`
+ * con los métodos y la metadata del target, y el constructor fusiona las opciones que reciba.
+ * Turns the class into a bot with default options: it produces a `WhatsAppBot` subclass with the
+ * target's methods and metadata, and the constructor merges the options it receives.
  *
- * @param default_options - Opciones base para la instancia / Default options for the instance
+ * @param default_options - Opciones base de la instancia / Base instance options
  */
 export function Bot(default_options: IWhatsApp) {
-    return function <T extends abstract new (...args: never[]) => object>(
-        target: T,
-        _context: ClassDecoratorContext,
-    ): new (override?: Partial<IWhatsApp>) => InstanceType<T> & WhatsAppBot {
+    return function <T extends abstract new (...args: never[]) => object>(target: T, _context: ClassDecoratorContext): new (override?: Partial<IWhatsApp>) => InstanceType<T> & WhatsAppBot {
         const Mixed = class extends WhatsAppBot {
+            /** @param override - Opciones que pisan las de por defecto / Options overriding the defaults */
             constructor(override?: Partial<IWhatsApp>) {
-                super({ ...default_options, ...(override ?? {}) });
+                super({ ...default_options, ...override });
             }
         };
-        for (const key of Object.getOwnPropertyNames(target.prototype)) {
-            if (key !== 'constructor') {
-                const desc = Object.getOwnPropertyDescriptor(target.prototype, key);
-                if (desc) {
-                    Object.defineProperty(Mixed.prototype, key, desc);
-                }
-            }
-        }
+        Object.getOwnPropertyNames(target.prototype)
+            .filter((key) => key !== 'constructor')
+            .forEach((key) => Object.defineProperty(Mixed.prototype, key, Object.getOwnPropertyDescriptor(target.prototype, key)!));
         const meta = (target as unknown as Record<symbol, unknown>)[Symbol.metadata];
-        if (meta !== undefined) {
-            Object.defineProperty(Mixed, Symbol.metadata, {
-                value: meta,
-                enumerable: true,
-                configurable: true,
-                writable: true,
-            });
-        }
+        if (meta !== undefined) Object.defineProperty(Mixed, Symbol.metadata, { value: meta, enumerable: true, configurable: true, writable: true });
         return Mixed as unknown as new (override?: Partial<IWhatsApp>) => InstanceType<T> & WhatsAppBot;
     };
 }
 
 /**
- * Registra el método como paso de un workflow. Todos los steps del mismo
- * `workflow` se ejecutan secuencialmente al recibir `message:created`, ordenados
- * por `index`. Comparten los mismos argumentos (msg, chat, wa), por lo que las
- * mutaciones sobre esos objetos son visibles en los steps posteriores.
- * Registers the method as a step of a workflow. All steps of the same
- * `workflow` run sequentially on `message:created`, ordered by `index`. They
- * share the same arguments (msg, chat, wa), so mutations on those objects are
- * visible to later steps.
+ * Paso de un workflow: los pasos del mismo `workflow` corren en orden de `index` con los mismos
+ * argumentos, así las mutaciones de uno las ven los siguientes.
+ * Workflow step: the steps of the same `workflow` run in `index` order with the same arguments,
+ * so the mutations of one are seen by the next ones.
  *
  * @param workflow - Nombre del workflow / Workflow name
- * @param index - Posición dentro del workflow (ASC) / Position within the workflow (ASC)
+ * @param index - Posición dentro del workflow / Position within the workflow
+ * @throws Error si se aplica a algo que no es un método / when applied to something other than a method
  */
 export function pipe(workflow: string, index: number) {
     return (_value: unknown, context: ClassMethodDecoratorContext): void => {
-        if (context.kind !== 'method') {
-            throw new Error('@pipe only applicable to methods');
-        }
-        const metadata = context.metadata as Record<string | symbol, unknown>;
-        register_workflow_step(metadata, workflow, {
-            index,
-            method: String(context.name),
-        });
+        if (context.kind === 'method') register_workflow_step(context.metadata as Record<string | symbol, unknown>, workflow, { index, method: String(context.name) });
+        else throw new Error('@pipe only applicable to methods');
     };
 }
 
 /**
- * Registra el método como comando textual. Internamente aplica
- * `@on('message:created')`, un guard que matchea el `pattern` y un transform
- * que pasa `(msg, chat, args)` al método.
- * Registers the method as a textual command. Internally applies
- * `@on('message:created')`, a guard matching the `pattern` and a transform that
- * passes `(msg, chat, args)` to the method.
+ * Comando textual: escucha `message:created`, filtra por `pattern` contra `msg.caption` y entrega
+ * `(msg, chat, args)` al método.
+ * Text command: listens to `message:created`, filters by `pattern` against `msg.caption` and hands
+ * `(msg, chat, args)` to the method.
  *
- * @param pattern - Prefijo textual o RegExp a matchear contra `msg.caption` / Text prefix or RegExp matched against `msg.caption`
+ * @param pattern - Prefijo o RegExp; con RegExp, `args` son sus grupos / Prefix or RegExp; with a RegExp, `args` are its groups
  */
 export function command(pattern: string | RegExp) {
     return (value: unknown, context: ClassMethodDecoratorContext): void => {
         on('message:created')(value, context);
         guard((...args: unknown[]) => {
-            const msg = args[0] as Message;
-            const text = msg.caption ?? '';
-            if (typeof pattern === 'string') {
-                return text.startsWith(pattern);
-            }
-            return pattern.test(text);
+            const text = (args[0] as Message).caption();
+            return typeof pattern === 'string' ? text.startsWith(pattern) : pattern.test(text);
         })(value, context);
-
-        const [, handler] = resolve(context.metadata as Record<string | symbol, unknown>, String(context.name));
-        handler.transforms.push((args) => {
-            const msg = args[0] as Message;
-            const chat = args[1];
-            const text = msg.caption ?? '';
-            if (typeof pattern === 'string') {
-                const rest = text.slice(pattern.length).trim();
-                const parsed = rest.length > 0 ? rest.split(/\s+/) : [];
-                return [msg, chat, parsed];
-            }
-            const match = pattern.exec(text);
-            return [msg, chat, match ? match.slice(1) : []];
+        resolve(context.metadata as Record<string | symbol, unknown>, String(context.name))[1].transforms.push(([msg, chat]) => {
+            const text = (msg as Message).caption();
+            const rest = typeof pattern === 'string' ? text.slice(pattern.length).trim() : '';
+            return [msg, chat, typeof pattern === 'string' ? (rest ? rest.split(/\s+/) : []) : (pattern.exec(text)?.slice(1) ?? [])];
         });
     };
 }

@@ -31,7 +31,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 ```typescript title="Suscribir y desuscribir"
 const off = wa.on('message:created', (msg, chat) => {
-    console.log(`[${chat.id}] ${msg.caption}`);
+    console.log(`[${chat.id}] ${msg.caption()}`);
 });
 
 // más tarde
@@ -67,15 +67,16 @@ wa.on('error',        (error) => console.error(error.code, error.message));
 | Evento             | Firma                      | Se dispara cuando…                                                       |
 | ------------------ | -------------------------- | -------------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`      | Se registra un contacto nuevo, o se autocrea desde un mensaje entrante.   |
-| `contact:updated`  | `[contact, chat, wa]`      | Cambia el nombre, el notify, la imagen, el estado o el LID de un contacto.|
-| `contact:presence` | `[contact, action, wa]`    | Alguien entró, salió, escribe, graba, dejó de escribir o dejó de grabar. Solo llega de los contactos vigilados con `contact.watch()`; `action` es `online`, `offline`, `typing`, `recording`, `stopped-typing` o `stopped-recording`. |
+| `contact:updated`  | `[contact, chat, wa]`      | Cambia el nombre, el notify, la imagen, el estado o el LID de un contacto; también cuando `content()` lee una biografía distinta de la guardada.|
+| `contact:deleted`  | `[contact, wa]`            | Una ficha sale del motor: la guardada bajo el LID, cuando WhatsApp revela su teléfono y la ficha se une a la del teléfono. |
+| `contact:presence` | `[contact, action, wa]`    | Alguien entró, salió, escribe o graba. Solo llega de los contactos suscritos con `contact.sub()`; `action` es `online`, `offline`, `typing` o `recording` —dejar de escribir o de grabar llega como `online`—, y `offline` guarda la última conexión del contacto en `contact.seen`. |
 
 El argumento `chat` es el chat 1:1 del contacto (construido desde la caché cuando hace falta), así
 que puedes responder o leer el historial sin un lookup adicional.
 
 ```typescript title="Saludar a los contactos nuevos"
 wa.on('contact:created', async (contact, chat, client) => {
-    await client.Message.text(chat.id, `¡Bienvenido, ${contact.name}!`);
+    await client.Message.text(chat.id, `Welcome, ${contact.name}!`);
 });
 ```
 
@@ -86,25 +87,30 @@ wa.on('contact:created', async (contact, chat, client) => {
 | Evento             | Firma            | Se dispara cuando…                                                                        |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------ |
 | `chat:created`     | `[chat, wa]`     | Se registra un chat nuevo, o se autocrea desde un mensaje entrante.                        |
-| `chat:deleted`     | `[chat, wa]`     | Baileys reporta la eliminación de un chat (`chats.delete`).                                |
-| `chat:pinned`      | `[chat, wa]`     | El chat se fija.                                                                           |
-| `chat:unpinned`    | `[chat, wa]`     | El chat se desfija.                                                                        |
-| `chat:archived`    | `[chat, wa]`     | El chat se archiva.                                                                        |
-| `chat:unarchived`  | `[chat, wa]`     | El chat se desarchiva.                                                                     |
-| `chat:muted`       | `[chat, wa]`     | Se observa un `muteEndTime` en el futuro.                                                  |
-| `chat:unmuted`     | `[chat, wa]`     | `muteEndTime` se limpia o queda en el pasado.                                              |
+| `chat:deleted`     | `[chat, wa]`     | Baileys reporta la eliminación de un chat (`chats.delete`), o un chat guardado bajo un LID se une al de su teléfono. |
+| `chat:pinned`      | `[chat, wa]`     | El chat pasa de no fijado a fijado.                                                        |
+| `chat:unpinned`    | `[chat, wa]`     | El chat pasa de fijado a no fijado.                                                        |
+| `chat:archived`    | `[chat, wa]`     | El chat pasa de no archivado a archivado.                                                  |
+| `chat:unarchived`  | `[chat, wa]`     | El chat pasa de archivado a no archivado.                                                  |
+| `chat:muted`       | `[chat, wa]`     | El chat pasa de no silenciado a silenciado: un `muteEndTime` en el futuro.                 |
+| `chat:unmuted`     | `[chat, wa]`     | El chat pasa de silenciado a no silenciado: `muteEndTime` limpio o en el pasado.           |
 | `chat:updated`     | `[chat, wa]`     | Un grupo cambió de nombre o de descripción.                                                |
 | `chat:joined`      | `[chat, contacts, wa]` | Entraron personas a un grupo — invitadas, agregadas o por enlace. `contacts` dice quiénes. |
 | `chat:left`        | `[chat, contacts, wa]` | Personas salieron de un grupo o fueron expulsadas, la cuenta incluida.                |
 | `chat:promoted`    | `[chat, contacts, wa]` | Personas pasaron a administrar el grupo.                                              |
 | `chat:demoted`     | `[chat, contacts, wa]` | Personas dejaron de administrar el grupo.                                             |
 
+Los seis eventos de fijado, archivado y silencio salen solo cuando el valor cambia de verdad: un
+cambio hecho con `chat.pinned()`, `chat.archived()` o `chat.muted()` los emite en cuanto WhatsApp lo
+acepta, y uno hecho desde otro dispositivo, con el eco de WhatsApp; el eco de un cambio propio ya no
+encuentra diferencia y no los repite.
+
 ```typescript title="Auditar la moderación de chats"
-wa.on('chat:archived',   (chat) => console.log('archivado',   chat.id));
-wa.on('chat:unarchived', (chat) => console.log('desarchivado', chat.id));
-wa.on('chat:muted',      (chat) => console.log('silenciado hasta', chat.muted));
-wa.on('chat:joined',     (chat, people) => console.log(people.map((who) => who.name), 'entraron a', chat.name));
-wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.name), 'administran', chat.name));
+wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
+wa.on('chat:unarchived', (chat) => console.log('unarchived', chat.id));
+wa.on('chat:muted',      (chat) => console.log('muted until', chat.muted()));
+wa.on('chat:joined',     (chat, people) => console.log(people.map((who) => who.name), 'joined', chat.name()));
+wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.name), 'now admin in', chat.name()));
 ```
 
 ---
@@ -113,30 +119,31 @@ wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.n
 
 | Evento               | Firma                           | Se dispara cuando…                                                                 |
 | -------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
-| `message:created`    | `[message, chat, wa]`           | Se registra un mensaje nuevo (entrante o saliente).                                 |
-| `message:updated`    | `[message, chat, wa]`           | Un mensaje se edita, cambia su estado, se actualiza su contenido (ubicación en vivo), se descifra un voto de encuesta o una respuesta a un evento, o se fija o se suelta. |
-| `message:deleted`    | `[message, chat, wa]`           | Un mensaje se revoca (`protocolMessage.REVOKE`). El documento se conserva, marcado con `revoked`. |
+| `message:created`    | `[message, chat, wa]`           | Se guarda un mensaje nuevo: entrante, o saliente desde el teléfono u otro dispositivo vinculado. Los mensajes enviados con esta librería no lo emiten. |
+| `message:updated`    | `[message, chat, wa]`           | Un mensaje se edita, cambia su estado, se descifra un voto de encuesta o una respuesta a un evento, o se fija o se suelta. |
+| `message:deleted`    | `[message, chat, wa]`           | Un mensaje se revoca (`protocolMessage.REVOKE`). El documento se conserva, marcado con `revoked_at`. |
 | `message:reacted`    | `[message, chat, emoji, contact, wa]` | Llega una reacción. `emoji` es `''` cuando la reacción se retira; `contact` es quien reaccionó, así el eco de una propia se distingue de una real. |
 | `message:starred`    | `[message, chat, wa]`           | Un mensaje se destaca.                                                              |
 | `message:unstarred`  | `[message, chat, wa]`           | Un mensaje deja de estar destacado.                                                 |
-| `message:forwarded`  | `[message, chat, wa]`           | Un mensaje recién almacenado trae la bandera `forwarded` (se emite justo después de `message:created`). |
+| `message:forwarded`  | `[message, chat, wa]`           | Un mensaje recién almacenado llegó reenviado (`forward()` es `true`) (se emite justo después de `message:created`). |
 | `message:seen`       | `[message, chat, wa]`           | Se observa un receipt de lectura o reproducción del mensaje.                        |
 
 ```typescript title="Bot que responde a las menciones" hl_lines="2"
 wa.on('message:created', async (msg, chat) => {
-    if (!msg.me && msg.caption.toLowerCase().includes('@bot')) {
-        await msg.text('¡acá estoy!');
+    if (!msg.me && msg.caption().toLowerCase().includes('@bot')) {
+        await msg.text('here!');
     }
 });
 
 wa.on('message:reacted', (msg, chat, emoji, who) => {
-    console.log(`${who.name} reaccionó ${emoji || '∅'} en ${msg.id}`);
+    console.log(`${who.name} reacted ${emoji || '∅'} on ${msg.id}`);
 });
 ```
 
 !!! warning "Protégete de tus propios mensajes"
-    `message:created` también se dispara con los mensajes salientes. Sin un chequeo `!msg.me` un bot
-    se responde a sí mismo en bucle.
+    `message:created` también se dispara con lo que la cuenta envía desde el teléfono u otro
+    dispositivo vinculado, con `msg.me` en `true`. Sin un chequeo `!msg.me` un bot responde los
+    mensajes de su propia cuenta.
 
 ---
 
@@ -144,8 +151,8 @@ wa.on('message:reacted', (msg, chat, emoji, who) => {
 
 | Evento         | Firma          | Se dispara cuando…                                              |
 | -------------- | -------------- | ----------------------------------------------------------------- |
-| `feed:created` | `[feed, wa]`   | Llega un estado, o publicas uno con `account.post()`.                |
-| `feed:updated` | `[feed, wa]`   | El estado se marca como visto, por `view()` o por un read receipt. |
+| `feed:created` | `[feed, wa]`   | Llega un estado, o publicas uno con `Feed.create()`.                 |
+| `feed:updated` | `[feed, wa]`   | El estado se marca como visto, por `seen(true)` o por un read receipt, o alguien reacciona a él. |
 | `feed:deleted` | `[feed, wa]`   | El autor revoca el estado.                                       |
 
 Los estados nunca emiten `message:*`, y su payload **no lleva chat**. Ver [Feed](feed.es.md).
@@ -153,7 +160,25 @@ Los estados nunca emiten `message:*`, y su payload **no lleva chat**. Ver [Feed]
 ```typescript title="Observar estados"
 wa.on('feed:created', async (post) => {
     console.log((await post.author()).name, post.caption);
-    await post.view();
+    await post.seen(true);
+});
+```
+
+---
+
+## Catálogos
+
+| Evento            | Firma           | Se dispara cuando…                                                                              |
+| ----------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| `catalog:updated` | `[catalog, wa]` | Una descarga posterior del catálogo de un negocio trae algo distinto para esa colección.        |
+
+Las descargas posteriores a la primera ocurren de fondo, cuando `contact.catalog()` lee un catálogo
+guardado con más de 24 horas. La primera descarga de un negocio y una colección que no existía
+antes no lo emiten. `catalog.sub()` lo acota a un solo catálogo. Ver [Catalog](catalog.es.md).
+
+```typescript title="Seguir los cambios del catálogo"
+wa.on('catalog:updated', async (catalog) => {
+    console.log((await catalog.contact()).name, catalog.name, catalog.updated_at);
 });
 ```
 
@@ -172,7 +197,7 @@ const wa = new WhatsApp({ engine: new FileSystemEngine('./data/wa') });
 
 const events = [
     'connected', 'disconnected', 'error',
-    'contact:created', 'contact:updated', 'contact:presence',
+    'contact:created', 'contact:updated', 'contact:deleted', 'contact:presence',
     'chat:created', 'chat:updated', 'chat:deleted',
     'chat:joined', 'chat:left', 'chat:promoted', 'chat:demoted',
     'chat:pinned', 'chat:unpinned',
@@ -183,6 +208,7 @@ const events = [
     'message:starred', 'message:unstarred',
     'message:forwarded', 'message:seen',
     'feed:created', 'feed:updated', 'feed:deleted',
+    'catalog:updated',
 ] as const;
 
 for (const event of events) {
@@ -191,7 +217,7 @@ for (const event of events) {
     });
 }
 
-await wa.connect((qr) => console.log('Tamaño del QR:', (qr as Buffer).length));
+await wa.connect((qr) => console.log('QR length:', (qr as Buffer).length));
 ```
 
 ---
@@ -203,7 +229,7 @@ devuelve `once` te permite cancelar la suscripción antes de que el evento llegu
 
 ```typescript title="Esperar el primer mensaje"
 const cancel = wa.once('message:created', (msg, chat) => {
-    console.log('primer mensaje:', chat.id, msg.caption);
+    console.log('first message:', chat.id, msg.caption());
 });
 
 // Opcional: abandonar antes de que llegue ningún mensaje.
@@ -221,10 +247,12 @@ setTimeout(cancel, 60_000);
     - `message:*`         → `[message, chat, wa]`
     - `message:reacted`   → `[message, chat, emoji, contact, wa]`
     - `contact:*`         → `[contact, chat, wa]`
+    - `contact:deleted`   → `[contact, wa]`
     - `contact:presence`  → `[contact, action, wa]`
     - `chat:*`            → `[chat, wa]`
     - `chat:joined` / `chat:left` / `chat:promoted` / `chat:demoted` → `[chat, contacts, wa]`
     - `feed:*`            → `[feed, wa]`
+    - `catalog:updated`   → `[catalog, wa]`
     - `connected`         → `[wa]`
     - `disconnected`      → `[wa, farewell]`
     - `error`             → `[error, wa]`
