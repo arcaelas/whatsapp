@@ -99,7 +99,7 @@ wa.on('message:updated', (msg, chat) => {
 ## Quién votó qué
 
 `votes()` desglosa el conteo por votante. Cada entrada es `{ name, contact }`, donde `name` es la
-opción elegida y `contact` es el teléfono del votante.
+opción elegida y `contact` es el JID del votante —el del teléfono cuando se conoce, el LID si no—.
 
 ```typescript title="votes.ts"
 import { wa } from './client';
@@ -140,8 +140,9 @@ if (poll instanceof wa.Message.Poll) {
 !!! warning "`select()` es best-effort"
     El voto se cifra y se retransmite correctamente, pero WhatsApp **no** propaga un voto emitido
     desde un dispositivo vinculado (companion) — que es lo que esta librería es. Los votos entrantes
-    se descifran bien; tu propio voto puede no aparecer en otros dispositivos. `select()` devuelve
-    `false` cuando la encuesta no tiene clave de cifrado o no se pasó ningún índice válido.
+    se descifran bien; tu propio voto puede no aparecer en otros dispositivos. `select([])` retira el
+    voto. `select()` rechaza con `ERR_POLL_SECRET` cuando la encuesta no tiene clave de cifrado y con
+    `ERR_POLL_OPTION` cuando un índice está fuera de rango o sobra en una encuesta de opción única.
 
 ---
 

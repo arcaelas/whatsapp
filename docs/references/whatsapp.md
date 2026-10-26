@@ -214,7 +214,7 @@ me(): Promise<Contact | null>
 Returns the account itself as a [`Contact`](contact.md) —`me` is `true`— with the session's public
 name, or `null` while there is no user yet (during pairing). The profile is changed on it: `rename()`,
 `content(value)`, `photo(value)` and `online()` only work on the own contact and reject with
-`ERR_NOT_ALLOWED` on any other.
+`UNAUTHORIZED` on any other.
 
 ```typescript title="me.ts"
 const me = await wa.me();

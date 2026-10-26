@@ -74,7 +74,7 @@ wa.on('message:created', async (msg, chat) => {
         console.log(`Saved ${bytes.length} bytes from ${chat.name()}`);
         console.log(`${msg.width}x${msg.height}, ${msg.size} bytes announced`);
 
-        const thumb = await msg.thumb();     // embedded JPEG preview, or null
+        const thumb = msg.thumb;             // embedded JPEG preview, or null
         if (thumb) {
             await writeFile(join('./inbox', `${msg.id}.thumb.jpg`), thumb);
         }
@@ -211,7 +211,7 @@ wa.on('message:created', async (msg) => {
 
 ## Location
 
-Sending takes a static pin; receiving covers both static and live locations through the `Location`
+Sending takes a static pin, with the place name and address when given; receiving covers both static and live locations through the `Location`
 subclass.
 
 ```typescript title="send-location.ts"
@@ -220,6 +220,8 @@ import { wa } from './client';
 await wa.Message.location('14155557777', {
     lat: 40.4168,
     lng: -3.7038,
+    name: 'Puerta del Sol',
+    address: 'Plaza de la Puerta del Sol, Madrid',
 });
 ```
 
@@ -228,7 +230,7 @@ import { wa } from './client';
 
 wa.on('message:created', (msg) => {
     if (msg instanceof wa.Message.Location) {
-        console.log(`Pin: ${msg.lat}, ${msg.lng}`);
+        console.log(`Pin: ${msg.lat}, ${msg.lng} ${msg.name ?? ''} ${msg.address ?? ''}`);
         console.log(`Maps URL: ${msg.link}`);
         if (msg.live) {
             console.log('Live location shared');
@@ -238,7 +240,7 @@ wa.on('message:created', (msg) => {
 ```
 
 !!! warning "Live location is receive-only"
-    The send API accepts `{ lat, lng }` and nothing else: broadcasting your own live location is not
+    The send API accepts `{ lat, lng, name?, address? }`: broadcasting your own live location is not
     supported. Incoming live locations arrive with `live === true` and the coordinates of that
     message; their later position updates do not emit `message:updated`.
 

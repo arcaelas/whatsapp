@@ -157,16 +157,14 @@ acotado por LRU y respaldado en un archivo `.order`: al abrir un directorio carg
 lo reconstruye con `readdir` + `stat` cuando el conteo no coincide. Los binarios viven junto al
 documento como `content.bin`.
 
-Los documentos y los binarios se leen y se escriben con llamadas síncronas de `fs`, a través de una
-caché de lectura de hasta 4.096 archivos que comparten todos los `FileSystemEngine` del proceso y que
-descarta primero el menos usado. Cada lectura revalida su entrada con un `stat` del mtime y el tamaño
-del archivo, y cada escritura relee el archivo, así que una escritura es visible en la lectura
-siguiente. Lo que pasa de 1 MB —casi siempre media— no se cachea ni se relee.
+Los documentos y los binarios se leen y se escriben con llamadas asíncronas de `fs/promises`, así
+el disco nunca detiene el proceso, y `list` lee la página en paralelo. No hay caché de contenido:
+cada lectura va al disco, una escritura es visible en la lectura siguiente y la memoria no depende de
+cuánto haya guardado.
 
 !!! warning "Un solo escritor por directorio base"
-    El índice en memoria y la caché de lectura asumen un único proceso escritor. Dos procesos
-    escribiendo el mismo directorio base desincronizarán sus archivos `.order`, y un documento que
-    otro proceso reescribe con el mismo tamaño y el mismo score se sigue sirviendo desde la caché.
+    El índice en memoria asume un único proceso escritor. Dos procesos escribiendo el mismo
+    directorio base desincronizarán sus archivos `.order`.
 
 !!! tip "Cuándo elegir el driver de sistema de archivos"
     Desarrollo local y estado inspeccionable: cada documento es un JSON legible. Para volumen,
@@ -187,8 +185,10 @@ ordenados.
 | `<prefix>:dir:<parent>`      | `set`       | Los subdirectorios de una ruta (`chat/a/message` bajo `chat/a`), para que `unset` recorra un subárbol cuyos niveles intermedios no son documentos. |
 
 `list()` es `ZREVRANGE` + `MGET`; `count()` es `ZCARD` (O(1)); `unset()` recorre el subárbol por los
-sets `idx:` y `dir:` y lo borra por lotes, nunca con `SCAN`, que costaría el keyspace entero de Redis
-en cada borrado — y baileys hace un borrado por cada pre-key de Signal que consume. Las escrituras
+sets `idx:` y `dir:` nivel por nivel —todos los nodos de un nivel en una sola tanda, así los viajes son
+la profundidad del árbol y no la cantidad de descendientes— y lo borra por lotes, nunca con `SCAN`,
+que costaría el keyspace entero de Redis en cada borrado — y baileys hace un borrado por cada pre-key
+de Signal que consume. Las escrituras
 agrupan documento, índice y directorios en un pipeline cuando el cliente lo expone, de modo que una
 caída entre ellas no puede dejar un documento huérfano de su índice.
 

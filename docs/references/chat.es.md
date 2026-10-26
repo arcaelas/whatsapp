@@ -2,7 +2,7 @@
 
 La entidad `Chat` representa una conversación de WhatsApp — un chat 1:1 con un contacto o un grupo.
 Lo que el chat es (`id`, `type`, `count`) son getters; cada valor que la cuenta también puede cambiar
-es un único método que lee sin argumento y escribe con uno, y rechaza con `ERR_NOT_ALLOWED` cuando
+es un único método que lee sin argumento y escribe con uno, y rechaza con `UNAUTHORIZED` cuando
 la cuenta no tiene derecho a cambiarlo.
 
 La clase es `wa.Chat`, que la sesión construye al conectar con la factory `chat` —el export por
@@ -46,7 +46,7 @@ if (chat) {
 
 | Propiedad | Tipo                   | Descripción                                                                          |
 | --------- | ---------------------- | ------------------------------------------------------------------------------------ |
-| `id`      | `string`               | El teléfono del contacto en un 1:1, el `@g.us` en un grupo, el LID si no está mapeado. |
+| `id`      | `string`               | JID completo: el del teléfono en un 1:1, el `@g.us` en un grupo, el LID si no está mapeado. Mismo formato que `contact.id` y `msg.cid`. |
 | `type`    | `'contact' \| 'group'` | Conversación 1:1 o grupo.                                                            |
 | `count`   | `number`               | Mensajes sin leer; `seen()` lo deja en `0`.                                          |
 
@@ -55,9 +55,10 @@ if (chat) {
 ## Métodos
 
 Cada método sirve en un 1:1 y en un grupo salvo que diga lo contrario. Lo que cambia el estado
-propio de la cuenta —archivar, fijar, silenciar— se aplica a la instancia al instante, y el motor
-sigue el eco de WhatsApp, que es también lo que emite los eventos `chat:*`. Una operación de grupo
-rechaza con `ERR_NOT_ALLOWED` cuando la cuenta no tiene el permiso o no está en el grupo, y en un
+propio de la cuenta —archivar, fijar, silenciar, renombrar, describir, mensajes temporales— se
+guarda en la instancia y en el motor en cuanto WhatsApp lo acepta, y emite el evento `chat:*` que
+corresponde; el eco de WhatsApp que llega después ya no encuentra diferencia y no lo repite. Una operación de grupo
+rechaza con `UNAUTHORIZED` cuando la cuenta no tiene el permiso o no está en el grupo, y en un
 1:1 cuando sólo existe en grupos.
 
 ### `name()` / `name(value)`
@@ -68,8 +69,9 @@ name(value: string): Promise<string>
 ```
 
 En un 1:1, el nombre del contacto (agenda, nombre público o teléfono); en un grupo, el asunto. Con
-texto, en un 1:1 cambia el nombre con que la cuenta guarda al contacto en su agenda, y en un grupo
-intenta cambiar el asunto.
+texto, en un 1:1 cambia el nombre con que la cuenta guarda al contacto en su agenda —en el chat y en
+la ficha, lo mismo que [`contact.rename(value)`](contact.es.md#rename-name)—, y en un grupo intenta
+cambiar el asunto, que exige permiso.
 
 ### `content()` / `content(value)`
 
@@ -77,10 +79,10 @@ intenta cambiar el asunto.
 content(value?: string): Promise<string>
 ```
 
-En un 1:1, la biografía del contacto tal como la guarda
-[`contact.content()`](contact.es.md#content-contentvalue); en un grupo, la descripción. Con texto
-intenta cambiar la descripción del grupo (`''` la borra); en un 1:1 rechaza, porque la biografía es
-de la otra persona.
+En un 1:1, la biografía del contacto tal como la lee
+[`contact.content()`](contact.es.md#content-contentvalue) —de WhatsApp, o la guardada sin red—; en un
+grupo, la descripción. Con texto intenta cambiar la descripción del grupo (`''` la borra); en un 1:1
+rechaza, porque la biografía es de la otra persona.
 
 ### `photo()` / `photo(value)`
 
@@ -88,8 +90,8 @@ de la otra persona.
 photo(value?: Buffer | null): Promise<Buffer>
 ```
 
-En un 1:1, la foto del contacto; en un grupo, la del grupo, guardada bajo `/chat/<id>/photo` y
-descargada de nuevo sólo cuando cambia. Un Buffer vacío si no hay o la privacidad la oculta. Con un
+En un 1:1, la foto del contacto; en un grupo, la del grupo, guardada bajo `/chat/<id>/photo` y,
+como la del contacto, consultada de nuevo pasadas 24 horas y descargada sólo si cambió. Un Buffer vacío si no hay o la privacidad la oculta. Con un
 Buffer intenta cambiar la foto del grupo (`null` la quita) y devuelve el resultado; en un 1:1
 rechaza. Rechaza con `ERR_PROFILE_PICTURE_LIB` cuando no está instalado ni `sharp` ni `jimp`.
 
@@ -105,7 +107,7 @@ muted(until: string | number | Date | false): Promise<string | null>
 ```
 
 Leen o cambian si el chat está archivado, fijado —WhatsApp admite tres, así que `pinned(true)`
-devuelve `false` cuando no hay lugar— o silenciado hasta una fecha ISO (`false` lo reactiva). Sólo
+devuelve `false` cuando no hay lugar, contados con el índice `/pinned` en una sola lectura— o silenciado hasta una fecha ISO (`false` lo reactiva). Sólo
 afectan a la cuenta.
 
 ```typescript title="state.ts"
@@ -156,7 +158,7 @@ Muestran u ocultan el «escribiendo…» o el «grabando audio…» a los demás
 !!! info "La cuenta se pone en línea sola"
     `typing(true)`, `recording(true)` y `seen()` anuncian la cuenta en línea, como WhatsApp Web, y a
     los 30 segundos sin ninguno de ellos se anuncia no disponible: eso es lo que actualiza la última
-    conexión que ven los demás. Enviar mensajes no la anuncia; `account.online(value)` la fuerza.
+    conexión que ven los demás. Enviar mensajes no la anuncia; `(await wa.me())?.online(value)` la fuerza.
 
 ### `messages(offset?, limit?)`
 

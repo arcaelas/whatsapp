@@ -2,7 +2,7 @@
 
 The `Chat` entity represents a WhatsApp conversation — a 1:1 chat with a contact or a group. What
 the chat is (`id`, `type`, `count`) are getters; every value the account can also change is a single
-method that reads without an argument and writes with one, and rejects with `ERR_NOT_ALLOWED` when
+method that reads without an argument and writes with one, and rejects with `UNAUTHORIZED` when
 the account has no right to change it.
 
 The class is `wa.Chat`, built when the session connects by the `chat` factory —the default export of
@@ -46,7 +46,7 @@ if (chat) {
 
 | Property | Type                   | Description                                                                               |
 | -------- | ---------------------- | ----------------------------------------------------------------------------------------- |
-| `id`     | `string`               | The contact's phone on a 1:1, the `@g.us` on a group, the LID when it is not mapped.     |
+| `id`     | `string`               | Full JID: the phone's on a 1:1, the `@g.us` on a group, the LID when it is not mapped. Same format as `contact.id` and `msg.cid`. |
 | `type`   | `'contact' \| 'group'` | 1:1 conversation or group.                                                                |
 | `count`  | `number`               | Unread messages; `seen()` sets it to `0`.                                                 |
 
@@ -55,9 +55,10 @@ if (chat) {
 ## Methods
 
 Every method works on a 1:1 and on a group unless it says otherwise. What changes the account's own
-state —archive, pin, mute— is applied to the instance right away, and the engine follows WhatsApp's
-echo, which is also what emits the `chat:*` events. A group operation rejects with
-`ERR_NOT_ALLOWED` when the account lacks the permission or is not in the group, and on a 1:1 when it
+state —archive, pin, mute, rename, describe, disappearing messages— is stored in the instance and in
+the engine as soon as WhatsApp accepts it, and emits the matching `chat:*` event; WhatsApp's echo
+arriving later finds no difference and does not repeat it. A group operation rejects with
+`UNAUTHORIZED` when the account lacks the permission or is not in the group, and on a 1:1 when it
 only exists in groups.
 
 ### `name()` / `name(value)`
@@ -68,8 +69,9 @@ name(value: string): Promise<string>
 ```
 
 On a 1:1, the contact's name (address book, public name or phone); on a group, the subject. With
-text, on a 1:1 it changes the name the account saves the contact with in its address book, and on a
-group it tries to change the subject.
+text, on a 1:1 it changes the name the account saves the contact with in its address book —on the
+chat and on the card, the same as [`contact.rename(value)`](contact.md#rename-name)—, and on a group
+it tries to change the subject, which needs permission.
 
 ### `content()` / `content(value)`
 
@@ -77,9 +79,10 @@ group it tries to change the subject.
 content(value?: string): Promise<string>
 ```
 
-On a 1:1, the contact's bio as [`contact.content()`](contact.md#content-contentvalue) keeps it; on
-a group, the description. With text it tries to change the group description (`''` removes it); on
-a 1:1 it rejects, because the bio belongs to the other person.
+On a 1:1, the contact's bio as [`contact.content()`](contact.md#content-contentvalue) reads it —from
+WhatsApp, or the stored one without network—; on a group, the description. With text it tries to
+change the group description (`''` removes it); on a 1:1 it rejects, because the bio belongs to the
+other person.
 
 ### `photo()` / `photo(value)`
 
@@ -87,8 +90,8 @@ a 1:1 it rejects, because the bio belongs to the other person.
 photo(value?: Buffer | null): Promise<Buffer>
 ```
 
-On a 1:1, the contact's picture; on a group, the group's, stored under `/chat/<id>/photo` and
-downloaded again only when it changes. An empty Buffer when there is none or privacy hides it. With
+On a 1:1, the contact's picture; on a group, the group's, stored under `/chat/<id>/photo` and,
+like the contact's, checked again after 24 hours and downloaded only when it changed. An empty Buffer when there is none or privacy hides it. With
 a Buffer it tries to change the group picture (`null` removes it) and returns the result; on a 1:1
 it rejects. It rejects with `ERR_PROFILE_PICTURE_LIB` when neither `sharp` nor `jimp` is installed.
 
@@ -104,7 +107,7 @@ muted(until: string | number | Date | false): Promise<string | null>
 ```
 
 Read or change whether the chat is archived, pinned —WhatsApp allows three, so `pinned(true)`
-returns `false` when there is no room— or muted until an ISO date (`false` unmutes it). They only
+returns `false` when there is no room, counted with the `/pinned` index in a single read— or muted until an ISO date (`false` unmutes it). They only
 affect the account.
 
 ```typescript title="state.ts"
@@ -154,7 +157,7 @@ Show or hide the «typing…» or «recording audio…» notice to the other par
 !!! info "The account goes online by itself"
     `typing(true)`, `recording(true)` and `seen()` announce the account online, like WhatsApp Web,
     and after 30 seconds without any of them it is announced unavailable: that is what updates the
-    last seen others see. Sending messages does not announce it; `account.online(value)` forces it.
+    last seen others see. Sending messages does not announce it; `(await wa.me())?.online(value)` forces it.
 
 ### `messages(offset?, limit?)`
 

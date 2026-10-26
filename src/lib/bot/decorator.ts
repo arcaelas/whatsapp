@@ -1,12 +1,13 @@
 /**
  * @file bot/decorator.ts
- * @description Infraestructura base de decoradores Stage 3 sobre WhatsApp.
- * Base infrastructure for Stage 3 decorators over WhatsApp.
+ * @description Base de los decoradores Stage 3: el schema de cada bot y la clase que lo cablea
+ * contra el cliente.
+ * Stage 3 decorators base: every bot's schema and the class that wires it against the client.
  */
 
 import WhatsApp from '~/lib/whatsapp';
 
-type IWhatsApp = ConstructorParameters<typeof WhatsApp>[0];
+type Metadata = Record<string | symbol, unknown>;
 
 (Symbol as { metadata?: symbol }).metadata ??= Symbol.for('Symbol.metadata');
 
@@ -30,260 +31,107 @@ export interface BotSchema {
     workflows: Record<string, WorkflowStep[]>;
 }
 
-type Metadata = Record<string | symbol, unknown>;
-
 /**
- * Recupera o inicializa el `BotSchema` almacenado en la metadata del contexto.
- * Retrieves or initializes the `BotSchema` stored in the context metadata.
- *
- * @param metadata - Objeto metadata del contexto del decorador / Decorator context metadata object
- * @returns Schema del bot garantizado con `handlers` y `workflows` / Bot schema guaranteed to have `handlers` and `workflows`
- */
-function ensure_schema(metadata: Metadata): BotSchema {
-    let schema = metadata[HANDLERS] as BotSchema | undefined;
-    if (!schema) {
-        schema = { handlers: {}, workflows: {} };
-        metadata[HANDLERS] = schema;
-    }
-    if (!schema.workflows) {
-        schema.workflows = {};
-    }
-    return schema;
-}
-
-/**
- * Recupera o inicializa el schema del bot y la entrada del método indicado.
- * Retrieves or initializes the bot schema and the entry for the given method.
- *
- * @param metadata - Objeto metadata del contexto del decorador / Decorator context metadata object
+ * @param metadata - Metadata del contexto del decorador / Decorator context metadata
  * @param method_name - Nombre del método / Method name
- * @returns Tupla `[schema, handler_meta]` para el método / Tuple `[schema, handler_meta]` for the method
+ * @returns El schema del bot y la entrada del método, creados si faltaban / The bot schema and the method entry, created when missing
  */
 export function resolve(metadata: Metadata, method_name: string): [BotSchema, HandlerMeta] {
-    const schema = ensure_schema(metadata);
-    schema.handlers[method_name] ||= {
-        method: method_name,
-        events: [],
-        guards: [],
-        transforms: [],
-        once: false,
-    };
+    const schema = (metadata[HANDLERS] ??= { handlers: {}, workflows: {} }) as BotSchema;
+    schema.handlers[method_name] ??= { method: method_name, events: [], guards: [], transforms: [], once: false };
     return [schema, schema.handlers[method_name]];
 }
 
 /**
- * Registra un step dentro de un workflow. Uso interno del decorador `@pipe`.
- * Registers a step inside a workflow. Internal use of the `@pipe` decorator.
- *
  * @param metadata - Metadata del contexto del decorador / Decorator context metadata
  * @param workflow - Nombre del workflow / Workflow name
- * @param step - Step a registrar (índice + nombre del método) / Step to register (index + method name)
+ * @param step - Índice y método del paso / Step index and method
  */
-export function register_workflow_step(
-    metadata: Metadata,
-    workflow: string,
-    step: WorkflowStep,
-): void {
-    const schema = ensure_schema(metadata);
-    schema.workflows[workflow] ||= [];
-    schema.workflows[workflow].push(step);
+export function register_workflow_step(metadata: Metadata, workflow: string, step: WorkflowStep): void {
+    const schema = (metadata[HANDLERS] ??= { handlers: {}, workflows: {} }) as BotSchema;
+    (schema.workflows[workflow] ??= []).push(step);
 }
 
 /**
- * Factory para crear decoradores paramétricos Stage 3. El callback muta la metadata
- * del handler mediante la entrada resuelta.
- * Factory to build Stage 3 parametric decorators. The callback mutates the handler
- * metadata via the resolved entry.
+ * Fábrica de decoradores paramétricos de método: el callback muta la entrada del handler.
+ * Parametric method decorator factory: the callback mutates the handler entry.
  *
  * @param callback - Mutador de la entrada del handler / Handler entry mutator
- * @returns Decorador paramétrico listo para aplicarse a un método / Parametric decorator ready to be applied to a method
+ * @throws Error si se aplica a algo que no es un método / when applied to something other than a method
  */
-export function decorator<P extends unknown[]>(
-    callback: (metadata: Metadata, handler: HandlerMeta, params: P) => void,
-) {
-    return (...params: P) =>
-        (_value: unknown, context: ClassMethodDecoratorContext): void => {
-            if (context.kind !== 'method') {
-                throw new Error(`Decorator only applicable to methods; got ${context.kind}`);
-            }
-            const metadata = context.metadata as Metadata;
-            const method_name = String(context.name);
-            const [, handler] = resolve(metadata, method_name);
-            callback(metadata, handler, params);
-        };
+export function decorator<P extends unknown[]>(callback: (metadata: Metadata, handler: HandlerMeta, params: P) => void) {
+    return (...params: P) => (_value: unknown, context: ClassMethodDecoratorContext): void => {
+        if (context.kind === 'method') callback(context.metadata as Metadata, resolve(context.metadata as Metadata, String(context.name))[1], params);
+        else throw new Error(`Decorator only applicable to methods; got ${context.kind}`);
+    };
 }
 
 /**
- * Clase base opcional para bots declarativos. El consumer extiende `WhatsAppBot`
- * (o usa `@WhatsApp` como class decorator), declara métodos decorados y al
- * `connect()` los listeners se cablean automáticamente contra el event emitter real.
- * Optional base class for declarative bots. The consumer extends `WhatsAppBot`
- * (or uses `@WhatsApp` as a class decorator), declares decorated methods and at
- * `connect()` listeners get wired against the real event emitter automatically.
+ * Bot declarativo: al conectar cablea los métodos decorados —eventos, timers, workflows y
+ * pairing— una sola vez, así una reconexión no duplica los listeners.
+ * Declarative bot: on connect it wires the decorated methods —events, timers, workflows and
+ * pairing— only once, so a reconnection does not duplicate the listeners.
  */
 export class WhatsAppBot extends WhatsApp {
-    /** @internal Evita re-cablear handlers en reconexiones (duplicaría cada listener). / Prevents re-wiring handlers on reconnects (would duplicate every listener). */
-    private _wired = false;
+    /** Cableado pendiente; pasa a false en la primera conexión. / Wiring pending; turns false on the first connection. */
+    #pending = true;
 
-    constructor(options: IWhatsApp) {
-        super(options);
-    }
-
-    /**
-     * Inicia la conexión cableando previamente los handlers decorados. Los métodos
-     * `@pair` se invocan en paralelo con el `callback` opcional.
-     * Starts the connection wiring decorated handlers beforehand. `@pair` methods
-     * run in parallel alongside the optional `callback`.
-     *
-     * @param callback - Callback tradicional del PIN/QR (opcional si hay `@pair`) / Traditional PIN/QR callback (optional when `@pair` exists)
-     */
+    /** @param callback - Callback del PIN o QR; opcional si hay métodos `@pair` / PIN or QR callback; optional when there are `@pair` methods */
     override async connect(callback?: (auth: string | Buffer) => void | Promise<void>): Promise<void> {
-        this._wire_handlers();
-        const pair_methods = this._collect_pair_methods();
-        const final_callback = async (code: string | Buffer): Promise<void> => {
-            await Promise.all(pair_methods.map((fn) => fn(code)));
-            if (callback) {
-                await callback(code);
-            }
+        const schema = (this.constructor as { [Symbol.metadata]?: Metadata })[Symbol.metadata]?.[HANDLERS] as BotSchema | undefined;
+        const handlers = Object.values(schema?.handlers ?? {});
+        const bind = (name: string) => {
+            const fn = (this as unknown as Record<string, unknown>)[name];
+            return typeof fn === 'function' ? (fn.bind(this) as (...args: unknown[]) => unknown) : null;
         };
-        return super.connect(final_callback);
-    }
-
-    /**
-     * Recolecta los métodos marcados con `@pair` ligados a `this`.
-     * Collects methods marked with `@pair` bound to `this`.
-     *
-     * @returns Lista de funciones ligadas listas para invocar con el code / List of bound functions ready to invoke with the code
-     */
-    private _collect_pair_methods(): Array<(code: string | Buffer) => unknown> {
-        const out: Array<(code: string | Buffer) => unknown> = [];
-        const metadata = (this.constructor as { [Symbol.metadata]?: Metadata })[Symbol.metadata];
-        if (metadata) {
-            const schema = metadata[HANDLERS] as BotSchema | undefined;
-            if (schema) {
-                for (const meta of Object.values(schema.handlers)) {
-                    if (meta.events.includes('__pair')) {
-                        const fn = (this as unknown as Record<string, unknown>)[meta.method];
-                        if (typeof fn === 'function') {
-                            out.push((fn as (code: string | Buffer) => unknown).bind(this));
-                        }
+        if (this.#pending) {
+            this.#pending = false;
+            const timers = handlers.flatMap((meta) => {
+                const fn = bind(meta.method);
+                const invoke = async (...args: unknown[]) => {
+                    const allowed = await meta.guards.reduce<Promise<boolean>>(async (ok, check) => (await ok) && Boolean(await check(...args)), Promise.resolve(true));
+                    const current = allowed ? await meta.transforms.reduce<Promise<unknown[]>>(async (acc, transform) => transform(await acc), Promise.resolve(args)) : [];
+                    if (allowed) await fn?.(...current);
+                };
+                const events = meta.events.length === 0 && (meta.guards.length > 0 || meta.transforms.length > 0) ? ['message:created'] : meta.events;
+                events.filter((event) => fn && !event.startsWith('__')).forEach((event) => (meta.once ? this.once(event as never, invoke as never) : this.on(event as never, invoke as never)));
+                return fn
+                    ? events
+                        .map((event) => event.match(/^__(every|delay):(\d+)$/))
+                        .filter((match): match is RegExpMatchArray => Boolean(match && Number(match[2]) > 0))
+                        .map((match) => ({ kind: match[1] as 'every' | 'delay', ms: Number(match[2]), run: () => invoke() }))
+                    : [];
+            });
+            let intervals: ReturnType<typeof setInterval>[] = [];
+            let round = 0;
+            const stop = () => {
+                round++;
+                intervals.forEach((id) => clearInterval(id));
+                intervals = [];
+            };
+            this.on('connected', () => {
+                stop();
+                const current = round;
+                intervals = timers.filter((timer) => timer.kind === 'every').map((timer) => setInterval(() => void timer.run(), timer.ms));
+                timers.filter((timer) => timer.kind === 'delay').forEach((timer) => setTimeout(async function loop() {
+                    if (round === current) {
+                        await timer.run();
+                        setTimeout(loop, timer.ms);
                     }
-                }
-            }
+                }, timer.ms));
+            });
+            this.on('disconnected', stop);
+            Object.values(schema?.workflows ?? {})
+                .map((steps) => [...steps].sort((a, b) => a.index - b.index).map(({ method }) => bind(method)).filter((fn): fn is (...args: unknown[]) => unknown => fn !== null))
+                .filter((steps) => steps.length > 0)
+                .forEach((steps) => this.on('message:created', (async (...args: unknown[]) => {
+                    for (const step of steps) await step(...args);
+                }) as never));
         }
-        return out;
-    }
-
-    /**
-     * Cablea los handlers decorados contra el event emitter: registra listeners
-     * (`@on`/`@once`), timers (`@every`) y workflows (`@pipe`).
-     * Wires decorated handlers against the event emitter: registers listeners
-     * (`@on`/`@once`), timers (`@every`) and workflows (`@pipe`).
-     */
-    private _wire_handlers(): void {
-        if (this._wired) {
-            return;
-        }
-        this._wired = true;
-        const metadata = (this.constructor as { [Symbol.metadata]?: Metadata })[Symbol.metadata];
-        if (metadata) {
-            const schema = metadata[HANDLERS] as BotSchema | undefined;
-            if (schema) {
-                const intervals: Array<{ ms: number; run: () => Promise<void> }> = [];
-                const delays: Array<{ ms: number; run: () => Promise<void> }> = [];
-
-                for (const meta of Object.values(schema.handlers)) {
-                    const method = (this as unknown as Record<string, unknown>)[meta.method];
-                    if (typeof method === 'function') {
-                        const bound = method.bind(this);
-
-                        const invoke = async (...args: unknown[]): Promise<void> => {
-                            for (const g of meta.guards) {
-                                if (!(await g(...args))) {
-                                    return;
-                                }
-                            }
-                            let current: unknown[] = args;
-                            for (const t of meta.transforms) {
-                                current = await t(current);
-                            }
-                            await bound(...current);
-                        };
-
-                        if (meta.events.length === 0 && (meta.guards.length > 0 || meta.transforms.length > 0)) {
-                            meta.events.push('message:created');
-                        }
-
-                        for (const event of meta.events) {
-                            if (event.startsWith('__every:')) {
-                                const ms = parseInt(event.slice('__every:'.length), 10);
-                                if (Number.isFinite(ms) && ms > 0) {
-                                    intervals.push({ ms, run: () => invoke() });
-                                }
-                            } else if (event.startsWith('__delay:')) {
-                                const ms = parseInt(event.slice('__delay:'.length), 10);
-                                if (Number.isFinite(ms) && ms > 0) {
-                                    delays.push({ ms, run: () => invoke() });
-                                }
-                            } else if (event !== '__pair') {
-                                const register = meta.once ? this.once.bind(this) : this.on.bind(this);
-                                register(event as never, invoke as never);
-                            }
-                        }
-                    }
-                }
-
-                if (intervals.length > 0) {
-                    let timer_ids: ReturnType<typeof setInterval>[] = [];
-                    this.on('connected', () => {
-                        for (const { ms, run } of intervals) {
-                            timer_ids.push(setInterval(() => void run(), ms));
-                        }
-                    });
-                    this.on('disconnected', () => {
-                        for (const id of timer_ids) {
-                            clearInterval(id);
-                        }
-                        timer_ids = [];
-                    });
-                }
-
-                if (delays.length > 0) {
-                    let active = false;
-                    this.on('connected', () => {
-                        active = true;
-                        for (const { ms, run } of delays) {
-                            const loop = async (): Promise<void> => {
-                                if (!active) return;
-                                await run();
-                                if (active) setTimeout(() => void loop(), ms);
-                            };
-                            setTimeout(() => void loop(), ms);
-                        }
-                    });
-                    this.on('disconnected', () => {
-                        active = false;
-                    });
-                }
-
-                for (const steps of Object.values(schema.workflows ?? {})) {
-                    const sorted = [...steps].sort((a, b) => a.index - b.index);
-                    const funcs = sorted
-                        .map(({ method }) => {
-                            const fn = (this as unknown as Record<string, unknown>)[method];
-                            return typeof fn === 'function' ? fn.bind(this) : null;
-                        })
-                        .filter((f): f is (...args: unknown[]) => unknown => f !== null);
-                    if (funcs.length > 0) {
-                        this.on('message:created', (async (...args: unknown[]) => {
-                            for (const fn of funcs) {
-                                await fn(...args);
-                            }
-                        }) as never);
-                    }
-                }
-            }
-        }
+        return super.connect(async (code) => {
+            await Promise.all(handlers.filter((meta) => meta.events.includes('__pair')).map((meta) => bind(meta.method)?.(code)));
+            await callback?.(code);
+        });
     }
 }
 

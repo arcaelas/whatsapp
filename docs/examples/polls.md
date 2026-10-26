@@ -99,7 +99,7 @@ wa.on('message:updated', (msg, chat) => {
 ## Who voted for what
 
 `votes()` breaks the tally down per voter. Each entry is `{ name, contact }`, where `name` is the
-chosen option and `contact` is the voter's phone.
+chosen option and `contact` is the voter's JID —the phone one when known, the LID otherwise—.
 
 ```typescript title="votes.ts"
 import { wa } from './client';
@@ -140,8 +140,9 @@ if (poll instanceof wa.Message.Poll) {
 !!! warning "`select()` is best-effort"
     The vote is encrypted and relayed correctly, but WhatsApp does **not** propagate a vote emitted
     from a linked (companion) device — which is what this library is. Incoming votes decrypt fine;
-    your own vote may not appear on other devices. `select()` returns `false` when the poll has no
-    encryption key or no valid index was given.
+    your own vote may not appear on other devices. `select([])` withdraws the vote. `select()` rejects
+    with `ERR_POLL_SECRET` when the poll has no encryption key and with `ERR_POLL_OPTION` when an
+    index is out of range or one too many for a single-choice poll.
 
 ---
 

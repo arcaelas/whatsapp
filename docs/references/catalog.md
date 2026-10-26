@@ -69,9 +69,8 @@ Every read of `contact.catalog()` follows the same flow:
 
 Nothing refreshes a catalog on a timer: downloads happen only when `contact.catalog()` is read.
 `contact.catalog()` resolves `[]` when the contact has no known phone number, such as a contact known
-only by its LID; otherwise it always resolves at least one catalog. A business without a catalog —
-or an account that is not a business — yields a single catalog without products, because WhatsApp
-does not answer the query.
+only by its LID. A business without a catalog, an account that is not a business or an unanswered
+query also resolve `[]` without storing anything, and the next read asks again.
 
 !!! note "Collection limits"
     The collections are requested with baileys' defaults: up to 51 collections with up to 51

@@ -6,29 +6,32 @@ deletion —, inherits the sends of `Sender`, and eleven specialized subclasses 
 
 | Subclass   | Adds                                                                    |
 | ---------- | ----------------------------------------------------------------------- |
-| `Text`     | `preview()` — the embedded link card.                                   |
-| `Image`    | `width`, `height`, `size`, `thumb()`                                    |
-| `Video`    | `width`, `height`, `duration`, `size`, `thumb()`                        |
-| `Audio`    | `ptt`, `duration`, `size`, `waveform`, `played`, `play()`               |
-| `Sticker`  | `width`, `height`, `animated`, `size`                                   |
-| `Document` | `name`, `pages`, `size`                                                 |
-| `Location` | `lat`, `lng`, `live`, `link`                                            |
+| `Text`     | `preview` — the embedded link card.                                     |
+| `Image`    | `width`, `height`, `size`, `thumb`                                      |
+| `Video`    | `width`, `height`, `duration`, `size`, `thumb`, `ptv`                   |
+| `Audio`    | `ptt`, `duration`, `size`, `waveform`, `played()`                       |
+| `Sticker`  | `width`, `height`, `animated`, `size`, `thumb`                          |
+| `Document` | `name`, `pages`, `size`, `thumb`                                        |
+| `Location` | `lat`, `lng`, `name`, `address`, `live`, `link`                         |
 | `Poll`     | `multiple`, `options`, `votes()`, `select()`                            |
-| `VCard`    | `contacts`                                                              |
-| `Event`    | `name`, `start`, `end`, `canceled`, `link`, `place`, `going`, `attendees()` |
-| `Product`  | `pid`, `name`, `price`, `currency`, `link`, `thumb`, `photo`, `sku`, `hidden`, `catalog()` |
+| `VCard`    | `contacts` — `{ name, phone }`, with the phone in E.164 (digits only when the card has no country code). |
+| `Event`    | `name`, `start`, `end`, `canceled`, `link`, `place`, `going`, `attendees()`, `select()` |
+| `Product`  | `pid`, `name`, `price`, `currency`, `link`, `thumb()`, `photo()`, `sku`, `hidden`, `catalog()` |
 
 `width` and `height` are `0` when the media does not carry them, as happens with an image sent from
-this session when baileys has no image library (`sharp` or `jimp`).
+this session when baileys has no image library (`sharp` or `jimp`). A round video note arrives as a
+`Video` with `ptv: true`; a GIF is a `Video` with `ptv: false`. `thumb` is the embedded JPEG
+—PNG on a sticker—, or `null`.
 
 `new wa.Message(timeline)` evaluates the type and returns the right subclass instance. The timeline
 is the document the engine keeps at `/chat/<cid>/message/<mid>`: the raws exactly as baileys emitted
 them, in arrival order, with no envelope. The first one is the `WAMessage` as WhatsApp delivered it;
 the ones after it are what baileys emitted for it: the messages that refer to it (reactions, pins,
-edits, revokes, votes and event responses, still encrypted), every `messages.update` —a read arrives
-as one, with no content—, the receipts, and the `{ lid, pn }` mapping when the chat was translated
-from LID to phone. Each getter searches the timeline backwards for the latest raw that defines its
-value, and nothing is rewritten: after an edit, the previous text is still in the timeline.
+edits, revokes, votes and event responses, encrypted and also decrypted on arrival), every
+`messages.update` with content, and the `{ lid, pn }` mapping when the chat was translated from LID
+to phone. Receipts and status changes are not appended: they leave a single delivery record with the
+highest state. Each getter searches the timeline backwards for the latest raw that defines its value,
+and nothing is rewritten: after an edit, the previous text is still in the timeline.
 
 ---
 
@@ -64,7 +67,7 @@ against. `Product` is the union of the catalog product and the card that arrives
 wa.on('message:created', async (msg, chat) => {
     if (msg instanceof wa.Message.Text) {
         console.log('text:', msg.caption());
-        console.log('link card:', await msg.preview());
+        console.log('link card:', msg.preview);
     }
     if (msg instanceof wa.Message.Image) {
         const bytes = await msg.content();
@@ -72,7 +75,7 @@ wa.on('message:created', async (msg, chat) => {
     }
     if (msg instanceof wa.Message.Video) {
         const stream = await msg.stream();   // pipe to S3, ffmpeg, …
-        console.log('video:', msg.duration, 's');
+        console.log('video:', msg.duration, 's', 'round note?', msg.ptv);
     }
     if (msg instanceof wa.Message.Audio) {
         console.log('voice note?', msg.ptt, 'waveform points:', msg.waveform.length);
@@ -84,7 +87,7 @@ wa.on('message:created', async (msg, chat) => {
         console.log('file:', msg.name, msg.pages, 'pages', msg.size, 'bytes');
     }
     if (msg instanceof wa.Message.Location) {
-        console.log('at', msg.lat, msg.lng, 'live?', msg.live, msg.link);
+        console.log('at', msg.lat, msg.lng, msg.name, msg.address, 'live?', msg.live, msg.link);
     }
     if (msg instanceof wa.Message.Poll) {
         console.log('question:', msg.caption(), 'options:', msg.options);
@@ -131,14 +134,14 @@ switch (msg.type) {
 | `from`       | `string`                                                          | Author JID: the phone JID when the key carries it, otherwise the LID.                            |
 | `me`         | `boolean`                                                         | `true` when the authenticated account is the author.                                             |
 | `type`       | `'text' \| 'image' \| 'video' \| 'audio' \| 'sticker' \| 'document' \| 'location' \| 'poll' \| 'vcard' \| 'event' \| 'product'` | Message type. |
-| `mime`       | `string`                                                          | `text/plain` for text and product cards, `text/json` for poll/location/vcard/event, the real MIME for media. |
+| `mime`       | `string`                                                          | `text/plain` for text and product cards, `application/json` for poll/location/vcard/event, the real MIME for media. |
 | `status`     | `'error' \| 'pending' \| 'sent' \| 'delivered' \| 'read' \| 'played'` | Delivery state; a later `error` overrides any progress.                                     |
 | `reason`     | `string \| null`                                                  | Rejection reason when `status` is `error`: `restricted` (WhatsApp limited the account and blocks new chats), `invalid-session`, or the raw code. |
 | `mentioned`  | `boolean`                                                         | `true` when the account is mentioned in the body (compares JID and LID).                         |
 | `edited`     | `boolean`                                                         | `true` when the timeline holds a later edit.                                                     |
 | `once`       | `boolean`                                                         | `true` when the message is view-once or play-once; `content()` still returns its binary.        |
 | `expires_at` | `string \| null`                                                  | Expiration of a disappearing message as ISO, or `null`.                                          |
-| `revoked`    | `string \| null`                                                  | When it was deleted for everyone, as ISO, or `null`. The message stays so the interface can show *this message was deleted*. |
+| `revoked_at` | `string \| null`                                                  | When it was deleted for everyone, as ISO, or `null`. The message stays so the interface can show *this message was deleted*. |
 | `business`   | `string \| null`                                                  | Verified business name signing the message, or `null`.                                           |
 | `created_at` | `string`                                                          | Creation date as ISO.                                                                            |
 
@@ -151,7 +154,7 @@ switch (msg.type) {
 ## Methods
 
 Every value the account can also change is a single method: it reads without an argument and
-writes with one. What the account cannot change rejects with `ERR_NOT_ALLOWED`.
+writes with one. What the account cannot change rejects with `UNAUTHORIZED`.
 
 ### `caption()` / `caption(value)`
 
@@ -161,8 +164,9 @@ caption(value: string): Promise<string>
 ```
 
 The text or media caption as of the last edit (the question in a poll, the description in an event,
-the body or description in a product card). With text it edits a message **you** authored of type
-`text`, `image` or `video`; anything else rejects with `ERR_NOT_ALLOWED`.
+the comment of a location —empty when it has none—, the body or description in a product card). With text it edits a message **you** authored of type
+`text`, `image` or `video` within the 15 minutes WhatsApp allows editing; anything else, or a later
+edit, rejects with `UNAUTHORIZED`.
 
 ### `forward()` / `forward(target)`
 
@@ -196,6 +200,7 @@ pinned(value: boolean, days?: 1 | 7 | 30): Promise<boolean>
 ```
 
 Read or change whether the message is starred, or pinned in the chat for 1, 7 (default) or 30 days.
+Pinning in a group that does not allow the account rejects with `UNAUTHORIZED`.
 
 ### `reactions()` / `reactions(emoji)`
 
@@ -205,7 +210,8 @@ reactions(emoji: string): Promise<boolean>
 ```
 
 Without an argument, the current reactions grouped by emoji —each author's last one—. With an emoji
-it reacts, and `''` removes the reaction.
+it reacts, and `''` removes the reaction; in a chat that does not allow the account it rejects with
+`UNAUTHORIZED`.
 
 ### `delete(all?)`
 
@@ -214,7 +220,7 @@ delete(all?: boolean): Promise<boolean>
 ```
 
 `delete()` removes the message for you only and drops it from the engine. `delete(true)` deletes it
-for everyone when it is yours —it stays in place with `revoked` set—; on someone else's message it
+for everyone when it is yours —it stays in place with `revoked_at` set—; on someone else's message it
 deletes it for you only.
 
 ### `content()` / `stream()`
@@ -225,14 +231,16 @@ stream(): Promise<Readable>
 ```
 
 The payload. Media returns the stored binary or downloads it —asking WhatsApp to re-send expired
-media— and stores it; it **throws** when it cannot be downloaded. View-once messages return their
-binary too: `once` tells whether it is one. The other types derive it from the timeline:
+media— and stores it; it **throws** when it cannot be downloaded. `stream()` delivers the stored one
+or, when missing, the download as it arrives, without buffering it in memory nor storing it:
+`content()` is the one that stores. View-once messages return their binary too: `once` tells whether
+it is one. The other types derive it from the timeline:
 
 | Type                                          | Payload                                    |
 | --------------------------------------------- | ------------------------------------------ |
 | `text`                                        | UTF-8 text.                                |
 | `image` / `video` / `audio` / `sticker` / `document` | Decrypted binary.                   |
-| `location`                                    | JSON `{ lat, lng }`.                       |
+| `location`                                    | JSON `{ lat, lng, name, address }`.        |
 | `poll`                                        | JSON `{ content, options: [{ content }] }`. |
 | `vcard`                                       | The raw vCards.                            |
 | `event`                                       | JSON of the event message.                 |
@@ -258,7 +266,8 @@ sub(handler: (event: { name: 'updated' | 'deleted' | 'reacted' | 'seen' | 'playe
 ```
 
 Subscribes to what happens to this message: it changes, is deleted for everyone, receives a
-reaction —with `emoji` and `contact`—, is read or its audio is played. Returns the function that
+reaction —with `emoji` and `contact`—, is read or its audio is played. In a group the read arrives
+through the receipts and `seen` fires once, with the first one. Returns the function that
 unsubscribes.
 
 ### `metadata()`
@@ -293,16 +302,17 @@ await wa.Message.text(cid, 'hi', { mid });             // the same statics are o
 | ----------------------------- | -------------------------------------------------------- | -------------------------------------------- |
 | `text(cid?, caption, extra?)` | `string`                                                 | —                                            |
 | `image(cid?, buf, extra?)`    | `Buffer`                                                 | `caption?`, `sticker?`                       |
-| `video(cid?, buf, extra?)`    | `Buffer`                                                 | `caption?`, `gif?`                           |
+| `video(cid?, buf, extra?)`    | `Buffer`                                                 | `caption?`, `gif?`, `ptv?`                   |
 | `audio(cid?, buf, extra?)`    | `Buffer`                                                 | `ptt?` (default `true`)                      |
 | `document(cid?, buf, extra)`  | `Buffer`                                                 | `file_name`, `mimetype?`, `caption?`         |
-| `location(cid?, loc, extra?)` | `{ lat, lng }`                                           | —                                            |
+| `location(cid?, loc, extra?)` | `{ lat, lng, name?, address? }`                          | —                                            |
 | `poll(cid?, input, extra?)`   | `{ content, options: [{ content }] }`                    | `multiple?`                                  |
 | `vcard(cid?, contacts, extra?)` | `{ name, phone }[]`                                    | —                                            |
-| `event(cid?, data, extra?)`   | `{ name, caption?, start, end?, place? }`                | —                                            |
+| `event(cid?, data, extra?)`   | `{ name, caption?, start, end?, place?: { lat, lng, name?, address? } }` | —                            |
 
 `cid` exists only on the statics. Every send returns the created `Message`, already of the right
-subclass, and rejects with `ERR_INVALID_CHAT` when the chat cannot be resolved.
+subclass; it rejects with `ERR_INVALID_CHAT` when the chat cannot be resolved and with
+`ERR_SEND_FAILED` when WhatsApp does not return the sent message.
 
 ```typescript title="options.ts"
 interface Extra {
@@ -341,7 +351,8 @@ mid))?.reactions('👍')`.
 ## Polls
 
 `Poll.options` exposes each choice with its live vote count, `votes()` breaks the tally down per
-voter, and `select()` casts a vote from the authenticated account. `multiple` comes from the poll's
+voter —`contact` is the voter's JID, the phone one when known—, and `select()` casts a vote from the
+authenticated account; `select([])` withdraws it. `multiple` comes from the poll's
 `selectableOptionsCount`: WhatsApp sends `1` for single-choice polls.
 
 ```typescript title="poll.ts" hl_lines="12 19"
@@ -363,14 +374,19 @@ wa.on('message:updated', async (msg) => {
 
 if (sent instanceof wa.Message.Poll) {
     await sent.select(0);        // single choice
-    await sent.select([0, 2]);   // only meaningful when `multiple === true`
+    await sent.select([0, 2]);   // only when `multiple === true`; otherwise ERR_POLL_OPTION
 }
 ```
 
+`select()` rejects with `ERR_POLL_OPTION` when an index is out of range or several go to a
+single-choice poll, and with `ERR_POLL_SECRET` when the message does not carry the secret the
+vote is encrypted with.
+
 !!! info "Incoming votes are decrypted for you"
     Votes travel encrypted. The client appends every `pollUpdateMessage` to the poll's timeline as
-    baileys emitted it and emits `message:updated`; `options` and `votes()` decrypt them on read and
-    count the last vote of each voter.
+    baileys emitted it, together with the vote already decrypted, and emits `message:updated`;
+    `options` and `votes()` read the decrypted ones —only a vote that could not be decrypted on
+    arrival is retried on read— and count each voter's last vote by send time.
 
 !!! warning "`select()` is best-effort"
     Emitted votes are encrypted and relayed correctly, but WhatsApp does **not** propagate a vote
@@ -382,10 +398,12 @@ if (sent instanceof wa.Message.Poll) {
 ## Location
 
 `Location` covers both static pins (`locationMessage`) and live locations (`liveLocationMessage`);
-`live` tells them apart and `link` builds the Google Maps URL.
+`live` tells them apart, `name` and `address` describe the place when the pin carries them —`null`
+otherwise, and always on a live location—, `caption()` is the comment written with the pin, and
+`link` is the Google Maps URL with the point marked.
 
 ```typescript title="location.ts"
-await wa.Message.location(cid, { lat: 19.4326, lng: -99.1332 });
+await wa.Message.location(cid, { lat: 19.4326, lng: -99.1332, name: 'Palacio de Bellas Artes', address: 'Av. Juárez S/N, Centro, CDMX' });
 
 wa.on('message:created', (msg) => {
     if (msg instanceof wa.Message.Location && msg.live) {
@@ -395,15 +413,16 @@ wa.on('message:created', (msg) => {
 ```
 
 !!! warning "Sending is always a static pin"
-    The send API takes `{ lat, lng }` only: broadcasting a *live* location is not supported. On a
+    The send API takes `{ lat, lng, name?, address? }`: broadcasting a *live* location is not supported. On a
     received live location, `lat` and `lng` are the coordinates of the message as it arrived.
 
 ---
 
 ## Audio
 
-`ptt` differentiates voice notes from audio files, and `waveform` returns the protocol's 0-100
-amplitude points, ready to paint.
+`ptt` differentiates voice notes from audio files, `waveform` returns the protocol's 0-100
+amplitude points, ready to paint, and `played()` tells whether it was played; `played(true)`
+acknowledges it —its sender sees the blue mic— and puts the account online, like `seen(true)`.
 
 ```typescript title="audio.ts"
 import { readFileSync } from 'node:fs';
@@ -411,10 +430,11 @@ import { readFileSync } from 'node:fs';
 await wa.Message.audio(cid, readFileSync('./note.ogg'));                  // voice note (default)
 await wa.Message.audio(cid, readFileSync('./song.mp3'), { ptt: false });  // audio file
 
-wa.on('message:created', (msg) => {
+wa.on('message:created', async (msg) => {
     if (msg instanceof wa.Message.Audio) {
         console.log(msg.ptt ? 'voice note' : 'audio file', msg.duration, 's');
         console.log(msg.waveform);   // number[]
+        if (msg.played() === false) await msg.played(true);
     }
 });
 ```
@@ -425,14 +445,14 @@ wa.on('message:created', (msg) => {
 
 ```typescript title="preview.ts"
 if (msg instanceof wa.Message.Text) {
-    const card = await msg.preview();
+    const card = msg.preview;
     if (card) {
         console.log(card.link, card.name, card.content, card.thumb?.length);
     }
 }
 ```
 
-`preview()` returns `null` when the message carries no link metadata.
+`preview` is `null` when the message carries no link metadata.
 
 ---
 
@@ -446,15 +466,21 @@ if (msg instanceof wa.Message.Event) {
     console.log(msg.end);        // ISO UTC | null
     console.log(msg.canceled);   // boolean
     console.log(msg.link);       // join link ('' when absent)
-    console.log(msg.place);      // { lat, lng } | null
+    console.log(msg.place);      // { lat, lng, name, address } | null
 }
 ```
 
 `going` counts the confirmed attendees, companions included, and `attendees()` lists every response
-with the contact's name, in arrival order: `{ name, contact, response: 'going' | 'not_going' |
-'maybe', guests }`. Responses arrive encrypted and are appended to its timeline as baileys emitted
-them —with the response baileys already decrypted, when it could—, emit `message:updated` on the
-`Event`, and are decrypted with the event's secret on read.
+with the contact's name, in arrival order: `{ name, contact, response: 'yes' | 'no' | 'maybe', guests
+}`, where `contact` is the attendee's JID —the phone one when known—. `select(value, guests?)`
+answers from the account with `'yes'`, `'no'` or `'maybe'`, plus companions when the event allows
+them; it rejects with `ERR_EVENT_OPTION` on an unknown answer or companions that do not apply —on
+`'no'` or on an event without companions— and with `ERR_EVENT_SECRET` when the message does not
+carry the secret the answer is encrypted with. Like poll votes, WhatsApp may not propagate an answer
+sent from a linked device. Responses arrive encrypted and are appended to its timeline as baileys emitted
+them, together with the response decrypted with the event's secret on arrival, and emit
+`message:updated` on the `Event`; only a response that could not be decrypted then is retried on
+read.
 
 ```typescript title="attendees.ts"
 wa.on('message:updated', async (msg) => {
@@ -463,6 +489,8 @@ wa.on('message:updated', async (msg) => {
         for (const entry of await msg.attendees()) console.log(entry.name, entry.response, entry.guests);
     }
 });
+
+if (msg instanceof wa.Message.Event) await msg.select('yes', 1);   // going, with one companion
 ```
 
 !!! tip "Event payloads"
@@ -475,9 +503,10 @@ wa.on('message:updated', async (msg) => {
 
 A `wa.Message.Product` is the card a Business account shares from its catalog. It has the same
 surface as the catalog product ([`wa.Product`](catalog.md)), with `pid` for the product and `id` for
-the message, and `instanceof wa.Product` is `true` for it too. `thumb` is the embedded thumbnail as
-a data URL; `photo` is always `null`, because the card carries no public photo, and `hidden` is
-always `false`, because the card only travels while the product is visible. `status` is the
+the message, and `instanceof wa.Product` is `true` for it too. `thumb()` is the thumbnail embedded in
+the card and `photo()` the product cover in the business catalog, both as a Buffer, empty when there
+is none; they stay methods, as on the catalog product, which downloads them. `hidden` is always
+`false`, because the card only travels while the product is visible. `status` is the
 inherited delivery state, `caption()` the body of the card or the description, and `content()` the
 description. `catalog()` brings the catalog that publishes it —the business comes from the card's
 `businessOwnerJid`, or its author when the card does not carry it—, or `null` when the product is no
@@ -488,7 +517,7 @@ if (msg instanceof wa.Message.Product) {
     console.log(msg.name, msg.price, msg.currency);                // 'Camisa', 15.5, 'USD'
     console.log(msg.id, msg.pid, msg.sku, msg.link);               // message id, product id, sku, link
     console.log(msg.caption(), (await msg.content()).toString());    // body or description; description
-    console.log(msg.thumb, msg.photo, msg.hidden);                 // data URL | null, null, false
+    console.log((await msg.thumb()).length, (await msg.photo()).length, msg.hidden); // Buffers, false
     const catalog = await msg.catalog();                           // Catalog | null
 }
 ```

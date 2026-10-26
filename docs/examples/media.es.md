@@ -75,7 +75,7 @@ wa.on('message:created', async (msg, chat) => {
         console.log(`Guardados ${bytes.length} bytes de ${chat.name()}`);
         console.log(`${msg.width}x${msg.height}, ${msg.size} bytes anunciados`);
 
-        const thumb = await msg.thumb();     // vista previa JPEG embebida, o null
+        const thumb = msg.thumb;             // vista previa JPEG embebida, o null
         if (thumb) {
             await writeFile(join('./inbox', `${msg.id}.thumb.jpg`), thumb);
         }
@@ -212,7 +212,7 @@ wa.on('message:created', async (msg) => {
 
 ## Ubicación
 
-El envío admite un pin estático; la recepción cubre tanto las ubicaciones estáticas como las en vivo
+El envío admite un pin estático, con el nombre y la dirección del lugar si se dan; la recepción cubre tanto las ubicaciones estáticas como las en vivo
 a través de la subclase `Location`.
 
 ```typescript title="send-location.ts"
@@ -221,6 +221,8 @@ import { wa } from './client';
 await wa.Message.location('14155557777', {
     lat: 40.4168,
     lng: -3.7038,
+    name: 'Puerta del Sol',
+    address: 'Plaza de la Puerta del Sol, Madrid',
 });
 ```
 
@@ -229,7 +231,7 @@ import { wa } from './client';
 
 wa.on('message:created', (msg) => {
     if (msg instanceof wa.Message.Location) {
-        console.log(`Pin: ${msg.lat}, ${msg.lng}`);
+        console.log(`Pin: ${msg.lat}, ${msg.lng} ${msg.name ?? ''} ${msg.address ?? ''}`);
         console.log(`URL de Maps: ${msg.link}`);
         if (msg.live) {
             console.log('Ubicación en vivo compartida');
@@ -239,7 +241,7 @@ wa.on('message:created', (msg) => {
 ```
 
 !!! warning "La ubicación en vivo es solo de recepción"
-    La API de envío acepta `{ lat, lng }` y nada más: transmitir tu propia ubicación en vivo no está
+    La API de envío acepta `{ lat, lng, name?, address? }`: transmitir tu propia ubicación en vivo no está
     soportado. Las ubicaciones en vivo entrantes llegan con `live === true` y las coordenadas de ese
     mensaje; sus actualizaciones de posición posteriores no emiten `message:updated`.
 

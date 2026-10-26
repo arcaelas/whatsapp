@@ -113,7 +113,7 @@ Las entidades se publican en el primer `connect`, cuando el socket ya existe —
 
 ### La cuenta: `wa.me()`
 
-La cuenta es un contacto más: `await wa.me()` devuelve el `Contact` propio (`me` es `true`), o `null` mientras no hay usuario. `rename()`, `content(value)`, `photo(value)` y `online()` sólo funcionan en él; en otro contacto rechazan con `ERR_NOT_ALLOWED`.
+La cuenta es un contacto más: `await wa.me()` devuelve el `Contact` propio (`me` es `true`), o `null` mientras no hay usuario. En él `rename()` cambia el nombre público; en otro contacto cambia el nombre de agenda, igual que `chat.name(value)` en su 1:1. `content(value)`, `photo(value)` y `online()` sólo funcionan en él; en otro contacto rechazan con `UNAUTHORIZED`.
 
 ```ts
 const yo = await wa.me();
@@ -147,12 +147,13 @@ const person = await wa.Contact.get('5491112345678');   // teléfono, JID o LID
 const page = await wa.Contact.list(0, 50);
 
 if (person) {
-    person.id        // el LID cuando se conoce, el JID si no
+    person.id        // JID completo: el del teléfono, o el LID si no se conoce
     person.name      // agenda → nombre público → nombre verificado → teléfono
     person.phone     // solo del JID PN, nunca del LID; null si no es determinable
     person.me        // true si es la propia cuenta
     await person.photo();          // foto de perfil, Buffer; vacío si no tiene o la oculta
-    person.content();              // biografía guardada; la librería la lee al crear el contacto
+    await person.content();        // biografía; se consulta a WhatsApp a lo sumo cada 24 h y se guarda en el engine
+    await person.rename('Juan');   // nombre de agenda, igual que chat.name('Juan'); en wa.me(), el público
     await person.chat();
     await person.catalog();        // sus Catalog, uno por colección
     await person.metadata('edad', 18);   // { edad: 18 }; metadata('edad') → 18
@@ -160,7 +161,7 @@ if (person) {
 }
 ```
 
-`get` lee del motor y, si el contacto no está persistido, lo descubre por red y lo materializa.
+`get` lee del motor y, si el contacto no está persistido, lo descubre por red y lo materializa; un fallo de red rechaza, así `null` es sólo «no está en WhatsApp».
 
 ### Chat
 
@@ -169,7 +170,7 @@ const chat = await wa.Chat.get('5491112345678');
 const chats = await wa.Chat.list(0, 50);
 
 if (chat) {
-    chat.id          // teléfono en un 1:1, @g.us en un grupo, LID sin mapear
+    chat.id          // JID completo: teléfono en un 1:1, @g.us en un grupo, LID sin mapear
     chat.type        // 'contact' | 'group'
     chat.count       // mensajes sin leer
     chat.name()      // nombre del contacto o asunto del grupo
@@ -196,7 +197,7 @@ if (chat) {
 }
 ```
 
-**Grupos** — sin permiso, o fuera del grupo, rechazan con `ERR_NOT_ALLOWED`:
+**Grupos** — sin permiso, o fuera del grupo, rechazan con `UNAUTHORIZED`:
 
 ```ts
 const group = await wa.Chat.create('Equipo', ['5491112345678']);
@@ -205,7 +206,7 @@ await wa.Chat.join('https://chat.whatsapp.com/…');
 await group.admins();                  // administradores
 await group.admin();                   // true si la cuenta administra
 await group.name('Equipo Dev');
-await group.content('Standup a las 9:30');   // descripción; ERR_NOT_ALLOWED sin permiso
+await group.content('Standup a las 9:30');   // descripción; UNAUTHORIZED sin permiso
 await group.photo(buffer);             // necesita sharp o jimp
 await group.add('5491187654321');      // devuelve cuántos entraron
 await group.remove('5491187654321');   // devuelve cuántos salieron
@@ -230,10 +231,10 @@ const msg = await wa.Message.get(cid, mid);
 | `id` `cid` `mid` | identificadores del mensaje, su chat y el mensaje citado |
 | `from` `me` | JID del autor —el de teléfono cuando la llave lo trae— y si soy yo |
 | `type` | `text` `image` `video` `audio` `sticker` `document` `location` `poll` `vcard` `event` `product` |
-| `mime` | `text/plain` en texto y producto, `text/json` en poll/location/vcard/event, el real en media |
+| `mime` | `text/plain` en texto y producto, `application/json` en poll/location/vcard/event, el real en media |
 | `status` | `'error'` `'pending'` `'sent'` `'delivered'` `'read'` `'played'` |
 | `edited` `once` `mentioned` | banderas del mensaje |
-| `revoked` | cuándo se eliminó para todos, en ISO, o `null` |
+| `revoked_at` | cuándo se eliminó para todos, en ISO, o `null` |
 | `reason` | motivo del rechazo cuando `status` es `'error'` (`restricted`, `invalid-session`, o el código del servidor), si no `null` |
 | `business` | nombre del negocio verificado que firma el mensaje, o `null` |
 | `created_at` `expires_at` | fechas en ISO UTC (`expires_at` solo en mensajes temporales) |
@@ -249,7 +250,7 @@ await msg.stream();      // Readable
 
 // cada valor: sin argumento lo lee, con argumento lo cambia
 msg.caption();                           // texto vigente o pie del media
-await msg.caption('texto corregido');    // edita texto, imagen o video propios; si no, ERR_NOT_ALLOWED
+await msg.caption('texto corregido');    // edita texto, imagen o video propios en sus primeros 15 min; si no, UNAUTHORIZED
 msg.forward();                           // true si llegó reenviado
 await msg.forward('584121234567');       // reenvía a un CID, Chat o Contact y devuelve el Message
 msg.seen();                              // true si ya lo leyeron
@@ -279,7 +280,7 @@ await wa.Message.image(cid, buffer, { caption: 'mira' });
 await wa.Message.video(cid, buffer, { gif: true });
 await wa.Message.image(cid, webp, { sticker: true });
 await wa.Message.audio(cid, buffer, { ptt: true });
-await wa.Message.location(cid, { lat: 8.3, lng: -62.7 });
+await wa.Message.location(cid, { lat: 8.3, lng: -62.7, name: 'Tienda', address: 'Av. Principal 1' });
 await wa.Message.poll(cid, { content: '¿Qué pedimos?', options: [{ content: 'Pizza' }, { content: 'Sushi' }] });
 await wa.Message.document(cid, buffer, { file_name: 'contrato.pdf' });
 await wa.Message.vcard(cid, [{ name: 'Ana', phone: '+584121234567' }]);
@@ -289,22 +290,22 @@ await wa.Message.event(cid, { name: 'Demo', start: new Date() });
 **Subclases** — el tipo decide la instancia, así que `instanceof` contra las subclases de `wa.Message` alcanza:
 
 ```ts
-if (msg instanceof wa.Message.Image) console.log(msg.width, msg.height, msg.size, await msg.thumb());
+if (msg instanceof wa.Message.Image) console.log(msg.width, msg.height, msg.size, msg.thumb);
 if (msg instanceof wa.Message.Poll)  console.log(msg.options, msg.multiple, await msg.votes());
 ```
 
 | Clase | Agrega |
 | --- | --- |
-| `Text` | `preview()` → `{ link, name, content, thumb }` del enlace citado |
-| `Image` | `width` `height` `size` `thumb()` |
-| `Video` | `width` `height` `size` `duration` `thumb()` |
-| `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) `played` `play()` |
-| `Sticker` | `width` `height` `size` `animated` |
-| `Document` | `name` `pages` `size` |
-| `Location` | `lat` `lng` `live` `link` (Google Maps) |
-| `Poll` | `options` `multiple` `votes()` `select(i)` |
-| `VCard` | `contacts` |
-| `Event` | `name` `start` `end` `canceled` `place` `link` `going` `attendees()` |
+| `Text` | `preview` → `{ link, name, content, thumb }` del enlace citado |
+| `Image` | `width` `height` `size` `thumb` |
+| `Video` | `width` `height` `size` `duration` `thumb` `ptv` (videonota redonda; un GIF es `ptv: false`) |
+| `Audio` | `ptt` `duration` `size` `waveform` (0-100, lista para pintar) `played()` / `played(true)` |
+| `Sticker` | `width` `height` `size` `animated` `thumb` |
+| `Document` | `name` `pages` `size` `thumb` |
+| `Location` | `lat` `lng` `name` `address` `live` `link` (Google Maps) |
+| `Poll` | `options` `multiple` `votes()` (con el JID del votante) `select(i)` —`select([])` retira el voto; rechaza con `ERR_POLL_OPTION` o `ERR_POLL_SECRET`— |
+| `VCard` | `contacts` (`{ name, phone }`, el teléfono en E.164) |
+| `Event` | `name` `start` `end` `canceled` `place` (`{ lat, lng, name, address }`) `link` `going` `attendees()` `select('yes' \| 'no' \| 'maybe', guests?)` |
 | `Product` | `pid` `name` `price` `currency` `link` `sku` `hidden` `thumb()` `photo()` `catalog()`; `id` es el del mensaje y `content()` la descripción — solo recepción, y también es `instanceof wa.Product` |
 
 ### Feed
@@ -312,7 +313,7 @@ if (msg instanceof wa.Message.Poll)  console.log(msg.options, msg.multiple, awai
 Publicaciones de estado (`status@broadcast`), con su propia clase: `id`, `from`, `me`, `type` (`text` `image` `video` `audio`), `mime`, `caption`, `created_at` y `expires_at` (24 h después de publicado), más `seen()` / `seen(true)`, `delete()`, `content()`, `stream()`, `author()`, `sub()`, `metadata()` y las respuestas de `Sender`, que van al chat 1:1 del autor citando el estado.
 
 ```ts
-await wa.Feed.create({ caption: 'Nueva colección', media: { buffer, mime: 'image/jpeg' } });   // sin audience: a todos mis contactos
+await wa.Feed.create({ caption: 'Nueva colección', media: { buffer, mime: 'image/jpeg' } });   // sin audience: a mi agenda; el binario debe ser lo que dice mime (ERR_FEED_MEDIA)
 const vigentes = await wa.Feed.list();
 
 wa.on('feed:created', async (post) => {
@@ -326,7 +327,7 @@ WhatsApp sólo muestra un estado a quien tiene al autor guardado en sus contacto
 
 ### Catalog
 
-Los catálogos de un negocio, el propio o el de cualquier contacto Business: un `Catalog` por colección o, si el negocio no tiene colecciones, uno con todos sus productos, así que siempre hay al menos uno. Se leen con el getter `catalog` del contacto: la primera lectura los descarga (colecciones y catálogo completo en paralelo, cada consulta cortada a los 20 s) y las siguientes salen del engine; con más de 24 h se devuelve lo guardado y se refresca de fondo, emitiendo `catalog:updated` si cambió. Solo lectura.
+Los catálogos de un negocio, el propio o el de cualquier contacto Business: un `Catalog` por colección o, si el negocio no tiene colecciones, uno con todos sus productos; sin catálogo, o sin respuesta, `[]` sin guardar nada. Se leen con el getter `catalog` del contacto: la primera lectura los descarga (colecciones y catálogo completo en paralelo, cada consulta cortada a los 20 s) y las siguientes salen del engine; con más de 24 h se devuelve lo guardado y se refresca de fondo, emitiendo `catalog:updated` si cambió. Solo lectura.
 
 ```ts
 const propios = (await (await wa.me())?.catalog()) ?? [];   // los de la cuenta

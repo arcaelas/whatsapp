@@ -69,9 +69,8 @@ Cada lectura de `contact.catalog()` sigue el mismo flujo:
 
 Nada refresca un catálogo con un temporizador: las descargas solo ocurren al leer `contact.catalog()`.
 `contact.catalog()` resuelve `[]` cuando el contacto no tiene un teléfono conocido, como un contacto
-del que solo se sabe su LID; si no, siempre resuelve al menos un catálogo. Un Business sin catálogo — o
-una cuenta que no es Business — da un único catálogo sin productos, porque WhatsApp no responde la
-consulta.
+del que solo se sabe su LID. Un Business sin catálogo, una cuenta que no es Business o una consulta
+sin respuesta también resuelven `[]` sin guardar nada, y la siguiente lectura vuelve a preguntar.
 
 !!! note "Límites de las colecciones"
     Las colecciones se piden con los valores por defecto de baileys: hasta 51 colecciones con hasta

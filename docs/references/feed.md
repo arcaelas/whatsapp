@@ -32,9 +32,13 @@ wa.Feed.create(input: { caption?: string; media?: { buffer: Buffer; mime: string
 ```
 
 A text status with `caption` alone, or an image, video or audio status with `media`, told apart by
-`media.mime` and with `caption` as its caption. Without `audience` it goes to every contact stored in
-the engine; WhatsApp delivers it to nobody outside the audience. It rejects with `ERR_FEED_EMPTY`
-without `caption` nor `media`.
+`media.mime` and with `caption` as its caption. The binary is recognized by its first bytes —JPEG,
+PNG, WebP, MP4, OGG or MP3— and must match `media.mime`. Without `audience` it goes to the address
+book: the contacts saved with a name (`name`), not whoever only wrote in a group; WhatsApp delivers
+it to nobody outside the audience, which is stored to revoke it later from the same people. It
+rejects with `ERR_FEED_EMPTY` without `caption` nor `media`, with `ERR_FEED_MEDIA` when the binary
+is not an image, video nor audio or does not match `media.mime`, and with `ERR_SEND_FAILED` when
+WhatsApp does not return the status.
 
 ```typescript title="publish.ts"
 await wa.Feed.create({ caption: 'We are live!' });
@@ -76,8 +80,8 @@ seen(value: true): Promise<boolean>
 ```
 
 Without an argument, whether you already viewed it —your own always are—. With `true` it sends the
-read receipt, appends it to the timeline, emits `feed:updated` and puts the account online; calling
-it again sends nothing.
+read receipt, sets the timeline delivery record to read, emits `feed:updated` and puts the account
+online; calling it again sends nothing.
 
 ### `delete()`
 
@@ -85,8 +89,10 @@ it again sends nothing.
 delete(): Promise<boolean>
 ```
 
-On your own status it revokes it for everyone, and the echo removes it from the engine and emits
-`feed:deleted`. On someone else's it only removes it from the engine and emits `feed:deleted`.
+On your own status it revokes it for everyone —to the audience `Feed.create()` published it with
+or, when it came from another device, to the address book—, and the echo removes it from the engine
+and emits `feed:deleted`. On someone else's it only removes it from the engine and emits
+`feed:deleted`.
 
 ### `content()` / `stream()` / `author()`
 
@@ -97,8 +103,9 @@ author(): Promise<Contact>
 ```
 
 `content()` is the media binary —the stored one or the download, which gets stored; it throws when
-it cannot be downloaded— or, on a text status, the caption as a Buffer. `author()` is the `Contact`
-who published it.
+it cannot be downloaded— or, on a text status, the caption as a Buffer. `stream()` delivers the
+stored one or the download as it arrives, without buffering nor storing it. `author()` is the
+`Contact` who published it.
 
 ### Replies
 
@@ -150,7 +157,8 @@ Unlike `message:*`, the payload has **no chat argument**: statuses do not belong
 
 | Path                     | Value                                                                     |
 | ------------------------ | --------------------------------------------------------------------------- |
-| `/status/<id>`           | The status timeline: the raws exactly as baileys emitted them, the `WAMessage` first, then the reactions, the `{ key, receipt }` receipts —`seen(true)` appends the own one with that shape— and the `{ lid, pn }` mapping when the author arrived by LID. |
+| `/status/<id>`           | The status timeline: the raws exactly as baileys emitted them, the `WAMessage` first, then the reactions, the `{ lid, pn }` mapping when the author arrived by LID and a single delivery record `{ key, update: { status } }` with the highest state of the receipts —`seen(true)` sets it to read—. |
+| `/status/<id>/audience`  | The JIDs `Feed.create()` published it to; `delete()` revokes it from them. |
 | `/status/<id>/content`   | The media binary of an image, video or audio status. A text status has none. |
 | `/status/<id>/metadata`  | The values written with `metadata()`.                                     |
 

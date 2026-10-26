@@ -32,9 +32,12 @@ wa.Feed.create(input: { caption?: string; media?: { buffer: Buffer; mime: string
 ```
 
 Un estado de texto con sólo `caption`, o uno de imagen, video o audio con `media`, que se distinguen
-por `media.mime` y llevan `caption` como pie. Sin `audience` se publica a todos los contactos
-guardados en el motor; WhatsApp no lo reparte fuera de la audiencia. Rechaza con `ERR_FEED_EMPTY` sin
-`caption` ni `media`.
+por `media.mime` y llevan `caption` como pie. El binario se reconoce por sus primeros bytes —JPEG,
+PNG, WebP, MP4, OGG o MP3— y tiene que coincidir con `media.mime`. Sin `audience` se publica a la
+agenda: los contactos guardados con nombre (`name`), no quien sólo escribió en un grupo; WhatsApp no
+lo reparte fuera de la audiencia, que queda guardada para retirarlo después a los mismos. Rechaza con
+`ERR_FEED_EMPTY` sin `caption` ni `media`, con `ERR_FEED_MEDIA` si el binario no es imagen, video ni
+audio o no coincide con `media.mime`, y con `ERR_SEND_FAILED` si WhatsApp no devuelve el estado.
 
 ```typescript title="publish.ts"
 await wa.Feed.create({ caption: '¡Estamos en vivo!' });
@@ -76,7 +79,8 @@ seen(value: true): Promise<boolean>
 ```
 
 Sin argumento, si ya lo viste —los propios siempre lo están—. Con `true` manda el recibo de lectura,
-lo suma al timeline, emite `feed:updated` y pone la cuenta en línea; llamarlo de nuevo no manda nada.
+deja en leído el registro de entrega del timeline, emite `feed:updated` y pone la cuenta en línea;
+llamarlo de nuevo no manda nada.
 
 ### `delete()`
 
@@ -84,7 +88,8 @@ lo suma al timeline, emite `feed:updated` y pone la cuenta en línea; llamarlo d
 delete(): Promise<boolean>
 ```
 
-En un estado propio lo retira para todos, y el eco lo saca del motor y emite `feed:deleted`. En uno
+En un estado propio lo retira para todos —a la audiencia con que lo publicó `Feed.create()` o, si
+salió de otro dispositivo, a la agenda—, y el eco lo saca del motor y emite `feed:deleted`. En uno
 ajeno sólo lo saca del motor y emite `feed:deleted`.
 
 ### `content()` / `stream()` / `author()`
@@ -96,8 +101,8 @@ author(): Promise<Contact>
 ```
 
 `content()` es el binario del media —el guardado o la descarga, que queda guardada; lanza si no se
-puede descargar— o, en un estado de texto, el caption como Buffer. `author()` es el `Contact` que lo
-publicó.
+puede descargar— o, en un estado de texto, el caption como Buffer. `stream()` entrega lo guardado o
+la descarga mientras llega, sin acumularla ni guardarla. `author()` es el `Contact` que lo publicó.
 
 ### Respuestas
 
@@ -148,7 +153,8 @@ A diferencia de `message:*`, el payload **no trae chat**: los estados no pertene
 
 | Ruta                     | Valor                                                                     |
 | ------------------------ | --------------------------------------------------------------------------- |
-| `/status/<id>`           | El timeline del estado: los raws tal como los emitió baileys, primero el `WAMessage`, después las reacciones, los recibos `{ key, receipt }` —`seen(true)` suma el propio con esa forma— y el mapeo `{ lid, pn }` cuando el autor llegó por LID. |
+| `/status/<id>`           | El timeline del estado: los raws tal como los emitió baileys, primero el `WAMessage`, después las reacciones, el mapeo `{ lid, pn }` cuando el autor llegó por LID y un único registro de entrega `{ key, update: { status } }` con el estado más alto de los recibos —`seen(true)` lo deja en leído—. |
+| `/status/<id>/audience`  | Los JIDs a los que `Feed.create()` lo publicó; `delete()` lo retira a ellos. |
 | `/status/<id>/content`   | El binario de un estado de imagen, video o audio. Uno de texto no tiene.  |
 | `/status/<id>/metadata`  | Los valores escritos con `metadata()`.                                    |
 

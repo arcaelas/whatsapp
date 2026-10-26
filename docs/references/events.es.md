@@ -67,7 +67,7 @@ wa.on('error',        (error) => console.error(error.code, error.message));
 | Evento             | Firma                      | Se dispara cuando…                                                       |
 | ------------------ | -------------------------- | -------------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`      | Se registra un contacto nuevo, o se autocrea desde un mensaje entrante.   |
-| `contact:updated`  | `[contact, chat, wa]`      | Cambia el nombre, el notify, la imagen, el estado o el LID de un contacto.|
+| `contact:updated`  | `[contact, chat, wa]`      | Cambia el nombre, el notify, la imagen, el estado o el LID de un contacto; también cuando `content()` lee una biografía distinta de la guardada.|
 | `contact:deleted`  | `[contact, wa]`            | Una ficha sale del motor: la guardada bajo el LID, cuando WhatsApp revela su teléfono y la ficha se une a la del teléfono. |
 | `contact:presence` | `[contact, action, wa]`    | Alguien entró, salió, escribe o graba. Solo llega de los contactos suscritos con `contact.sub()`; `action` es `online`, `offline`, `typing` o `recording` —dejar de escribir o de grabar llega como `online`—, y `offline` guarda la última conexión del contacto en `contact.seen`. |
 
@@ -100,9 +100,10 @@ wa.on('contact:created', async (contact, chat, client) => {
 | `chat:promoted`    | `[chat, contacts, wa]` | Personas pasaron a administrar el grupo.                                              |
 | `chat:demoted`     | `[chat, contacts, wa]` | Personas dejaron de administrar el grupo.                                             |
 
-Los seis eventos de fijado, archivado y silencio llegan con el eco de WhatsApp del cambio, también
-cuando se hizo con `chat.pinned()`, `chat.archived()` o `chat.muted()`, y solo cuando el valor cambia de
-verdad.
+Los seis eventos de fijado, archivado y silencio salen solo cuando el valor cambia de verdad: un
+cambio hecho con `chat.pinned()`, `chat.archived()` o `chat.muted()` los emite en cuanto WhatsApp lo
+acepta, y uno hecho desde otro dispositivo, con el eco de WhatsApp; el eco de un cambio propio ya no
+encuentra diferencia y no los repite.
 
 ```typescript title="Auditar la moderación de chats"
 wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
@@ -120,7 +121,7 @@ wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.n
 | -------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
 | `message:created`    | `[message, chat, wa]`           | Se guarda un mensaje nuevo: entrante, o saliente desde el teléfono u otro dispositivo vinculado. Los mensajes enviados con esta librería no lo emiten. |
 | `message:updated`    | `[message, chat, wa]`           | Un mensaje se edita, cambia su estado, se descifra un voto de encuesta o una respuesta a un evento, o se fija o se suelta. |
-| `message:deleted`    | `[message, chat, wa]`           | Un mensaje se revoca (`protocolMessage.REVOKE`). El documento se conserva, marcado con `revoked`. |
+| `message:deleted`    | `[message, chat, wa]`           | Un mensaje se revoca (`protocolMessage.REVOKE`). El documento se conserva, marcado con `revoked_at`. |
 | `message:reacted`    | `[message, chat, emoji, contact, wa]` | Llega una reacción. `emoji` es `''` cuando la reacción se retira; `contact` es quien reaccionó, así el eco de una propia se distingue de una real. |
 | `message:starred`    | `[message, chat, wa]`           | Un mensaje se destaca.                                                              |
 | `message:unstarred`  | `[message, chat, wa]`           | Un mensaje deja de estar destacado.                                                 |

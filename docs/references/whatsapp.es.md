@@ -215,7 +215,7 @@ me(): Promise<Contact | null>
 Devuelve la propia cuenta como un [`Contact`](contact.es.md) —`me` es `true`— con el nombre público
 de la sesión, o `null` mientras no hay usuario (durante el pairing). El perfil se cambia sobre él:
 `rename()`, `content(value)`, `photo(value)` y `online()` sólo funcionan en el contacto propio y
-rechazan con `ERR_NOT_ALLOWED` en cualquier otro.
+rechazan con `UNAUTHORIZED` en cualquier otro.
 
 ```typescript title="me.ts"
 const me = await wa.me();

@@ -156,16 +156,14 @@ LRU and backed by a `.order` file: opening a directory loads that file and only 
 `readdir` + `stat` when the count does not match. Binaries live next to the document as
 `content.bin`.
 
-Documents and binaries are read and written with synchronous `fs` calls, through a read cache of up
-to 4,096 files shared by every `FileSystemEngine` in the process, which drops the least recently
-used first. Each read revalidates its entry with a `stat` of the file's mtime and size, and each
-write reads the file back, so a write is visible to the next read. Files over 1 MB — usually media —
-are neither cached nor read back.
+Documents and binaries are read and written with asynchronous `fs/promises` calls, so the disk
+never stalls the process, and `list` reads its page in parallel. There is no content cache: every
+read goes to disk, a write is visible to the next read and memory does not depend on how much is
+stored.
 
 !!! warning "One writer per base directory"
-    The in-memory index and the read cache assume a single writer process. Two processes writing the
-    same base directory will desynchronize their `.order` files, and a document that another process
-    rewrites with the same size and the same score is still served from the cache.
+    The in-memory index assumes a single writer process. Two processes writing the same base
+    directory will desynchronize their `.order` files.
 
 !!! tip "When to choose the filesystem driver"
     Local development and inspectable state: every document is a readable JSON file. For volume,
@@ -185,8 +183,10 @@ Persists documents as Redis strings and uses one sorted set per parent for order
 | `<prefix>:dir:<parent>`      | `set`       | The subdirectories of a path (`chat/a/message` under `chat/a`), so `unset` can walk a subtree whose intermediate levels are not documents. |
 
 `list()` is `ZREVRANGE` + `MGET`; `count()` is `ZCARD` (O(1)); `unset()` walks the subtree through
-the `idx:` and `dir:` sets and deletes it in batches, never with `SCAN`, which would cost the whole
-Redis keyspace on every delete — and baileys issues one delete per Signal pre-key it consumes.
+the `idx:` and `dir:` sets level by level —every node of a level in a single batch, so the round
+trips are the depth of the tree, not the number of descendants— and deletes it in batches, never with
+`SCAN`, which would cost the whole Redis keyspace on every delete — and baileys issues one delete per
+Signal pre-key it consumes.
 Writes group document, index and directory entries in a pipeline when the client exposes one, so a
 crash between them cannot orphan a document from its index.
 

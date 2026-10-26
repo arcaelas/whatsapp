@@ -15,7 +15,9 @@ tanto de JSON, de WhatsApp, ni de buffers.
 
 !!! warning "Documentos escritos por 8.x"
     9.0.0 no lee los documentos escritos por 8.x — documentos de contacto y de chat en snake_case,
-    mensajes con un campo `raw` — y no hay migración.
+    mensajes con un campo `raw` — y no hay migración: los listados los omiten, igual que un documento
+    corrupto, en vez de fallar. La sesión sí se conserva: `/session` no cambió de forma y las llaves
+    de app-state que 8.x guardó como texto base64 se recuperan al leerlas.
 
 ---
 
@@ -32,6 +34,8 @@ El orquestador escribe en un conjunto pequeño y fijo de ramas:
 | `/lid/`      | Índice bidireccional de búsqueda LID ↔ JID.                                                  |
 | `/catalog/`  | El timeline de cada colección del catálogo (`Catalog`), por negocio.                         |
 | `/blocklist` | Un único documento con los JIDs que la cuenta tiene bloqueados.                              |
+| `/pinned`    | Un único documento con los JIDs de los chats fijados.                                        |
+| `/unmapped`  | Un único documento con los LIDs de las fichas y chats guardados todavía sin teléfono.        |
 
 Cualquier ruta de una entidad puede tener además un hijo `metadata` con los valores propios de la
 integración; ver [Metadatos](#metadatos-pathmetadata).
@@ -50,6 +54,7 @@ todos los drivers colapsan `//` y recortan los extremos.
 | `/contact/<jid>`                          | El `Contact` de baileys.                                                      |
 | `/contact/<jid>/metadata`                 | Metadatos del contacto.                                                       |
 | `/contact/<jid>/photo`                    | `{ url }` de la última foto de perfil descargada; su binario en `photo/content`. |
+| `/contact/<jid>/bio`                      | `{ status, at }` de la última biografía leída: `content()` no vuelve a preguntar en 24 h. |
 | `/chat/<cid>`                             | El `Chat` de baileys.                                                         |
 | `/chat/<cid>/metadata`                    | Metadatos del chat.                                                           |
 | `/chat/<cid>/photo`                       | `{ url }` de la última foto del grupo descargada; su binario en `photo/content`. |
@@ -59,6 +64,7 @@ todos los drivers colapsan `//` y recortan los extremos.
 | `/status/<id>`                            | Timeline del estado.                                                          |
 | `/status/<id>/content`                    | Binario del media del estado (crudo, o `{ data: "<base64>" }`).               |
 | `/status/<id>/metadata`                   | Metadatos del estado.                                                         |
+| `/status/<id>/audience`                   | Arreglo de JIDs a los que `Feed.create()` publicó el estado; el retiro va a ellos. |
 | `/lid/<lid>`                              | Mapa directo: LID → JID (string serializado).                                 |
 | `/lid/<pn>`                               | Mapa inverso: JID → LID (string serializado).                                 |
 | `/lid/<digits>_reverse`                   | Fallback legado que lee el resolver de JIDs; solo lo escribían versiones antiguas. |
@@ -66,6 +72,8 @@ todos los drivers colapsan `//` y recortan los extremos.
 | `/catalog/<jid>/collection/<id>/metadata` | Metadatos del catálogo; la librería guarda aquí `updated_at`.                 |
 | `/catalog/<jid>/product/<pid>/metadata`   | Metadatos de un producto del catálogo.                                        |
 | `/blocklist`                              | Arreglo de JIDs bloqueados.                                                   |
+| `/pinned`                                 | Arreglo de JIDs de los chats fijados: `pinned(true)` los cuenta con una lectura. |
+| `/unmapped`                               | Arreglo de LIDs guardados sin teléfono: la conexión revisa sólo estos.         |
 
 !!! note "Claves de sesión"
     El conjunto exacto de rutas `/session/<category>/<id>` depende de lo que baileys persista. La
@@ -115,10 +123,16 @@ ante un documento corrupto o truncado en lugar de lanzar.
 Los mensajes, los estados y las colecciones del catálogo se guardan como un **timeline**: un arreglo
 con los raws exactamente como los emitió baileys, en orden de llegada y sin sobre. El primer raw es
 la entidad tal como llegó; cada raw posterior es un evento que baileys emitió para ella —un
-`messages.update`, un recibo, un mensaje que la refiere—. Nada de lo registrado se reescribe: un raw
-nuevo se suma al final, y un raw idéntico al último es su eco y se ignora. Los getters buscan en el
-timeline, de atrás hacia adelante, el último raw que define su valor, así que una edición deja
-vigente el texto nuevo y el anterior queda en el timeline.
+`messages.update`, un mensaje que la refiere—. Nada de lo registrado se reescribe: un raw nuevo se
+suma al final, y un raw idéntico al último es su eco y se ignora. Los getters buscan en el timeline,
+de atrás hacia adelante, el último raw que define su valor, así que una edición deja vigente el texto
+nuevo y el anterior queda en el timeline.
+
+La única excepción es la entrega. Los recibos (`message-receipt.update`) y los `messages.update` que
+sólo traen `status` no se suman: reemplazan un único registro de entrega `{ key, update: { status } }`
+al final del timeline, con el estado más alto alcanzado —un error manda, con su
+`messageStubParameters`, hasta que llega un avance—. Así un mensaje propio en un grupo de 200 no
+suma 600 raws de acuses.
 
 ```ts
 import type { LIDMapping, MessageUserReceiptUpdate, WAMessage, WAMessageUpdate } from 'baileys';
@@ -166,13 +180,13 @@ Las actualizaciones parciales — `contacts.update`, o el nombre público de un 
 el contacto aún no tiene nombre — se fusionan campo por campo sobre el documento guardado, y un campo
 que llega como `undefined` nunca sobrescribe: una actualización que trae solo la foto conserva el
 nombre. Los getters de [`Contact`](references/contact.es.md) derivan `id`, `name` y `phone` de este
-documento; `content()` guarda en `status` la biografía que lee, y `photo()` guarda la foto bajo
-`/contact/<id>/photo`.
+documento; `content()` guarda en `/contact/<id>/bio` la biografía que lee con la hora de la consulta
+—y en `status` cuando cambia—, y `photo()` guarda la foto bajo `/contact/<id>/photo`.
 
-Cuando WhatsApp revela el teléfono detrás de un LID — con `lid-mapping.update`, o con la revisión que
-corre en cada conexión — el contacto, el chat y los mensajes guardados bajo el LID pasan al JID de
-teléfono con sus binarios y sus metadatos, y las copias del LID se borran. Los campos que el
-contacto y el chat ya tenían bajo el teléfono mandan, y cada mensaje movido recibe una entrada
+Cuando WhatsApp revela el teléfono detrás de un LID — con `lid-mapping.update`, o con la revisión de
+`/unmapped` que corre en cada conexión — el contacto, el chat y los mensajes guardados bajo el LID
+pasan al JID de teléfono con sus binarios y sus metadatos, y las copias del LID se borran. Los campos
+que el contacto y el chat ya tenían bajo el teléfono mandan, y cada mensaje movido recibe una entrada
 `{ lid, pn }`.
 
 ---
@@ -217,9 +231,10 @@ devuelve los chats por actividad real. Cada escritura conserva el mayor valor en
 guardado, y un mensaje nuevo lo sube a su propio timestamp, así que fijar, archivar, silenciar o
 marcar leído nunca mueven un chat de sitio.
 
-Los setters de [`Chat`](references/chat.es.md) — `archive`, `pin`, `mute`, `rename`, `describe` —
-cambian la instancia y dejan este documento al eco de WhatsApp; `chat.seen()` escribe
-`unreadCount: 0` por su cuenta. Un `unreadCount` positivo en `chats.update` es un incremento, como lo
+Los setters de [`Chat`](references/chat.es.md) — `archived()`, `pinned()`, `muted()`, `name()`,
+`content()`, `ephemeral()` y `seen()` — escriben este documento en cuanto WhatsApp acepta el cambio y
+emiten el evento `chat:*` que corresponde; el eco que llega después ya no encuentra diferencia y no
+lo repite. Un `unreadCount` positivo en `chats.update` es un incremento, como lo
 define baileys, y se suma al guardado; `0` lo reinicia y `-1` es un chat marcado como no leído.
 
 ---
@@ -233,10 +248,11 @@ posterior es exactamente lo que baileys emitió para él:
 [
     WAMessage,          // el mensaje (messages.upsert)
     WAMessage,          // un mensaje que lo refiere: reactionMessage, pinInChatMessage, protocolMessage
-                        // (edición, retiro), pollUpdateMessage o encEventResponseMessage, todavía cifrado
-    { key, update },    // messages.update: estado, destacado, edición, retiro, eventResponses que descifró baileys
-    { key, receipt },   // message-receipt.update: entrega o lectura, en grupos
+                        // (edición, retiro), pollUpdateMessage o encEventResponseMessage, cifrado
+    { key, update },    // ese voto o esa respuesta descifrados al llegar, con la forma del messages.update de baileys
+    { key, update },    // messages.update: destacado, edición, retiro, pollUpdates o eventResponses de baileys
     { lid, pn },        // lid-mapping.update: el chat se tradujo de su LID al teléfono
+    { key, update },    // el registro de entrega: { status }, el más alto de los acuses y estados
 ]
 ```
 
@@ -245,8 +261,8 @@ acciones de la propia librería llegan por el mismo camino: baileys les hace eco
 retransmite por su cuenta (una edición de media, un voto, una vista única, un reenvío) se publica en
 `messages.upsert` como cualquier otro mensaje.
 
-Ejemplo de payload, un texto enviado que fue leído; el segundo raw es el `messages.update` que baileys
-emite por la lectura, que no trae contenido:
+Ejemplo de payload, un texto enviado que fue leído; el segundo raw es el registro de entrega que
+dejaron los acuses:
 
 ```json
 [
@@ -258,19 +274,20 @@ emite por la lectura, que no trae contenido:
     },
     {
         "key": { "remoteJid": "5491112345678@s.whatsapp.net", "fromMe": true, "id": "3EB0C767D26A1D0F8A7B" },
-        "update": { "status": 4, "messageTimestamp": 1767371421 }
+        "update": { "status": 4 }
     }
 ]
 ```
 
 Los getters de [`Message`](references/message.es.md) buscan en el timeline de atrás hacia adelante: la
 última edición da `caption`, el último pin da `pinned` y el último raw con `starred` da `starred`. Un
-retiro marca `revoked` y conserva el texto. Los votos y las respuestas de evento quedan cifrados, como
-los emite baileys, y se descifran al leerlos probando cada identidad por LID y por teléfono del
-votante y del creador. `msg.status` toma el estado más avanzado, salvo que el último sea un error,
-porque los recibos de varios dispositivos llegan en desorden: en el ejemplo de arriba es `'read'`.
+retiro marca `revoked_at` y conserva el texto. Un voto o una respuesta de evento se guarda cifrado, como
+lo emite baileys, y además descifrado al llegar —probando cada identidad por LID y por teléfono del
+votante y del creador—, así la lectura no descifra; sólo el que no se pudo descifrar entonces se
+reintenta al leer, y gana el último voto de cada votante por su hora de envío. `msg.status` toma el
+estado del registro de entrega: en el ejemplo de arriba es `'read'`.
 
-El `status` del `WAMessage` y de cada `{ key, update }` es el valor numérico del proto; un recibo
+El `status` del `WAMessage` y del registro de entrega es el valor numérico del proto; un recibo
 cuenta como `3`, o como `4` con `readTimestamp` y `5` con `playedTimestamp`. El string legible que
 expone [`Message.status`](references/message.es.md):
 
@@ -316,9 +333,9 @@ Los demás tipos no guardan nada aquí: `content()` deriva su contenido del time
 
 !!! info "El binario se escribe una sola vez"
     El binario se escribe en la primera entrega del mensaje, o cuando la librería lo envía, y solo
-    cuando hay bytes que guardar. `Message.content()` lo devuelve; cuando falta, vuelve a descargar el
-    media sin guardarlo, pidiéndole a WhatsApp que lo reenvíe si caducó, y devuelve `Buffer.alloc(0)`
-    cuando eso falla.
+    cuando hay bytes que guardar. `Message.content()` lo devuelve; cuando falta, lo descarga —pidiéndole
+    a WhatsApp que lo reenvíe si caducó—, lo guarda y lo devuelve, y lanza si no se puede descargar.
+    `Message.stream()` entrega el guardado o la descarga mientras llega, sin acumularla ni guardarla.
 
 ---
 
@@ -332,9 +349,13 @@ primera entrega o cuando la cuenta los publica; un retiro borra el documento con
     WAMessage,          // el mensaje de status@broadcast
     { lid, pn },        // el autor se tradujo de su LID al teléfono
     WAMessage,          // un reactionMessage al estado
-    { key, receipt },   // message-receipt.update: quién lo vio; seen(true) suma el recibo de lectura propio con esta forma
+    { key, update },    // el registro de entrega: los acuses de quien lo vio; seen(true) lo deja en leído
 ]
 ```
+
+Un estado publicado con `Feed.create()` guarda en `/status/<id>/audience` los JIDs a los que se
+publicó, y `delete()` retira el estado a esos mismos; sin ese documento —un estado publicado desde el
+teléfono— el retiro va a la agenda.
 
 `created_at`, `expires_at` (24 horas después, `FEED_TTL_MS`) y `seen()` los deriva
 [`Feed`](references/feed.es.md) y no se guardan. La librería no borra un estado cuando vence. Su
@@ -418,6 +439,17 @@ que una respuesta posterior de colecciones ya no devuelve se borra; una descarga
 responde no borra nada. [`Catalog`](references/catalog.es.md) lee el último elemento y se construye
 con su dueño, `new wa.Catalog(timeline, jid)`; cada `wa.Product` se construye con uno de sus
 productos, `new wa.Product([product], jid)`.
+
+---
+
+### Índices — `/pinned` y `/unmapped`
+
+Dos arreglos JSON que evitan recorrer los chats, como hace WhatsApp Web con los índices que lleva en
+memoria. `/pinned` tiene los JIDs de los chats fijados y lo mantienen los ecos de WhatsApp y
+`pinned()`. `/unmapped` tiene los LIDs de las fichas y chats guardados sin teléfono: cada escritura de
+uno así lo agrega, y cada conexión revisa sólo esos LIDs, une al teléfono los que ya tienen mapeo y
+deja el resto. La primera conexión que no los encuentra recorre `/contact` y `/chat` una vez y los
+arma.
 
 ---
 
@@ -540,7 +572,7 @@ SADD  wa:default:dir:                              "chat"
 | ----------------- | ---------------------------------------------------------------------------- |
 | `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
 | `set(path,v,s)`   | `SET` + `ZADD` + un `SADD` por ancestro, en un solo pipeline cuando el cliente lo expone |
-| `unset(path)`     | Recorre `ZREVRANGE idx:` + `SMEMBERS dir:` por el subárbol y luego `DEL` en lotes de 500 + `ZREM`/`SREM` del padre |
+| `unset(path)`     | Recorre `ZREVRANGE idx:` + `SMEMBERS dir:` por el subárbol, un nivel por tanda, y luego `DEL` en lotes de 500 + `ZREM`/`SREM` del padre |
 | `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET`                                   |
 | `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
 | `clear()`         | `SCAN`/`DEL` sobre `<prefix>:*`                                            |
@@ -580,12 +612,12 @@ Cada ruta lógica se mapea a un directorio que contiene el documento como `index
 
 | Operación        | Comportamiento en el sistema de archivos                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| `get(path)`      | Lee `<base>/<path>/index.json` a través de la caché de lectura, revalidada con el mtime y el tamaño del archivo; `null` si falta. |
-| `set(path,v)`    | `mkdir -p`, escritura atómica (tmp + rename), el `score` aplicado con `utimes`, y luego relectura hacia la caché. |
+| `get(path)`      | Lee `<base>/<path>/index.json` del disco, de forma asíncrona; `null` si falta.              |
+| `set(path,v)`    | `mkdir -p`, escritura atómica (tmp + rename) y el `score` aplicado con `utimes`.            |
 | `unset(path)`    | `rm -rf <base>/<path>`. Idempotente.                                                        |
-| `list(path)`     | Índice ordenado desde `.order` (o reconstruido con `readdir` + `stat`), y luego cada documento a través de la caché de lectura. |
+| `list(path)`     | Índice ordenado desde `.order` (o reconstruido con `readdir` + `stat`), y luego los documentos de la página en paralelo. |
 | `count(path)`    | Tamaño del índice ordenado.                                                                 |
-| `get/set_buffer` | `content.bin` junto al documento, fuera de la caché de lectura.                             |
+| `get/set_buffer` | `content.bin` junto al documento.                                                           |
 | `clear()`        | `rm -rf <base>`.                                                                            |
 
 ### `S3Engine`

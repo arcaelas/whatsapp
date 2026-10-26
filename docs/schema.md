@@ -15,7 +15,9 @@ nothing about JSON, WhatsApp or buffers.
 
 !!! warning "Documents written by 8.x"
     9.0.0 does not read the documents written by 8.x — snake_case contact and chat documents,
-    messages with a `raw` field — and there is no migration.
+    messages with a `raw` field — and there is no migration: the listings skip them, like a corrupt
+    document, instead of failing. The session is kept: `/session` did not change shape and the
+    app-state keys 8.x stored as base64 text are recovered on read.
 
 ---
 
@@ -32,6 +34,8 @@ The orchestrator writes to a small, fixed set of branches:
 | `/lid/`      | Bidirectional LID ↔ JID lookup index.                                                        |
 | `/catalog/`  | The timeline of each catalog collection (`Catalog`), per business.                           |
 | `/blocklist` | A single document with the JIDs the account has blocked.                                     |
+| `/pinned`    | A single document with the JIDs of the pinned chats.                                         |
+| `/unmapped`  | A single document with the LIDs of the cards and chats still stored without a phone.         |
 
 Any entity path can also hold a `metadata` child with the integration's own values; see
 [Metadata](#metadata-pathmetadata).
@@ -50,6 +54,7 @@ collapses `//` and trims both ends.
 | `/contact/<jid>`                          | The baileys `Contact`.                                                        |
 | `/contact/<jid>/metadata`                 | Contact metadata.                                                             |
 | `/contact/<jid>/photo`                    | `{ url }` of the last downloaded profile picture; its binary in `photo/content`. |
+| `/contact/<jid>/bio`                      | `{ status, at }` of the last bio read: `content()` does not ask again for 24 h. |
 | `/chat/<cid>`                             | The baileys `Chat`.                                                           |
 | `/chat/<cid>/metadata`                    | Chat metadata.                                                                |
 | `/chat/<cid>/photo`                       | `{ url }` of the last downloaded group picture; its binary in `photo/content`. |
@@ -59,6 +64,7 @@ collapses `//` and trims both ends.
 | `/status/<id>`                            | Status timeline.                                                              |
 | `/status/<id>/content`                    | Status media binary (raw, or `{ data: "<base64>" }`).                         |
 | `/status/<id>/metadata`                   | Status metadata.                                                              |
+| `/status/<id>/audience`                   | Array of the JIDs `Feed.create()` published the status to; the revoke goes to them. |
 | `/lid/<lid>`                              | Forward map: LID → JID (serialized string).                                   |
 | `/lid/<pn>`                               | Reverse map: JID → LID (serialized string).                                   |
 | `/lid/<digits>_reverse`                   | Legacy fallback read by the JID resolver; written by older versions only.     |
@@ -66,6 +72,8 @@ collapses `//` and trims both ends.
 | `/catalog/<jid>/collection/<id>/metadata` | Catalog metadata; the library keeps `updated_at` here.                        |
 | `/catalog/<jid>/product/<pid>/metadata`   | Catalog product metadata.                                                     |
 | `/blocklist`                              | Array of blocked JIDs.                                                        |
+| `/pinned`                                 | Array of the pinned chat JIDs: `pinned(true)` counts them with one read.      |
+| `/unmapped`                               | Array of the LIDs stored without a phone: the connection checks only these.   |
 
 !!! note "Session keys"
     The exact set of `/session/<category>/<id>` paths depends on what baileys persists. The library
@@ -112,11 +120,17 @@ for a corrupt or truncated document instead of throwing.
 
 Messages, statuses and catalog collections are stored as a **timeline**: an array with the raws
 exactly as baileys emitted them, in arrival order, with no envelope. The first raw is the entity as
-it arrived; each later raw is an event baileys emitted for it — a `messages.update`, a receipt, a
-message that refers to it. Nothing already recorded is rewritten: a new raw is appended at the end,
-and a raw identical to the last one is its echo and is ignored. The getters search the timeline
-backwards for the latest raw that defines their value, so an edit leaves the new text in force and
-the previous one in the timeline.
+it arrived; each later raw is an event baileys emitted for it — a `messages.update`, a message that
+refers to it. Nothing already recorded is rewritten: a new raw is appended at the end, and a raw
+identical to the last one is its echo and is ignored. The getters search the timeline backwards for
+the latest raw that defines their value, so an edit leaves the new text in force and the previous
+one in the timeline.
+
+The only exception is delivery. Receipts (`message-receipt.update`) and the `messages.update` that
+carry only `status` are not appended: they replace a single delivery record `{ key, update: { status } }`
+at the end of the timeline, with the highest state reached —an error rules, with its
+`messageStubParameters`, until a progress arrives—. So an own message in a group of 200 does not add
+600 receipt raws.
 
 ```ts
 import type { LIDMapping, MessageUserReceiptUpdate, WAMessage, WAMessageUpdate } from 'baileys';
@@ -164,12 +178,13 @@ Partial updates — `contacts.update`, or the push name of an incoming message w
 name yet — merge field by field over the stored document, and a field that arrives as `undefined`
 never overwrites: an update that brings only the photo keeps the name. The
 [`Contact`](references/contact.md) getters derive `id`, `name` and `phone` from this document;
-`content()` stores the bio it reads in `status`, and `photo()` keeps the picture under
-`/contact/<id>/photo`.
+`content()` stores the bio it reads under `/contact/<id>/bio` with the time of the query —and in
+`status` when it changes—, and `photo()` keeps the picture under `/contact/<id>/photo`.
 
-When WhatsApp reveals the phone behind a LID — through `lid-mapping.update`, or through the check
-that runs on every connection — the contact, the chat and the messages stored under the LID move
-under the phone JID with their binaries and their metadata, and the LID copies are deleted. The
+When WhatsApp reveals the phone behind a LID — through `lid-mapping.update`, or through the
+`/unmapped` check that runs on every connection — the contact, the chat and the messages stored
+under the LID move under the phone JID with their binaries and their metadata, and the LID copies
+are deleted. The
 fields the contact and the chat already had under the phone win, and each moved message gets a
 `{ lid, pn }` entry.
 
@@ -215,9 +230,10 @@ returns chats by real activity. Each write keeps the greater value between what 
 stored, and a new message raises it to its own timestamp, so pinning, archiving, muting or marking
 as read never move a chat.
 
-The setters of [`Chat`](references/chat.md) — `archive`, `pin`, `mute`, `rename`, `describe` —
-change the instance and leave this document to WhatsApp's echo; `chat.seen()` writes
-`unreadCount: 0` itself. A positive `unreadCount` in `chats.update` is an increment, as baileys
+The setters of [`Chat`](references/chat.md) — `archived()`, `pinned()`, `muted()`, `name()`,
+`content()`, `ephemeral()` and `seen()` — write this document as soon as WhatsApp accepts the change
+and emit the matching `chat:*` event; the echo arriving later finds no difference and does not
+repeat it. A positive `unreadCount` in `chats.update` is an increment, as baileys
 defines it, and is added to the stored one; `0` resets it and `-1` is a chat marked as unread.
 
 ---
@@ -231,10 +247,11 @@ is exactly what baileys emitted for it:
 [
     WAMessage,          // the message (messages.upsert)
     WAMessage,          // a message that refers to it: reactionMessage, pinInChatMessage, protocolMessage
-                        // (edit, revoke), pollUpdateMessage or encEventResponseMessage, still encrypted
-    { key, update },    // messages.update: status, starred, edit, revoke, eventResponses decrypted by baileys
-    { key, receipt },   // message-receipt.update: delivery or read, in groups
+                        // (edit, revoke), pollUpdateMessage or encEventResponseMessage, encrypted
+    { key, update },    // that vote or response decrypted on arrival, shaped like baileys' messages.update
+    { key, update },    // messages.update: starred, edit, revoke, pollUpdates or eventResponses from baileys
     { lid, pn },        // lid-mapping.update: the chat was translated from its LID to the phone
+    { key, update },    // the delivery record: { status }, the highest of the receipts and states
 ]
 ```
 
@@ -243,8 +260,7 @@ library's own sends and actions arrive by the same path: baileys echoes them, an
 relays by itself (a media edit, a vote, a view-once, a forward) is published on `messages.upsert` like any other
 message.
 
-Example payload, a sent text that was read; the second raw is the `messages.update` baileys emits
-for the read, which carries no content:
+Example payload, a sent text that was read; the second raw is the delivery record the receipts left:
 
 ```json
 [
@@ -256,19 +272,20 @@ for the read, which carries no content:
     },
     {
         "key": { "remoteJid": "5491112345678@s.whatsapp.net", "fromMe": true, "id": "3EB0C767D26A1D0F8A7B" },
-        "update": { "status": 4, "messageTimestamp": 1767371421 }
+        "update": { "status": 4 }
     }
 ]
 ```
 
 The [`Message`](references/message.md) getters search the timeline backwards: the latest edit gives
 `caption`, the latest pin gives `pinned` and the latest raw with `starred` gives `starred`. A revoke
-sets `revoked` and keeps the text. Votes and event responses stay encrypted, as baileys emits them,
-and are decrypted on read trying each LID and phone identity of the voter and of the creator.
-`msg.status` takes the furthest state reached, unless the latest one is an error, because the
-receipts of several devices arrive out of order: in the example above it is `'read'`.
+sets `revoked_at` and keeps the text. A vote or an event response is stored encrypted, as baileys emits
+it, and also decrypted on arrival —trying each LID and phone identity of the voter and of the
+creator—, so reads do not decrypt; only the one that could not be decrypted then is retried on read,
+and each voter's last vote by send time wins. `msg.status` takes the state of the delivery record: in
+the example above it is `'read'`.
 
-The `status` of the `WAMessage` and of each `{ key, update }` is the numeric proto value; a receipt
+The `status` of the `WAMessage` and of the delivery record is the numeric proto value; a receipt
 counts as `3`, or as `4` with `readTimestamp` and `5` with `playedTimestamp`. The readable string
 [`Message.status`](references/message.md) exposes:
 
@@ -314,9 +331,10 @@ The other types store nothing here: `content()` derives their payload from the t
 
 !!! info "The binary is written once"
     The binary is written on the first delivery of a message, or when the library sends it, and only
-    when there are bytes to store. `Message.content()` returns it; when it is missing, it downloads
-    the media again without storing it, asking WhatsApp to re-upload it when it expired, and returns
-    `Buffer.alloc(0)` when that fails.
+    when there are bytes to store. `Message.content()` returns it; when it is missing, it downloads it
+    —asking WhatsApp to re-upload it when it expired—, stores it and returns it, and throws when it
+    cannot be downloaded. `Message.stream()` delivers the stored one or the download as it arrives,
+    without buffering nor storing it.
 
 ---
 
@@ -330,9 +348,13 @@ first delivery or when the account publishes them; a revoke deletes the document
     WAMessage,          // the status@broadcast message
     { lid, pn },        // the author was translated from its LID to the phone
     WAMessage,          // a reactionMessage to the status
-    { key, receipt },   // message-receipt.update: who viewed it; seen(true) appends the own read receipt with this shape
+    { key, update },    // the delivery record: the receipts of whoever viewed it; seen(true) sets it to read
 ]
 ```
+
+A status published with `Feed.create()` stores at `/status/<id>/audience` the JIDs it was published
+to, and `delete()` revokes it from those same people; without that document —a status published from
+the phone— the revoke goes to the address book.
 
 `created_at`, `expires_at` (24 hours later, `FEED_TTL_MS`) and `seen()` are derived by
 [`Feed`](references/feed.md) and not stored. The library does not delete a status when it expires.
@@ -416,6 +438,17 @@ collection that a later answer of collections no longer returns is deleted; a do
 not answer deletes nothing. [`Catalog`](references/catalog.md) reads the last item and is built with
 its owner, `new wa.Catalog(timeline, jid)`; each `wa.Product` is built from one of its products,
 `new wa.Product([product], jid)`.
+
+---
+
+### Indexes — `/pinned` and `/unmapped`
+
+Two JSON arrays that avoid walking the chats, like WhatsApp Web does with the indexes it keeps in
+memory. `/pinned` holds the JIDs of the pinned chats and is kept by WhatsApp's echoes and `pinned()`.
+`/unmapped` holds the LIDs of the cards and chats stored without a phone: every write of one adds it,
+and every connection checks only those LIDs, merges into the phone the ones that already have a
+mapping and keeps the rest. The first connection that does not find them walks `/contact` and
+`/chat` once and builds them.
 
 ---
 
@@ -538,7 +571,7 @@ SADD  wa:default:dir:                              "chat"
 | ----------------- | ---------------------------------------------------------------------------- |
 | `get(path)`       | `GET <prefix>:doc:<path>`                                                  |
 | `set(path,v,s)`   | `SET` + `ZADD` + `SADD` per ancestor, in one pipeline when the client exposes it |
-| `unset(path)`     | Walks `ZREVRANGE idx:` + `SMEMBERS dir:` down the subtree, then `DEL` in batches of 500 + `ZREM`/`SREM` from the parent |
+| `unset(path)`     | Walks `ZREVRANGE idx:` + `SMEMBERS dir:` down the subtree, one level per batch, then `DEL` in batches of 500 + `ZREM`/`SREM` from the parent |
 | `list(path)`      | `ZREVRANGE <prefix>:idx:<path>` + `MGET`                                   |
 | `count(path)`     | `ZCARD <prefix>:idx:<path>` (O(1))                                         |
 | `clear()`         | `SCAN`/`DEL` on `<prefix>:*`                                               |
@@ -578,12 +611,12 @@ Each logical path maps to a directory holding the document as `index.json`:
 
 | Operation        | Filesystem behaviour                                                                        |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| `get(path)`      | Reads `<base>/<path>/index.json` through the read cache, revalidated with the file's mtime and size; `null` when missing. |
-| `set(path,v)`    | `mkdir -p`, atomic write (tmp + rename), the `score` applied with `utimes`, then read back into the cache. |
+| `get(path)`      | Reads `<base>/<path>/index.json` from disk, asynchronously; `null` when missing.            |
+| `set(path,v)`    | `mkdir -p`, atomic write (tmp + rename) and the `score` applied with `utimes`.              |
 | `unset(path)`    | `rm -rf <base>/<path>`. Idempotent.                                                         |
-| `list(path)`     | Sorted index from `.order` (or rebuilt with `readdir` + `stat`), then each document through the read cache. |
+| `list(path)`     | Sorted index from `.order` (or rebuilt with `readdir` + `stat`), then the page documents in parallel. |
 | `count(path)`    | Size of the sorted index.                                                                   |
-| `get/set_buffer` | `content.bin` next to the document, outside the read cache.                                 |
+| `get/set_buffer` | `content.bin` next to the document.                                                         |
 | `clear()`        | `rm -rf <base>`.                                                                            |
 
 ### `S3Engine`

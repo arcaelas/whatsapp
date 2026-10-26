@@ -67,7 +67,7 @@ wa.on('error',        (error) => console.error(error.code, error.message));
 | Event              | Signature                  | Fires when…                                                            |
 | ------------------ | -------------------------- | ---------------------------------------------------------------------- |
 | `contact:created`  | `[contact, chat, wa]`      | A new contact is upserted, or auto-created from an inbound message.    |
-| `contact:updated`  | `[contact, chat, wa]`      | A contact's name, notify, image, status or LID changes.                |
+| `contact:updated`  | `[contact, chat, wa]`      | A contact's name, notify, image, status or LID changes; also when `content()` reads a bio different from the stored one. |
 | `contact:deleted`  | `[contact, wa]`            | A contact card leaves the engine: the one stored under the LID, once WhatsApp reveals its phone and the card merges into the phone's. |
 | `contact:presence` | `[contact, action, wa]`    | Someone came online, went offline, is typing or recording. Only arrives for contacts subscribed with `contact.sub()`; `action` is one of `online`, `offline`, `typing`, `recording` —stopping typing or recording arrives as `online`—, and `offline` stores the contact's last seen in `contact.seen`. |
 
@@ -100,8 +100,10 @@ wa.on('contact:created', async (contact, chat, client) => {
 | `chat:promoted`    | `[chat, contacts, wa]` | People became group admins.                                                         |
 | `chat:demoted`     | `[chat, contacts, wa]` | People lost the admin role.                                                         |
 
-The six pin, archive and mute events come with WhatsApp's echo of the change, also when it was
-made with `chat.pinned()`, `chat.archived()` or `chat.muted()`, and only when the value really changes.
+The six pin, archive and mute events fire only when the value really changes: a change made with
+`chat.pinned()`, `chat.archived()` or `chat.muted()` emits them as soon as WhatsApp accepts it, and
+one made from another device, with WhatsApp's echo; the echo of an own change finds no difference
+and does not repeat them.
 
 ```typescript title="Audit chat moderation"
 wa.on('chat:archived',   (chat) => console.log('archived',   chat.id));
@@ -119,7 +121,7 @@ wa.on('chat:promoted',   (chat, people) => console.log(people.map((who) => who.n
 | -------------------- | ------------------------------- | --------------------------------------------------------------------------------- |
 | `message:created`    | `[message, chat, wa]`           | A new message is stored: inbound, or outbound from the phone or another linked device. The messages sent through this library do not emit it. |
 | `message:updated`    | `[message, chat, wa]`           | A message is edited, its status changes, a poll vote or an event response is decrypted, or it is pinned or unpinned. |
-| `message:deleted`    | `[message, chat, wa]`           | A message is revoked (`protocolMessage.REVOKE`). The document stays, flagged with `revoked`. |
+| `message:deleted`    | `[message, chat, wa]`           | A message is revoked (`protocolMessage.REVOKE`). The document stays, flagged with `revoked_at`. |
 | `message:reacted`    | `[message, chat, emoji, contact, wa]` | A reaction arrives. `emoji` is `''` when the reaction is removed; `contact` is who reacted, so an own echo is told apart from a real reaction. |
 | `message:starred`    | `[message, chat, wa]`           | A message is starred.                                                             |
 | `message:unstarred`  | `[message, chat, wa]`           | A message is unstarred.                                                           |

@@ -1,9 +1,9 @@
 # Contact
 
 The `Contact` entity is a **minimal card** over the contact document that baileys delivers. Who the
-person is (`name`), how to address them (`id`, `phone`) and what their bio says (`content()`) are
-synchronous reads of that document; the picture ([`photo()`](#photo-photovalue)) and the catalogs
-([`catalog()`](#catalog)) reach the network. Chat actions —block, mute, pin, archive, mark as
+person is (`name`) and how to address them (`id`, `phone`) are synchronous reads of that document;
+the bio ([`content()`](#content-contentvalue)), the picture ([`photo()`](#photo-photovalue)) and the
+catalogs ([`catalog()`](#catalog)) reach the network. Chat actions —block, mute, pin, archive, mark as
 read— live in [`Chat`](chat.md): `await person.chat()` opens it. `Contact` extends `Sender`, so
 `person.text('hi')` and the other [sends](message.md#sending), `typing()` and `recording()` go to
 its 1:1 chat.
@@ -85,7 +85,7 @@ Every property is a synchronous getter over the stored document.
 
 | Property | Type             | Description                                                                                 |
 | -------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| `id`     | `string`         | The LID (`@lid`) when it is known, otherwise the JID (`@s.whatsapp.net`).                   |
+| `id`     | `string`         | Full JID: the phone's (`@s.whatsapp.net`) when known, otherwise the LID (`@lid`). Same format as `chat.id` and `msg.from`. |
 | `name`   | `string`         | Address-book name → push name → verified business name → phone → the id without its domain. |
 | `phone`  | `string \| null` | Digits of the JID. `null` while the contact is only known by an unmapped LID.               |
 | `me`     | `boolean`        | `true` when the contact is the account itself, compared by JID and by LID.                  |
@@ -113,24 +113,41 @@ if (person) {
 ### `content()` / `content(value)`
 
 ```typescript
-content(): string
-content(value: string): Promise<string>
+content(value?: string): Promise<string>
 ```
 
-Without an argument, the stored bio, read synchronously. WhatsApp gives no notice when someone
-changes their bio, so the library reads it when the contact is created —in the background, 100 per
-query, emitting `contact:updated` when it arrives— and when `wa.Contact.get` discovers it. It is
-`''` both when the contact has none and when their privacy hides it.
+Without an argument, the bio. WhatsApp gives no notice when someone changes it, so it is asked at
+most once every 24 hours and stored in the engine, under `/contact/<id>/bio`, with the time of the
+query; meanwhile it is read from there. When it changed it is also stored in the contact document
+and emits `contact:updated`; without network it returns the last stored one. It is `''` both when the
+contact has none and when their privacy hides it.
 
 With text it changes the bio of the account itself, stores it and returns it; on any other contact
-it rejects with `ERR_NOT_ALLOWED`.
+it rejects with `UNAUTHORIZED`.
 
 ```typescript title="content.ts"
-console.log(person.content());         // 'Available' | ''
+console.log(await person.content());   // 'Available' | ''
 
 const me = await wa.me();
 await me?.content('Open 9-18h');       // writes the own bio
-await person.content('Hi');            // rejects with ERR_NOT_ALLOWED
+await person.content('Hi');            // rejects with UNAUTHORIZED
+```
+
+### `rename(name)`
+
+```typescript
+rename(name: string): Promise<string>
+```
+
+On the account itself it changes the WhatsApp public name. On another contact it changes the name the
+account saves it with in its address book, like [`chat.name(value)`](chat.md#name-namevalue) on its
+1:1 chat: the phone shows it, the card and the chat keep that name and `contact:updated` is emitted.
+It returns the name. A group subject is not a contact name: it is changed with `chat.name(value)` and
+needs permission.
+
+```typescript title="rename.ts"
+await (await wa.me())?.rename('Sales');    // public profile
+await person.rename('John from the shop'); // the account's address book
 ```
 
 ### `photo()` / `photo(value)`
@@ -139,13 +156,13 @@ await person.content('Hi');            // rejects with ERR_NOT_ALLOWED
 photo(value?: Buffer | null): Promise<Buffer>
 ```
 
-Without an argument, the current profile picture. The URL is asked from WhatsApp on every call —the
-change notice does not reach every account— and the binary is stored under `/contact/<id>/photo`,
-so it is downloaded again only when the picture changes. Without a picture, or when the contact's
+Without an argument, the profile picture. It is stored under `/contact/<id>/photo` with the time it
+was checked: for 24 hours it comes from the engine; afterwards the URL is asked from WhatsApp again
+—the change notice does not reach every account— and it is downloaded only when the picture changed. Without a picture, or when the contact's
 privacy hides it, it returns an empty Buffer; without network, the last stored one.
 
 With a Buffer it changes the picture of the account itself, and `null` removes it; it returns the
-resulting picture. On any other contact it rejects with `ERR_NOT_ALLOWED`, and it rejects with
+resulting picture. On any other contact it rejects with `UNAUTHORIZED`, and it rejects with
 `ERR_PROFILE_PICTURE_LIB` when neither `sharp` nor `jimp` is installed.
 
 ```typescript title="photo.ts"
@@ -164,8 +181,9 @@ catalog(): Promise<Catalog[]>
 
 The business's product catalogs as [`Catalog`](catalog.md) instances: one per collection or, when
 the business has no collections, a single one with every product, the phone as `id` and an empty
-`name`, so there is always at least one. A contact that has no catalog yields that single one
-without products, and a contact without a known phone yields an empty array.
+`name`. A contact without a catalog, a business without products or a query WhatsApp does not answer
+yield `[]` without storing anything, and the next call asks again; a contact without a known phone
+also yields `[]`.
 
 - The first read downloads the collections and the full catalog in parallel, each request cut off
   at 20 seconds, and stores them in the engine.
@@ -221,8 +239,10 @@ setTimeout(stop, 60_000);
 
 !!! info "Presence needs the account online"
     WhatsApp only sends presence to an account that announced itself with
-    `(await wa.me())?.online(true)`, and it stops sending it when the socket reconnects, so
-    call `sub()` again on every `connected`.
+    `(await wa.me())?.online(true)`, and it stops sending it when the socket reconnects. Every
+    `sub()` stays in a per-contact pool and the library requests presence again on every
+    `connected`; the same handler on the same contact is not registered twice and returns the same
+    unsubscribe function.
 
 ### `metadata()`
 
@@ -261,13 +281,13 @@ await person.metadata('age', null);          // { city: 'Lima' }
 When the engine has no `/contact/<jid>` document and the socket is up, `get` probes the network:
 
 1. `onWhatsApp(phone)` — verifies the account exists and returns its canonical JID (plus LID).
-2. `fetchStatus(jid)` — reads the bio.
-3. Writes `/contact/<jid>` and, when a LID was returned, the index entries `/lid/<lid>` and
-   `/lid/<jid>`.
+2. It does not store the card: it is born with its chat —when you write to it— or with its first
+   message. When a LID was returned, it writes the index entries `/lid/<lid>` and `/lid/<jid>`.
 
-It returns `null` when the identifier cannot be resolved or the number is not on WhatsApp. The
-discovery also reads the bio, so `content()` has it from the first instance. A new public name
-arrives with the contact's next message and emits `contact:updated`.
+It returns `null` only when the identifier cannot be resolved or the number is not on WhatsApp; when
+the query fails over the network it rejects with that error, so «does not exist» and «no network»
+are not confused. A new public name arrives with the contact's next message and emits
+`contact:updated`.
 
 ```typescript title="statics.ts"
 // Iterate every persisted contact
@@ -289,13 +309,14 @@ while (true) {
 
 ## The own profile
 
-`await wa.me()` returns the account itself as a `Contact` (`me` is `true`). Besides `content(value)`
-and `photo(value)`, two methods only work on it and reject with `ERR_NOT_ALLOWED` on any other
-contact:
+`await wa.me()` returns the account itself as a `Contact` (`me` is `true`). On it,
+[`rename(name)`](#rename-name) changes the public name instead of the address book one;
+`content(value)`, `photo(value)` and `online(value)` only work on it and reject with
+`UNAUTHORIZED` on any other contact:
 
 | Method          | What it does                                                                 |
 | --------------- | ---------------------------------------------------------------------------- |
-| `rename(name)`  | Changes the public name on WhatsApp and returns it.                          |
+| `online()`      | On any contact, the last presence that arrived —`'online'`, `'offline'`, `'typing'` or `'recording'`—, stored in its card; `null` when none ever did. It arrives for contacts subscribed with `sub()`. |
 | `online(value)` | Announces the account online or offline; the socket starts offline.          |
 
 ```typescript title="profile.ts"
@@ -317,6 +338,7 @@ Contact-related records live under the following keys in the configured engine:
 | `/contact/<id>`                  | The baileys `Contact` (`id`, `lid`, `phoneNumber`, `name`, `notify`, `verifiedName`, `imgUrl`, `status`), merged field by field, under the phone JID when it is known and the LID otherwise. | `contacts.upsert` / `contacts.update`, inbound messages, `Contact.get`. |
 | `/contact/<id>/metadata`         | The contact's integration metadata.                                                                                                                                      | `contact.metadata(patch)`.                                              |
 | `/contact/<id>/photo`            | `{ url }` of the last downloaded picture, and its binary under `/contact/<id>/photo/content`.                                                                            | `contact.photo()`.                                                      |
+| `/contact/<id>/bio`              | `{ status, at }`: the last bio read from WhatsApp and the time of the query.                                                                                             | `contact.content()`.                                                    |
 | `/lid/<lid>`                     | Serialized JID string — forward index for LID resolution.                                                                                                                | `Contact.get`, contact upserts and updates, `lid-mapping.update`.       |
 | `/lid/<pn>`                      | Serialized LID string — reverse index.                                                                                                                                   | The same writers as `/lid/<lid>`.                                       |
 | `/blocklist`                     | The list of identifiers the account has blocked; `blocked()` reads it.                                                                                                   | Every connection, `blocklist.update`.                                   |
